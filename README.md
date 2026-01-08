@@ -55,6 +55,13 @@ SimLoad Manager includes **SLMLS (SimLoad Manager Loadsheet)**:
 
 ---
 
+## Requirements
+- X-Plane 12
+- FlyWithLua
+- Simple Ground Equipment & Services (SGES)
+
+---
+
 ## 🛠 Installation
 
 1. Extract the downloaded archive
