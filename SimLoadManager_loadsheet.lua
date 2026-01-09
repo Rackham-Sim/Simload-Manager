@@ -59,7 +59,6 @@ local load_controllers = {
 math.randomseed(os.time())
 local selected_controller = load_controllers[math.random(1, #load_controllers)]
 
-
 ------------------------------------------------------------
 -- # Main UI
 ------------------------------------------------------------
@@ -158,143 +157,178 @@ function draw_loadsheet_window(wnd, x, y)
     imgui.NewLine()
     imgui.Separator()
 	
-    --------------------------------------------------------
-    -- CARGO
-    --------------------------------------------------------
-    local freight_planned = tonumber(d.cargo_total) or 0
-    local freight_actual  = tonumber(_G["SLM_real_cargo"]) or freight_planned
+	--------------------------------------------------------
+	-- CARGO
+	--------------------------------------------------------
 
-    local bag_planned = tonumber(d.bag_mass_planned) or 0
-    local bag_actual = bag_planned
-    if pax_planned > 0 then
-        bag_actual = bag_planned * (pax_actual / pax_planned)
-    end
-
-    local total_planned = freight_planned + bag_planned
-    local total_actual  = freight_actual + bag_actual
-
-    local bag_diff = bag_actual - bag_planned
-    local frt_diff = freight_actual - freight_planned
-    local tot_diff = total_actual - total_planned
-
-    local bag_pct = (bag_planned > 0) and ((bag_diff / bag_planned) * 100) or 0
-    local frt_pct = (freight_planned > 0) and ((frt_diff / freight_planned) * 100) or 0
-    local tot_pct = (total_planned > 0) and ((tot_diff / total_planned) * 100) or 0
-
-    imgui.PushStyleColor(imgui.constant.Col.Text, c_title)
-    imgui.TextUnformatted("CARGO")
-    imgui.PopStyleColor()
-
-    imgui.BeginTable("SLM_CARGO_TABLE", 4)
-    imgui.TableNextRow()
-    imgui.TableSetColumnIndex(0); imgui.TextUnformatted("")
-    imgui.TableSetColumnIndex(1); imgui.TextUnformatted("Planned")
-    imgui.TableSetColumnIndex(2); imgui.TextUnformatted("Actual")
-    imgui.TableSetColumnIndex(3); imgui.TextUnformatted("Diff")
-
-    imgui.TableNextRow()
-    imgui.TableSetColumnIndex(0); imgui.TextUnformatted("Baggage")
-    imgui.TableSetColumnIndex(1); imgui.TextUnformatted(string.format("%.0f %s", bag_planned, unit))
-    imgui.TableSetColumnIndex(2); imgui.TextUnformatted(string.format("%.0f %s", bag_actual, unit))
-    imgui.TableSetColumnIndex(3)
-    imgui.PushStyleColor(imgui.constant.Col.Text, diff_color(bag_pct))
-    imgui.TextUnformatted(string.format("%+.0f %s (%.1f%%)", bag_diff, unit, bag_pct))
-    imgui.PopStyleColor()
-
-    imgui.TableNextRow()
-    imgui.TableSetColumnIndex(0); imgui.TextUnformatted("Freight")
-    imgui.TableSetColumnIndex(1); imgui.TextUnformatted(string.format("%.0f %s", freight_planned, unit))
-    imgui.TableSetColumnIndex(2); imgui.TextUnformatted(string.format("%.0f %s", freight_actual, unit))
-    imgui.TableSetColumnIndex(3)
-    imgui.PushStyleColor(imgui.constant.Col.Text, diff_color(frt_pct))
-    imgui.TextUnformatted(string.format("%+.0f %s (%.1f%%)", frt_diff, unit, frt_pct))
-    imgui.PopStyleColor()
-
-    imgui.TableNextRow()
-    imgui.TableSetColumnIndex(0); imgui.TextUnformatted("TOTAL")
-    imgui.TableSetColumnIndex(1); imgui.TextUnformatted(string.format("%.0f %s", total_planned, unit))
-    imgui.TableSetColumnIndex(2); imgui.TextUnformatted(string.format("%.0f %s", total_actual, unit))
-    imgui.TableSetColumnIndex(3)
-    imgui.PushStyleColor(imgui.constant.Col.Text, diff_color(tot_pct))
-    imgui.TextUnformatted(string.format("%+.0f %s (%.1f%%)", tot_diff, unit, tot_pct))
-    imgui.PopStyleColor()
-
-    imgui.EndTable()
-    imgui.NewLine()
-    imgui.Separator()
-
-    --------------------------------------------------------
-    -- PAYLOAD
-    --------------------------------------------------------
-    local payload_planned = tonumber(d.payload_planned) or 0
-    local payload_actual  = tonumber(_G["SLM_real_payload"]) or 0
-    local payload_diff    = payload_actual - payload_planned
-    local payload_pct     = (payload_planned > 0) and ((payload_diff / payload_planned) * 100) or 0
-
-    imgui.PushStyleColor(imgui.constant.Col.Text, c_title)
-    imgui.TextUnformatted("PAYLOAD")
-    imgui.PopStyleColor()
-
-    imgui.BeginTable("SLM_PAYLOAD_TABLE", 4)
-    imgui.TableNextRow()
-    imgui.TableSetColumnIndex(0); imgui.TextUnformatted("")
-    imgui.TableSetColumnIndex(1); imgui.TextUnformatted("Planned")
-    imgui.TableSetColumnIndex(2); imgui.TextUnformatted("Actual")
-    imgui.TableSetColumnIndex(3); imgui.TextUnformatted("Diff")
-
-    imgui.TableNextRow()
-    imgui.TableSetColumnIndex(0); imgui.TextUnformatted("Payload")
-    imgui.TableSetColumnIndex(1); imgui.TextUnformatted(string.format("%.0f %s", payload_planned, unit))
-    imgui.TableSetColumnIndex(2); imgui.TextUnformatted(string.format("%.0f %s", payload_actual, unit))
-    imgui.TableSetColumnIndex(3)
-    imgui.PushStyleColor(imgui.constant.Col.Text, diff_color(payload_pct))
-    imgui.TextUnformatted(string.format("%+.0f %s (%.1f%%)", payload_diff, unit, payload_pct))
-    imgui.PopStyleColor()
-
-    imgui.EndTable()
-    imgui.NewLine()
-    imgui.Separator()
-	
-	---------------------------------------------------------
-
-    local function weight_color(actual, max)
-        if not max or max <= 0 then return c_text end
-        if actual > max then return 0xFF0000FF end
-        if actual >= (max * 0.98) then return 0xFFFFA500 end
-        return 0xFF00FF00
+	local function round_kg(x)
+		return math.floor((x or 0) + 0.5)
 	end
 
+	-- Planned sources (SimBrief)
+	local pax_planned       = tonumber(d.pax_total) or 0
+	local bag_count_planned = tonumber(d.bag_count_sb) or 0
+	local bag_w             = tonumber(d.bag_weight) or 0
+
+	local cargo_total_planned = tonumber(d.cargo_total) or 0          -- SB <cargo>
+	local freight_planned     = tonumber(d.freight_added) or 0        -- SB <freight_added>
+
+	-- Planned baggage = BAG_COUNT(SB) * bag_weight(SB), rounded on result
+	local bag_planned = round_kg(bag_count_planned * bag_w)
+
+	-- Actual sources (SLM)
+	local pax_actual         = tonumber(_G["SLM_real_pax"]) or pax_planned
+	local cargo_total_actual = tonumber(_G["SLM_real_cargo"]) or cargo_total_planned
+
+	-- Actual bag count (scaled from planned, because SLM has no bag_count actual)
+	local bag_count_actual = bag_count_planned
+	if pax_planned > 0 then
+		bag_count_actual = bag_count_planned * (pax_actual / pax_planned)
+	end
+
+	-- Actual baggage = BAG_COUNT(actual est.) * bag_weight(SB), rounded on result
+	local bag_actual = round_kg(bag_count_actual * bag_w)
+
+	-- Actual freight from difference (SLM total - computed bags)
+	local freight_actual = cargo_total_actual - bag_actual
+	if freight_actual < 0 then freight_actual = 0 end
+
+	-- Totals: planned from SB, actual from SLM (never recalculated)
+	local total_planned = cargo_total_planned
+	local total_actual  = cargo_total_actual
+
+	-- Diffs & %
+	local bag_diff = bag_actual - bag_planned
+	local frt_diff = freight_actual - freight_planned
+	local tot_diff = total_actual - total_planned
+
+	local bag_pct = (bag_planned > 0) and ((bag_diff / bag_planned) * 100) or 0
+	local frt_pct = (freight_planned > 0) and ((frt_diff / freight_planned) * 100) or 0
+	local tot_pct = (total_planned > 0) and ((tot_diff / total_planned) * 100) or 0
+
+	imgui.PushStyleColor(imgui.constant.Col.Text, c_title)
+	imgui.TextUnformatted("CARGO")
+	imgui.PopStyleColor()
+
+	imgui.BeginTable("SLM_CARGO_TABLE", 4)
+	imgui.TableNextRow()
+	imgui.TableSetColumnIndex(0); imgui.TextUnformatted("")
+	imgui.TableSetColumnIndex(1); imgui.TextUnformatted("Planned")
+	imgui.TableSetColumnIndex(2); imgui.TextUnformatted("Actual")
+	imgui.TableSetColumnIndex(3); imgui.TextUnformatted("Diff")
+
+	imgui.TableNextRow()
+	imgui.TableSetColumnIndex(0); imgui.TextUnformatted("Baggage")
+	imgui.TableSetColumnIndex(1); imgui.TextUnformatted(string.format("%.0f %s", bag_planned, unit))
+	imgui.TableSetColumnIndex(2); imgui.TextUnformatted(string.format("%.0f %s", bag_actual, unit))
+	imgui.TableSetColumnIndex(3)
+	imgui.PushStyleColor(imgui.constant.Col.Text, diff_color(bag_pct))
+	imgui.TextUnformatted(string.format("%+.0f %s (%.1f%%)", bag_diff, unit, bag_pct))
+	imgui.PopStyleColor()
+
+	imgui.TableNextRow()
+	imgui.TableSetColumnIndex(0); imgui.TextUnformatted("Freight")
+	imgui.TableSetColumnIndex(1); imgui.TextUnformatted(string.format("%.0f %s", freight_planned, unit))
+	imgui.TableSetColumnIndex(2); imgui.TextUnformatted(string.format("%.0f %s", freight_actual, unit))
+	imgui.TableSetColumnIndex(3)
+	imgui.PushStyleColor(imgui.constant.Col.Text, diff_color(frt_pct))
+	imgui.TextUnformatted(string.format("%+.0f %s (%.1f%%)", frt_diff, unit, frt_pct))
+	imgui.PopStyleColor()
+
+	imgui.TableNextRow()
+	imgui.TableSetColumnIndex(0); imgui.TextUnformatted("TOTAL")
+	imgui.TableSetColumnIndex(1); imgui.TextUnformatted(string.format("%.0f %s", total_planned, unit))
+	imgui.TableSetColumnIndex(2); imgui.TextUnformatted(string.format("%.0f %s", total_actual, unit))
+	imgui.TableSetColumnIndex(3)
+	imgui.PushStyleColor(imgui.constant.Col.Text, diff_color(tot_pct))
+	imgui.TextUnformatted(string.format("%+.0f %s (%.1f%%)", tot_diff, unit, tot_pct))
+	imgui.PopStyleColor()
+
+	imgui.EndTable()
+	imgui.NewLine()
+	imgui.Separator()
+
+
 	--------------------------------------------------------
-	-- WEIGHTS
+	-- SHARED VARS (Payload / Weights)
 	--------------------------------------------------------
-	local oew          = tonumber(d.oew) or 0
-	local payload_plan = tonumber(d.payload_planned) or 0
-	local payload_real = tonumber(_G["SLM_real_payload"]) or payload_plan
+	local oew = tonumber(d.oew) or 0
+
+	local payload_planned = tonumber(d.payload_planned) or 0
+	local payload_actual  = tonumber(_G["SLM_real_payload"]) or 0  -- no fallback to planned
 
 	local fuel_block_planned = tonumber(d.fuel_block) or 0
-	local fuel_taxi          = tonumber(d.fuel_taxi) or 0
-	local fuel_land          = tonumber(d.fuel_land) or 0
-	local fuel_block_real    = tonumber(_G["SLM_real_fuel_block"]) or fuel_block_planned
+	local fuel_block_actual  = tonumber(_G["SLM_real_fuel_block"]) or 0  -- no fallback to planned
 
-	local zfw_planned = tonumber(d.est_zfw) or (oew + payload_plan)
-	local tow_planned = tonumber(d.est_tow) or (zfw_planned + (fuel_block_planned - fuel_taxi))
-	local ldw_planned = tonumber(d.est_ldw) or (zfw_planned + fuel_land)
+	local fuel_taxi = tonumber(d.fuel_taxi) or 0
+	local fuel_land = tonumber(d.fuel_land) or 0
 
-	local zfw_real = oew + payload_real
-	local tow_real = zfw_real + (fuel_block_real - fuel_taxi)
-	local ldw_real = zfw_real + fuel_land
+	local est_zfw = tonumber(d.est_zfw) or 0
+	local est_tow = tonumber(d.est_tow) or 0
+	local est_ldw = tonumber(d.est_ldw) or 0
 
 	local max_zfw = tonumber(d.max_zfw) or 0
 	local max_tow = tonumber(d.max_tow) or 0
 	local max_ldw = tonumber(d.max_ldw) or 0
 
-	local zfw_margin = max_zfw - zfw_real
-	local tow_margin = max_tow - tow_real
-	local ldw_margin = max_ldw - ldw_real
+	--------------------------------------------------------
+	-- PAYLOAD
+	--------------------------------------------------------
+	local payload_diff = payload_actual - payload_planned
+	local payload_pct  = (payload_planned > 0) and ((payload_diff / payload_planned) * 100) or 0
 
-	local zfw_c = weight_color(zfw_real, max_zfw)
-	local tow_c = weight_color(tow_real, max_tow)
-	local ldw_c = weight_color(ldw_real, max_ldw)
+	imgui.PushStyleColor(imgui.constant.Col.Text, c_title)
+	imgui.TextUnformatted("PAYLOAD")
+	imgui.PopStyleColor()
+
+	imgui.BeginTable("SLM_PAYLOAD_TABLE", 4)
+	imgui.TableNextRow()
+	imgui.TableSetColumnIndex(0); imgui.TextUnformatted("")
+	imgui.TableSetColumnIndex(1); imgui.TextUnformatted("Planned")
+	imgui.TableSetColumnIndex(2); imgui.TextUnformatted("Actual")
+	imgui.TableSetColumnIndex(3); imgui.TextUnformatted("Diff")
+
+	imgui.TableNextRow()
+	imgui.TableSetColumnIndex(0); imgui.TextUnformatted("Payload")
+	imgui.TableSetColumnIndex(1); imgui.TextUnformatted(string.format("%.0f %s", payload_planned, unit))
+	imgui.TableSetColumnIndex(2); imgui.TextUnformatted(string.format("%.0f %s", payload_actual, unit))
+	imgui.TableSetColumnIndex(3)
+	imgui.PushStyleColor(imgui.constant.Col.Text, diff_color(payload_pct))
+	imgui.TextUnformatted(string.format("%+.0f %s (%.1f%%)", payload_diff, unit, payload_pct))
+	imgui.PopStyleColor()
+
+	imgui.EndTable()
+	imgui.NewLine()
+	imgui.Separator()
+
+	---------------------------------------------------------
+	local function weight_color(actual, max)
+		if not max or max <= 0 then return c_text end
+		if actual > max then return 0xFF0000FF end
+		if actual >= (max * 0.98) then return 0xFFFFA500 end
+		return 0xFF00FF00
+	end
+
+	--------------------------------------------------------
+	-- WEIGHTS
+	--------------------------------------------------------
+	-- Planned values: prefer SB-provided estimates, otherwise derive from planned components
+	local zfw_planned = (est_zfw > 0) and est_zfw or (oew + payload_planned)
+	local tow_planned = (est_tow > 0) and est_tow or (zfw_planned + (fuel_block_planned - fuel_taxi))
+	local ldw_planned = (est_ldw > 0) and est_ldw or (zfw_planned + fuel_land)
+
+	-- Actual values: always computed from actual components (no fallback to planned)
+	local zfw_actual = oew + payload_actual
+	local tow_actual = zfw_actual + (fuel_block_actual - fuel_taxi)
+	local ldw_actual = zfw_actual + fuel_land
+
+	local zfw_margin = max_zfw - zfw_actual
+	local tow_margin = max_tow - tow_actual
+	local ldw_margin = max_ldw - ldw_actual
+
+	local zfw_c = weight_color(zfw_actual, max_zfw)
+	local tow_c = weight_color(tow_actual, max_tow)
+	local ldw_c = weight_color(ldw_actual, max_ldw)
 
 	imgui.PushStyleColor(imgui.constant.Col.Text, c_title)
 	imgui.TextUnformatted("WEIGHTS")
@@ -314,7 +348,7 @@ function draw_loadsheet_window(wnd, x, y)
 	imgui.TableNextRow()
 	imgui.TableSetColumnIndex(0); imgui.TextUnformatted("ZFW")
 	imgui.TableSetColumnIndex(1); imgui.TextUnformatted(string.format("%.0f %s", zfw_planned, unit))
-	imgui.TableSetColumnIndex(2); imgui.TextUnformatted(string.format("%.0f %s", zfw_real, unit))
+	imgui.TableSetColumnIndex(2); imgui.TextUnformatted(string.format("%.0f %s", zfw_actual, unit))
 	imgui.TableSetColumnIndex(3)
 	imgui.PushStyleColor(imgui.constant.Col.Text, zfw_c)
 	imgui.TextUnformatted(string.format("%+.0f %s", zfw_margin, unit))
@@ -323,7 +357,7 @@ function draw_loadsheet_window(wnd, x, y)
 	imgui.TableNextRow()
 	imgui.TableSetColumnIndex(0); imgui.TextUnformatted("TOW")
 	imgui.TableSetColumnIndex(1); imgui.TextUnformatted(string.format("%.0f %s", tow_planned, unit))
-	imgui.TableSetColumnIndex(2); imgui.TextUnformatted(string.format("%.0f %s", tow_real, unit))
+	imgui.TableSetColumnIndex(2); imgui.TextUnformatted(string.format("%.0f %s", tow_actual, unit))
 	imgui.TableSetColumnIndex(3)
 	imgui.PushStyleColor(imgui.constant.Col.Text, tow_c)
 	imgui.TextUnformatted(string.format("%+.0f %s", tow_margin, unit))
@@ -332,7 +366,7 @@ function draw_loadsheet_window(wnd, x, y)
 	imgui.TableNextRow()
 	imgui.TableSetColumnIndex(0); imgui.TextUnformatted("LDW")
 	imgui.TableSetColumnIndex(1); imgui.TextUnformatted(string.format("%.0f %s", ldw_planned, unit))
-	imgui.TableSetColumnIndex(2); imgui.TextUnformatted(string.format("%.0f %s", ldw_real, unit))
+	imgui.TableSetColumnIndex(2); imgui.TextUnformatted(string.format("%.0f %s", ldw_actual, unit))
 	imgui.TableSetColumnIndex(3)
 	imgui.PushStyleColor(imgui.constant.Col.Text, ldw_c)
 	imgui.TextUnformatted(string.format("%+.0f %s", ldw_margin, unit))
@@ -342,6 +376,7 @@ function draw_loadsheet_window(wnd, x, y)
 
 	imgui.NewLine()
 	imgui.Separator()
+
 
     --------------------------------------------------------
     -- FUEL

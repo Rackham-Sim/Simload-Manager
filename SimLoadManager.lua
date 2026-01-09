@@ -378,16 +378,46 @@ function fetch_simbrief_data(id)
     local function nonempty(s, fallback)
         return (s ~= nil and s ~= "") and s or fallback
     end
+    local function fnum(tag)
+        return tonumber(string.match(body, "<fuel>.-<" .. tag .. ">([%d%.]+)</" .. tag .. ">")) or 0
+    end
 
     -- SECTION: Units
     local sb_unit = val("units")
-    if sb_unit == "kgs" then unit_system = "kg"
-    elseif sb_unit == "lbs" then unit_system = "lbs" end
+    if sb_unit == "kgs" then
+        unit_system = "kg"
+    elseif sb_unit == "lbs" then
+        unit_system = "lbs"
+    end
 
-    -- SECTION: Core values
-    passengers_total = tonumber(val("pax")) or tonumber(val("passengers")) or 0
-    cargo_total      = num("cargo")
-    fuel_total       = num("plan_ramp")
+    -- SECTION: Weights (STRICT)
+    local pax_count   = nnum("weights", "pax_count")
+    local bag_count   = nnum("weights", "bag_count")
+    local pax_weight  = nnum("weights", "pax_weight")
+    local bag_weight  = nnum("weights", "bag_weight")
+	local bag_count = nnum("weights", "bag_count")
+
+    local freight     = nnum("weights", "freight_added")
+    local cargo_plan  = nnum("weights", "cargo")
+    local payload_plan= nnum("weights", "payload")
+    local oew_plan    = nnum("weights", "oew")
+
+    local est_zfw = nnum("weights", "est_zfw")
+    local max_zfw = nnum("weights", "max_zfw")
+    local est_tow = nnum("weights", "est_tow")
+    local max_tow = nnum("weights", "max_tow")
+    local est_ldw = nnum("weights", "est_ldw")
+    local max_ldw = nnum("weights", "max_ldw")
+
+    -- Derived planned masses (BAGS are not given as a mass tag)
+    local pax_mass_planned = pax_count * pax_weight
+    local bag_mass_planned = bag_count * bag_weight
+
+    -- SECTION: Core totals used by SLM (STRICT)
+    passengers_total = pax_count
+    cargo_total      = cargo_plan
+
+    fuel_total       = fnum("plan_ramp")
     fuel_loaded      = math.floor(fuel_total * fuel_start_ratio)
 
     sched_out = tonumber(val("sched_out")) or 0
@@ -399,66 +429,36 @@ function fetch_simbrief_data(id)
     temp_manual_cargo      = cargo_total
     temp_manual_fuel       = fuel_total
 
-    -- SECTION: Weights (SimBrief exact pax/bag)
-    local pax_count_sb = nnum("weights", "pax_count_actual")
-    if pax_count_sb == 0 then pax_count_sb = nnum("weights", "pax_count") end
-    if pax_count_sb == 0 then pax_count_sb = passengers_total end
+    -- SECTION: SimBrief fields (keep existing behavior)
+    local airline    = nonempty(nv("general",    "airline"),    val("airline"))
+    local fltnum     = nonempty(nv("general",    "fltnum"),     val("fltnum"))
+    local orig       = nonempty(nv("origin",     "icao_code"),  val("orig"))
+    local dest       = nonempty(nv("destination","icao_code"),  val("dest"))
+    local altn       = nonempty(nv("alternate",  "icao_code"),  val("altn"))
 
-    local bag_count_sb = nnum("weights", "bag_count_actual")
-    if bag_count_sb == 0 then bag_count_sb = nnum("weights", "bag_count") end
+    local ac_icao    = nonempty(nv("aircraft",   "icao_code"),  val("type"))
+    local ac_name    = nonempty(nv("aircraft",   "name"),       val("aircraft_name"))
+    local ac_reg     = nonempty(nv("aircraft",   "reg"),        nonempty(val("reg"), val("registration")))
 
-    local pax_w = nnum("weights", "pax_weight")
-    local bag_w = nnum("weights", "bag_weight")
+    local captain    = nonempty(nv("crew", "cpt"), nonempty(val("cpt"), val("pilot_name")))
+    local dispatcher = nonempty(nv("crew", "dx"),  nonempty(val("dx"),  val("dispatcher")))
 
-    SB_pax_weight = pax_w
-    SB_bag_weight = bag_w
-    SB_pax_count  = pax_count_sb
-    SB_bag_count  = bag_count_sb
+    -- SECTION: Fuel (STRICT source is <fuel>)
+    local fuel_taxi  = fnum("taxi")
+    local fuel_trip  = fnum("enroute_burn")
+    local fuel_cont  = fnum("contingency")
+    local fuel_altn  = fnum("alternate_burn")
+    local fuel_res   = fnum("reserve")
+    local fuel_block = fnum("plan_ramp")
+    local fuel_land  = fnum("plan_landing")
 
-    SB_pax_mass_planned = pax_count_sb * pax_w
-
-    if bag_count_sb > 0 then
-        SB_bag_mass_planned = bag_count_sb * bag_w
-    else
-        SB_bag_mass_planned = pax_count_sb * bag_w
-    end
-
-    local est_zfw = nnum("weights", "est_zfw")
-    local max_zfw = nnum("weights", "max_zfw")
-    local est_tow = nnum("weights", "est_tow")
-    local max_tow = nnum("weights", "max_tow")
-    local est_ldw = nnum("weights", "est_ldw")
-    local max_ldw = nnum("weights", "max_ldw")
-
-    -- SECTION: SimBrief fields
-    local airline       = nonempty(nv("general",   "airline"),   val("airline"))
-    local fltnum        = nonempty(nv("general",   "fltnum"),    val("fltnum"))
-    local orig          = nonempty(nv("origin",    "icao_code"), val("orig"))
-    local dest          = nonempty(nv("destination","icao_code"),val("dest"))
-    local altn          = nonempty(nv("alternate", "icao_code"), val("altn"))
-
-    local ac_icao       = nonempty(nv("aircraft",  "icao_code"), val("type"))
-    local ac_name       = nonempty(nv("aircraft",  "name"),      val("aircraft_name"))
-    local ac_reg        = nonempty(nv("aircraft",  "reg"),       nonempty(val("reg"), val("registration")))
-
-    local captain       = nonempty(nv("crew", "cpt"), nonempty(val("cpt"), val("pilot_name")))
-    local dispatcher    = nonempty(nv("crew", "dx"),  nonempty(val("dx"), val("dispatcher")))
-
-    local payload_plan  = nnum("weights", "payload");   if payload_plan == 0 then payload_plan = num("payload") end
-    local oew_plan      = nnum("weights", "oew");       if oew_plan     == 0 then oew_plan     = num("oew")     end
-
-    -- SECTION: Fuel
-    local function fnum(tag)
-        return tonumber(string.match(body, "<fuel>.-<" .. tag .. ">([%d%.]+)</" .. tag .. ">")) or 0
-    end
-
-    local fuel_taxi   = fnum("taxi")
-    local fuel_trip   = fnum("enroute_burn")
-    local fuel_cont   = fnum("contingency")
-    local fuel_altn   = fnum("alternate_burn")
-    local fuel_res    = fnum("reserve")
-    local fuel_block  = fnum("plan_ramp")
-    local fuel_land   = fnum("plan_landing")
+    -- SECTION: Export to globals used elsewhere
+    SB_pax_weight = pax_weight
+    SB_bag_weight = bag_weight
+    SB_pax_count  = pax_count
+    SB_bag_count  = bag_count
+    SB_pax_mass_planned = pax_mass_planned
+    SB_bag_mass_planned = bag_mass_planned
 
     -- SECTION: Loadsheet data
     SLM_Loadsheet_Data = {
@@ -477,18 +477,20 @@ function fetch_simbrief_data(id)
         dispatcher = nonempty(dispatcher, "N/A"),
         captain    = nonempty(captain,    "N/A"),
 
-        pax_total = passengers_total or 0,
+        pax_total   = passengers_total or 0,
         cargo_total = cargo_total or 0,
 
         payload_planned = payload_plan,
         oew = oew_plan,
 
-        pax_weight = SB_pax_weight,
-        bag_weight = SB_bag_weight,
-        pax_mass_planned = SB_pax_mass_planned,
-        bag_mass_planned = SB_bag_mass_planned,
-        pax_count_sb = SB_pax_count,
-        bag_count_sb = SB_bag_count,
+        pax_weight = pax_weight,
+        bag_weight = bag_weight,
+        pax_mass_planned = pax_mass_planned,
+        bag_mass_planned = bag_mass_planned,
+        pax_count_sb = pax_count,
+        bag_count_sb = bag_count,
+
+        freight_added = freight,
 
         est_zfw = est_zfw,
         max_zfw = max_zfw,
@@ -497,13 +499,13 @@ function fetch_simbrief_data(id)
         est_ldw = est_ldw,
         max_ldw = max_ldw,
 
-        fuel_taxi  = fuel_taxi,
-        fuel_trip  = fuel_trip,
-        fuel_cont  = fuel_cont,
-        fuel_altn  = fuel_altn,
+        fuel_taxi    = fuel_taxi,
+        fuel_trip    = fuel_trip,
+        fuel_cont    = fuel_cont,
+        fuel_altn    = fuel_altn,
         fuel_reserve = fuel_res,
-        fuel_block = fuel_block,
-        fuel_land  = fuel_land
+        fuel_block   = fuel_block,
+        fuel_land    = fuel_land
     }
 end
 
@@ -598,6 +600,8 @@ function start_embarkation()
     passengers_loaded = 0
     cargo_unloaded = 0
     passengers_unloaded = 0
+	bus_triggered = false
+    pax_trigger_time = nil
     if unit_system == "lbs" then
         cargo_time_per_unit_min = cargo_time_per_kg_min / 2.20462
         cargo_time_per_unit_max = cargo_time_per_kg_max / 2.20462
@@ -937,67 +941,45 @@ local est_cargo = estimated_time_cargo or 0
 local est_pax   = estimated_time_pax or 0
 
 	if not pax_load_started then
-		if est_cargo > 0
-		   and est_pax > 0
-		   and (
-				math.abs(est_cargo - est_pax) <= 120
-				or est_cargo < 300
-			   )
-		   and (os.clock() - start_time > 3)
-		then
-            if not bus_triggered then
-                if selected_location_group == "remote" then
-                    show_Bus = true
-                    Bus_chg = true
-                elseif selected_location_group == "terminal" then
-                    show_Pax = true
-                    Pax_chg = true
-                    boarding_from_the_terminal = true
-                end
-                bus_triggered = true
-                local delay_pax = 0
-                if selected_location_group == "remote" then
-                    delay_pax = 20
-                elseif selected_location_group == "terminal" then
-                    delay_pax = 4
-                elseif selected_location_group == "jetway" then
-                    delay_pax = 4
-                end
-                pax_trigger_time = os.clock() + delay_pax
-            end
+		if not bus_triggered then
+			if est_cargo > 0
+			   and est_pax > 0
+			   and (math.abs(est_cargo - est_pax) <= 120)
+			   and (os.clock() - start_time > 3)
+			then
+				if selected_location_group == "remote" then
+					show_Bus = true
+					Bus_chg = true
+				elseif selected_location_group == "terminal" then
+					show_Pax = true
+					Pax_chg = true
+					boarding_from_the_terminal = true
+				end
 
-            if os.clock() >= pax_trigger_time and not pax_load_started then
-                pax_load_started = true
-                pax_start_time = os.clock()
-                if not sound_played.start_boarding_passengers then
-                    play_sound_by_key("start_boarding_passengers")
-                    sound_played.start_boarding_passengers = true
-                end
-            end
-        end
-    else
-        if not bus_triggered then
-            if selected_location_group == "remote" then
-                show_Bus = true
-                Bus_chg = true
-            elseif selected_location_group == "terminal" then
-                show_Pax = true
-                Pax_chg = true
-                boarding_from_the_terminal = true
-            end
-            bus_triggered = true
-            pax_trigger_time = os.clock() + 5
-        end
+				bus_triggered = true
 
-        if os.clock() >= pax_trigger_time and not pax_load_started then
-            pax_load_started = true
-            pax_start_time = os.clock()
-            if not sound_played.start_boarding_passengers then
-                play_sound_by_key("start_boarding_passengers")
-                sound_played.start_boarding_passengers = true
-            end
-        end
-    end
+				local delay_pax = 0
+				if selected_location_group == "remote" then
+					delay_pax = 20
+				elseif selected_location_group == "terminal" then
+					delay_pax = 4
+				elseif selected_location_group == "jetway" then
+					delay_pax = 4
+				end
+
+				pax_trigger_time = os.clock() + delay_pax
+			end
+		end
+
+		if bus_triggered and pax_trigger_time and os.clock() >= pax_trigger_time then
+			pax_load_started = true
+			pax_start_time = os.clock()
+			if not sound_played.start_boarding_passengers then
+				play_sound_by_key("start_boarding_passengers")
+				sound_played.start_boarding_passengers = true
+			end
+		end
+	end
 
 	if pax_load_started and (passengers_loaded < passengers_total) then
 		local now_clock = os.clock()
@@ -1463,21 +1445,17 @@ function check_if_all_done()
                 local cargo_actual = cargo_loaded or 0
                 local fuel_actual  = fuel_loaded or 0
 
-                local pax_w = (SLM_Loadsheet_Data and tonumber(SLM_Loadsheet_Data.pax_weight)) or SB_pax_weight or 0
-                local pax_plan = (SLM_Loadsheet_Data and tonumber(SLM_Loadsheet_Data.pax_total)) or passengers_total or 0
-                local bag_plan = (SLM_Loadsheet_Data and tonumber(SLM_Loadsheet_Data.bag_mass_planned)) or 0
+                -- Weights-first: use SimBrief weights-derived pax weight (no loadsheet fallback to avoid mismatches)
+                local pax_w = SB_pax_weight or 0
 
                 local pax_mass = pax_actual * pax_w
-
-                local bag_mass = 0
-                if pax_plan > 0 then
-                    bag_mass = bag_plan * (pax_actual / pax_plan)
-                end
 
                 SLM_real_pax        = pax_actual
                 SLM_real_cargo      = cargo_actual
                 SLM_real_fuel_block = fuel_actual
-                SLM_real_payload    = pax_mass + bag_mass + cargo_actual
+
+                -- Payload actual = Pax mass (already calculated) + Cargo actual (bags + freight already included in cargo)
+                SLM_real_payload    = pax_mass + cargo_actual
 
                 loadsheet_ready = true
                 logMsg("[SLM] Loadsheet is now available (loading completed).")
@@ -1580,8 +1558,43 @@ function reset_loads()
 	onground_prev = 1
 	landing_time = "--:--Z"
 	block_on_time = "--:--Z"
-	local passed_1000ft = false
+	passed_1000ft = false
+	SLM_real_pax        = 0
+	SLM_real_cargo      = 0
+	SLM_real_fuel_block = 0
+	SLM_real_payload    = 0
+	SB_pax_weight = 0
+	SB_bag_weight = 0
+	SB_pax_count  = 0
+	SB_bag_count  = 0
+	SB_pax_mass_planned = 0
+	SB_bag_mass_planned = 0
+	SLM_Loadsheet_Data = nil
+	SLM_state[0]           = 0
+	SLM_is_busy[0]         = 0
+	SLM_loadsheet_ready[0] = 0
+	SLM_pax_total[0]   = 0
+	SLM_cargo_total[0] = 0
+	SLM_fuel_total[0]  = 0
+	SLM_pax_done[0]   = 0
+	SLM_cargo_done[0] = 0
+	SLM_fuel_done[0]  = 0
+	SLM_pax_fraction[0]   = 0
+	SLM_cargo_fraction[0] = 0
+	SLM_fuel_fraction[0]  = 0
+	SLM_eta_pax[0]   = 0
+	SLM_eta_cargo[0] = 0
+	SLM_eta_fuel[0]  = 0
+	SLM_eta_total[0] = 0
+	SLM_pax_state[0]   = 0
+	SLM_cargo_state[0] = 0
+	SLM_fuel_state[0]  = 0
+	SLM_ls_diff_pax[0]        = 0
+	SLM_ls_diff_cargo[0]      = 0
+	SLM_ls_diff_fuel_block[0] = 0
+	SLM_ls_diff_payload[0]    = 0
 
+	update_slm_datarefs()
 
     sound_played = {
         start_loading_cargo = false,
@@ -2321,79 +2334,70 @@ end
 	imgui.TextUnformatted(string.format("%d / %d PAX", pax_current, passengers_total))
 
 	if (embark_started or disembark_started or embark_done or disembark_done) then
-		if passengers_total == 0 then
-			imgui.TextUnformatted("No Pax")
+    if passengers_total == 0 then
+        imgui.TextUnformatted("No Pax")
 
-		elseif (embark_done and not disembark_started) or disembark_done then
-			imgui.TextUnformatted("Estimated: ")
-			imgui.SameLine(nil, 0)
-			imgui.PushStyleColor(imgui.constant.Col.Text, 0xFF00FF00)
-			imgui.TextUnformatted("Completed")
-			imgui.PopStyleColor()
+    elseif (embark_done and not disembark_started) or disembark_done then
+        imgui.TextUnformatted("Estimated: ")
+        imgui.SameLine(nil, 0)
+        imgui.PushStyleColor(imgui.constant.Col.Text, 0xFF00FF00)
+        imgui.TextUnformatted("Completed")
+        imgui.PopStyleColor()
 
-		elseif disembark_started and (passengers_unloaded < passengers_total) then
-			if estimated_time_pax and estimated_time_pax > 0 then
-				local pax_minutes = math.ceil(estimated_time_pax / 60)
-				imgui.TextUnformatted(string.format("Estimated: %d minutes", pax_minutes))
-			else
-				imgui.TextUnformatted("Estimated: --")
-			end
+    elseif disembark_started and (passengers_unloaded < passengers_total) then
+        if estimated_time_pax and estimated_time_pax > 0 then
+            local pax_minutes = math.ceil(estimated_time_pax / 60)
+            imgui.TextUnformatted(string.format("Estimated: %d minutes", pax_minutes))
+        else
+            imgui.TextUnformatted("Estimated: --")
+        end
 
-		elseif embark_started and not pax_load_started then
-		if estimated_time_cargo and estimated_time_pax and estimated_time_cargo > 0 and estimated_time_pax > 0 then
-			local time_until_pax = math.max((estimated_time_cargo - (estimated_time_pax - 120)), 0)
+    elseif embark_started and not pax_load_started then
+        if bus_triggered and pax_trigger_time then
+            local t = pax_trigger_time - os.clock()
 
-			if time_until_pax > 300 then
-				imgui.TextUnformatted("Estimated: ")
-				imgui.SameLine(nil, 0)
-				imgui.PushStyleColor(imgui.constant.Col.Text, 0xFFFFFFFF)
-				imgui.TextUnformatted("Boarding later")
-				imgui.PopStyleColor()
+            imgui.TextUnformatted("Estimated: ")
+            imgui.SameLine(nil, 0)
 
-			elseif time_until_pax > 60 then
-				imgui.TextUnformatted("Estimated: ")
-				imgui.SameLine(nil, 0)
-				imgui.PushStyleColor(imgui.constant.Col.Text, 0xFFFFA500)
-				imgui.TextUnformatted("Boarding soon")
-				imgui.PopStyleColor()
+            if t > 60 then
+                imgui.PushStyleColor(imgui.constant.Col.Text, 0xFFFFA500)
+                imgui.TextUnformatted("Boarding soon")
+                imgui.PopStyleColor()
+            else
+                imgui.PushStyleColor(imgui.constant.Col.Text, 0xFFFFA500)
+                imgui.TextUnformatted("Boarding any moment")
+                imgui.PopStyleColor()
+            end
+        else
+            imgui.TextUnformatted("Estimated: ")
+            imgui.SameLine(nil, 0)
+            imgui.PushStyleColor(imgui.constant.Col.Text, 0xFFFFFFFF)
+            imgui.TextUnformatted("Boarding later")
+            imgui.PopStyleColor()
+        end
 
-			else
-				imgui.TextUnformatted("Estimated: ")
-				imgui.SameLine(nil, 0)
-				imgui.PushStyleColor(imgui.constant.Col.Text, 0xFFFFA500)
-				imgui.TextUnformatted("Boarding any moment")
-				imgui.PopStyleColor()
-			end
-		else
-				imgui.TextUnformatted("Estimated: ")
-				imgui.SameLine(nil, 0)
-				imgui.PushStyleColor(imgui.constant.Col.Text, 0xFFFFFFFF)
-				imgui.TextUnformatted("Boarding later")
-				imgui.PopStyleColor()
-		end
+    elseif pax_current >= passengers_total then
+        imgui.TextUnformatted("Estimated: ")
+        imgui.SameLine(nil, 0)
+        imgui.PushStyleColor(imgui.constant.Col.Text, 0xFF00FF00)
+        imgui.TextUnformatted("Completed")
+        imgui.PopStyleColor()
 
-		elseif pax_current >= passengers_total then
-			imgui.TextUnformatted("Estimated: ")
-			imgui.SameLine(nil, 0)
-			imgui.PushStyleColor(imgui.constant.Col.Text, 0xFF00FF00)
-			imgui.TextUnformatted("Completed")
-			imgui.PopStyleColor()
-			
-		else
-			if estimated_time_pax and passengers_loaded < passengers_total then
-			if estimated_time_pax < 60 then
-				imgui.TextUnformatted("Estimated: < 1 minute")
-			else
-				local pax_minutes = math.ceil(estimated_time_pax / 60)
-				imgui.TextUnformatted(string.format("Estimated: %d minutes", pax_minutes))
-			end
-		else
-			imgui.TextUnformatted("Estimated: --")
-		end
-	end
-	else
-		imgui.TextUnformatted("Estimated: Not started")
-	end
+    else
+        if estimated_time_pax and passengers_loaded < passengers_total then
+            if estimated_time_pax < 60 then
+                imgui.TextUnformatted("Estimated: < 1 minute")
+            else
+                local pax_minutes = math.ceil(estimated_time_pax / 60)
+                imgui.TextUnformatted(string.format("Estimated: %d minutes", pax_minutes))
+            end
+        else
+            imgui.TextUnformatted("Estimated: --")
+        end
+    end
+else
+    imgui.TextUnformatted("Estimated: Not started")
+end
 
 	imgui.NewLine()
 	
