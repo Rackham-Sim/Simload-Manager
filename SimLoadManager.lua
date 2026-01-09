@@ -168,6 +168,12 @@ SLM_ls_diff_cargo        = create_dataref_table("FlyWithLua/SimLoadManager/loads
 SLM_ls_diff_fuel_block   = create_dataref_table("FlyWithLua/SimLoadManager/loadsheet/diff_fuel_block", "Float")
 SLM_ls_diff_payload      = create_dataref_table("FlyWithLua/SimLoadManager/loadsheet/diff_payload", "Float")
 
+SLM_ls_actual_pax        = create_dataref_table("FlyWithLua/SimLoadManager/loadsheet/actual_pax", "Int")
+SLM_ls_actual_cargo      = create_dataref_table("FlyWithLua/SimLoadManager/loadsheet/actual_cargo", "Float")
+SLM_ls_actual_fuel_block = create_dataref_table("FlyWithLua/SimLoadManager/loadsheet/actual_fuel_block", "Float")
+SLM_ls_actual_payload    = create_dataref_table("FlyWithLua/SimLoadManager/loadsheet/actual_payload", "Float")
+
+
 --------------------------------------------------------------------------------
 -- DEFAULT TIMING
 --------------------------------------------------------------------------------
@@ -1692,12 +1698,11 @@ function update_slm_datarefs()
     else
         SLM_state[0] = 0
     end
-	
-	SLM_loadsheet_ready[0] = loadsheet_ready and 1 or 0
 
     SLM_is_busy[0] = (embark_started or disembark_started) and 1 or 0
+    SLM_loadsheet_ready[0] = loadsheet_ready and 1 or 0
 
-    -- LOCATION MODE
+    -- LOCATION / OPTIONS
     if selected_location_group == "remote" then
         SLM_location_mode[0] = 0
     elseif selected_location_group == "terminal" then
@@ -1706,7 +1711,6 @@ function update_slm_datarefs()
         SLM_location_mode[0] = 2
     end
 
-    -- OPTIONS
     SLM_aircraft_own_stairs[0] = aircraft_has_own_stairs and 1 or 0
 
     -- TOTALS
@@ -1714,7 +1718,7 @@ function update_slm_datarefs()
     SLM_cargo_total[0] = cargo_total or 0
     SLM_fuel_total[0]  = fuel_total or 0
 
-    -- DONE VALUES
+    -- DONE
     SLM_pax_done[0] =
         embark_started and passengers_loaded
         or disembark_started and (passengers_total - passengers_unloaded)
@@ -1745,12 +1749,12 @@ function update_slm_datarefs()
     SLM_eta_fuel[0]  = estimated_time_fuel  or 0
 
     local eta_total = 0
-    if estimated_time_pax then eta_total = eta_total + estimated_time_pax end
+    if estimated_time_pax   then eta_total = eta_total + estimated_time_pax end
     if estimated_time_cargo then eta_total = eta_total + estimated_time_cargo end
-    if estimated_time_fuel then eta_total = eta_total + estimated_time_fuel end
+    if estimated_time_fuel  then eta_total = eta_total + estimated_time_fuel end
     SLM_eta_total[0] = eta_total
 
-    -- PAX STATE
+    -- STATES
     if passengers_total == 0 or not pax_load_started then
         SLM_pax_state[0] = 0
     elseif SLM_pax_done[0] >= passengers_total then
@@ -1759,7 +1763,6 @@ function update_slm_datarefs()
         SLM_pax_state[0] = 1
     end
 
-    -- CARGO STATE
     if cargo_total == 0 then
         SLM_cargo_state[0] = 0
     elseif SLM_cargo_done[0] >= cargo_total then
@@ -1768,7 +1771,6 @@ function update_slm_datarefs()
         SLM_cargo_state[0] = 1
     end
 
-    -- FUEL STATE
     if fuel_total == 0 or (not fuel_loading and not fuel_done) then
         SLM_fuel_state[0] = 0
     elseif fuel_done then
@@ -1776,29 +1778,40 @@ function update_slm_datarefs()
     else
         SLM_fuel_state[0] = 1
     end
-	
-		-- Loadsheet DIFF (Actual - SimBrief)
-	if loadsheet_ready and simbrief_data_loaded then
-		SLM_ls_diff_pax[0] =
-			(SLM_pax_done[0] or 0) - (SB_pax_count or 0)
 
-		SLM_ls_diff_cargo[0] =
-			(SLM_cargo_done[0] or 0) - (cargo_total or 0)
+    -- LOADSHEET ACTUAL
+    if loadsheet_ready then
+        SLM_ls_actual_pax[0]        = SLM_real_pax or 0
+        SLM_ls_actual_cargo[0]      = SLM_real_cargo or 0
+        SLM_ls_actual_fuel_block[0] = SLM_real_fuel_block or 0
+        SLM_ls_actual_payload[0]    = SLM_real_payload or 0
+    else
+        SLM_ls_actual_pax[0]        = 0
+        SLM_ls_actual_cargo[0]      = 0
+        SLM_ls_actual_fuel_block[0] = 0
+        SLM_ls_actual_payload[0]    = 0
+    end
 
-		SLM_ls_diff_fuel_block[0] =
-			(SLM_fuel_done[0] or 0) - (fuel_total or 0)
+    -- LOADSHEET DIFF (Actual - SimBrief)
+    if loadsheet_ready and simbrief_data_loaded and SLM_Loadsheet_Data then
+        SLM_ls_diff_pax[0] =
+            (SLM_real_pax or 0) - (SB_pax_count or 0)
 
-		SLM_ls_diff_payload[0] =
-			(SLM_real_payload or 0)
-			- ((SLM_Loadsheet_Data and SLM_Loadsheet_Data.payload_planned) or 0)
-	else
-		SLM_ls_diff_pax[0]        = 0
-		SLM_ls_diff_cargo[0]      = 0
-		SLM_ls_diff_fuel_block[0] = 0
-		SLM_ls_diff_payload[0]    = 0
-	end
+        SLM_ls_diff_cargo[0] =
+            (SLM_real_cargo or 0) - (SLM_Loadsheet_Data.cargo_total or 0)
+
+        SLM_ls_diff_fuel_block[0] =
+            (SLM_real_fuel_block or 0) - (SLM_Loadsheet_Data.fuel_block or 0)
+
+        SLM_ls_diff_payload[0] =
+            (SLM_real_payload or 0) - (SLM_Loadsheet_Data.payload_planned or 0)
+    else
+        SLM_ls_diff_pax[0]        = 0
+        SLM_ls_diff_cargo[0]      = 0
+        SLM_ls_diff_fuel_block[0] = 0
+        SLM_ls_diff_payload[0]    = 0
+    end
 end
-
 
 --------------------------------------------------------------------------------
 -- Flight Times (UTC)
