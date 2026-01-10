@@ -950,7 +950,7 @@ local est_pax   = estimated_time_pax or 0
 		if not bus_triggered then
 			if est_cargo > 0
 			   and est_pax > 0
-			   and (math.abs(est_cargo - est_pax) <= 120)
+			   and ((est_cargo - est_pax) <= 120)
 			   and (os.clock() - start_time > 3)
 			then
 				if selected_location_group == "remote" then
