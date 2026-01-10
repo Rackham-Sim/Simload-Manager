@@ -1719,19 +1719,29 @@ function update_slm_datarefs()
     SLM_fuel_total[0]  = fuel_total or 0
 
     -- DONE
-    SLM_pax_done[0] =
-        embark_started and passengers_loaded
-        or disembark_started and (passengers_total - passengers_unloaded)
-        or passengers_total
-        or 0
+	if embark_started then
+		SLM_pax_done[0] = passengers_loaded or 0
+	elseif disembark_started then
+		SLM_pax_done[0] = (passengers_total - passengers_unloaded) or 0
+	elseif embark_done then
+		SLM_pax_done[0] = passengers_total or 0
+	elseif disembark_done then
+		SLM_pax_done[0] = 0
+	else
+		SLM_pax_done[0] = 0
+	end
 
-    SLM_cargo_done[0] =
-        embark_started and cargo_loaded
-        or disembark_started and (cargo_total - cargo_unloaded)
-        or cargo_total
-        or 0
-
-    SLM_fuel_done[0] = fuel_loaded or 0
+	if embark_started then
+		SLM_cargo_done[0] = cargo_loaded or 0
+	elseif disembark_started then
+		SLM_cargo_done[0] = (cargo_total - cargo_unloaded) or 0
+	elseif embark_done then
+		SLM_cargo_done[0] = cargo_total or 0
+	elseif disembark_done then
+		SLM_cargo_done[0] = 0
+	else
+		SLM_cargo_done[0] = 0
+	end
 
     -- FRACTIONS
     SLM_pax_fraction[0] =
