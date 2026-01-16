@@ -1,4 +1,4 @@
---SIMLOAD MANAGER V2.1
+--SIMLOAD MANAGER V2.1.2
 
 --------------------------------------------------------------------------------
 -- IMGUi Check
@@ -7,6 +7,109 @@ if not SUPPORTS_FLOATING_WINDOWS then
     logMsg("imgui not supported by your FlyWithLua version")
     return
 end
+
+
+--------------------------------------------------------------------------------
+-- UPDATE CHECK
+--------------------------------------------------------------------------------
+SLM_VERSION = "2.1.2"
+
+local SLM_UPDATE_URL =
+    "http://raw.githack.com/Rackham-Sim/Simload-Manager/main/version.txt"
+
+local slm_update_checked = false
+local slm_update_status  = "Unable to verify update at this time"
+local slm_latest_version = nil
+
+local function version_to_table(v)
+    local t = {}
+    for num in string.gmatch(v or "", "%d+") do
+        t[#t + 1] = tonumber(num)
+    end
+    return t
+end
+
+local function is_version_newer(remote, localv)
+    local r = version_to_table(remote)
+    local l = version_to_table(localv)
+
+    local max_len = math.max(#r, #l)
+    for i = 1, max_len do
+        local rv = r[i] or 0
+        local lv = l[i] or 0
+        if rv > lv then return true end
+        if rv < lv then return false end
+    end
+    return false
+end
+
+local function slm_extract_remote_version(body)
+    if not body or body == "" then return nil end
+
+    local lines = {}
+    for line in tostring(body):gmatch("([^\r\n]+)") do
+        line = line:gsub("\r", "")
+        if line ~= "" then
+            lines[#lines + 1] = line
+        end
+    end
+
+    if #lines < 2 then return nil end
+
+    local remote_version = (lines[2] or ""):match("[Vv]%s*(%d+[%d%.]*)")
+    return remote_version
+end
+
+function slm_check_update()
+    if slm_update_checked then return end
+    slm_update_checked = true
+    slm_update_available = false
+
+    slm_update_status = "Unable to verify update at this time"
+    logMsg("[SLM] Update check started...")
+
+    local ok_http, http = pcall(require, "socket.http")
+    if not ok_http or not http or not http.request then
+        logMsg("[SLM] Unable to verify update (socket.http not available)")
+        return
+    end
+
+    if http.TIMEOUT ~= nil then
+        http.TIMEOUT = 5
+    end
+
+    local body, code = http.request(SLM_UPDATE_URL)
+    if not body or code ~= 200 then
+        logMsg("[SLM] Unable to verify update (HTTP " .. tostring(code) .. ")")
+        return
+    end
+
+    local remote_version = slm_extract_remote_version(body)
+    if not remote_version then
+        logMsg("[SLM] Unable to verify update (parse failed)")
+        return
+    end
+
+    slm_latest_version = remote_version
+
+    if is_version_newer(remote_version, SLM_VERSION) then
+        slm_update_available = true
+        slm_update_status = "New update available: " .. remote_version
+        logMsg("[SLM] New update available: " .. remote_version)
+    else
+        slm_update_available = false
+        slm_update_status = "Latest version installed"
+        logMsg("[SLM] Latest version installed (Local " .. SLM_VERSION .. " / Remote " .. remote_version .. ")")
+    end
+end
+
+local slm_update_init_done = false
+function slm_update_init_once()
+    if slm_update_init_done then return end
+    slm_update_init_done = true
+    slm_check_update()
+end
+
 
 --------------------------------------------------------------------------------
 -- VARIABLES
@@ -1730,6 +1833,14 @@ function update_slm_datarefs()
 	else
 		SLM_pax_done[0] = 0
 	end
+	
+	   if embark_started then
+        SLM_fuel_done[0] = fuel_loaded or 0
+    elseif embark_done then
+        SLM_fuel_done[0] = fuel_total or 0
+    else
+        SLM_fuel_done[0] = 0
+    end
 
 	if embark_started then
 		SLM_cargo_done[0] = cargo_loaded or 0
@@ -1920,8 +2031,8 @@ preset_values.veryfast  = capture_preset(apply_veryfast_timings)
 --------------------------------------------------------------------------------
 function create_embark_window()
     if embark_wnd == nil then
-        embark_wnd = float_wnd_create(425, 750, 1, true)
-        float_wnd_set_title(embark_wnd, "Simload Manager 2.1")
+        embark_wnd = float_wnd_create(425, 775, 1, true)
+        float_wnd_set_title(embark_wnd, "Simload Manager 2.1.2")
         float_wnd_set_imgui_builder(embark_wnd, "build_embark_window")
         float_wnd_set_onclose(embark_wnd, "on_close_embark_window")
         logMsg("[SLM] Embark window created.")
@@ -2203,8 +2314,20 @@ end
         end
     end
 end	
+
+	if not slm_update_checked or slm_update_status == "Unable to verify update at this time" then
+		imgui.PushStyleColor(imgui.constant.Col.Text, 0xFFAAAAAA) -- grey
+	elseif slm_update_available then
+		imgui.PushStyleColor(imgui.constant.Col.Text, 0xFF00A5FF) -- orange
+	else
+		imgui.PushStyleColor(imgui.constant.Col.Text, 0xFF00FF00) -- green
+	end
+
+	imgui.TextUnformatted(slm_update_status)
+	imgui.PopStyleColor()
+
+
    
-    imgui.NewLine()
     imgui.Separator()
 	imgui.NewLine()
 	if embark_started or disembark_started then
@@ -2518,7 +2641,6 @@ end
 	colored_time_line("Landing (ON)",    sched_on,  landing_time)
 	colored_time_line("Block-In (IN)",   sched_in,  block_on_time)
 
-
     imgui.NewLine()
     imgui.Separator()
 
@@ -2671,11 +2793,20 @@ function flightloop_check_SGES_toggle()
     end
 end
 
+local slm_update_init_done = false
+function slm_update_init_once()
+    if slm_update_init_done then return end
+    slm_update_init_done = true
+    slm_check_update()
+end
+
 do_every_frame("flightloop_check_SGES_toggle()")
 do_every_frame("update_loop_volumes()")
 do_every_frame("detect_block_times()")
 do_every_frame("detect_takeoff_and_landing()")
+do_every_frame("slm_update_init_once()")
 do_every_frame("update_slm_datarefs()")
+
 
 
 load_user_settings()
