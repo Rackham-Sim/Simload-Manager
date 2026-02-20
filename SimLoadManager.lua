@@ -14,6 +14,8 @@ end
 --------------------------------------------------------------------------------
 SLM_VERSION = "3.0"
 
+local slm_dev_mode = false   -- set to true to show [DEV] button in UI
+
 local SLM_UPDATE_URL =
     "http://raw.githack.com/Rackham-Sim/Simload-Manager/main/version.txt"
 
@@ -148,15 +150,16 @@ local disembark_last_update_time = 0
 local pax_unload_started = false
 local pax_unload_start_time = 0
 
-local temp_manual_passengers = 0
-local temp_manual_cargo = 0
 local estimated_time_cargo = nil
 local estimated_time_pax = nil
 local cargo_start_reference_time = nil
 
-local cargo_loop_playing = false
-local pax_loop_playing   = false
-local fuel_loop_playing = false
+local cargo_loop_playing     = false
+local pax_loop_playing       = false
+local fuel_loop_playing      = false
+local briefing_loop_playing  = false
+local catering_loop_playing  = false
+local cleaning_loop_playing  = false
 local is_muted = false
 
 
@@ -278,6 +281,9 @@ crew_deplane_duration   = nil
 slm_auto_import_done    = false
 slm_auto_import_message = nil
 
+-- Session mode tracker (not cleared when sequence ends naturally, only by reset)
+slm_last_sequence_mode = nil
+
 -- SGES — new flags (global, consistent with existing show_Bus, Bus_chg, etc.)
 show_Catering = false
 Catering_chg  = true
@@ -396,7 +402,10 @@ sounds = {
     cargo_loop                     = { path = sound_dir .. "Exterior-Sound.wav", id = nil },
     passengers_loop                = { path = sound_dir .. "Cabin-Pax.wav", id = nil },
 	start_fuel_loading			   = { path = sound_dir .. "Start-fuel.wav", id = nil },
-	fuel_loop 					   = { path = sound_dir .. "fuel-Loop.wav", id = nil }
+	fuel_loop 					   = { path = sound_dir .. "fuel-Loop.wav", id = nil },
+    briefing_loop                  = { path = sound_dir .. "Briefing-Loop.wav", id = nil },
+    catering_loop                  = { path = sound_dir .. "Catering-Loop.wav", id = nil },
+    cleaning_loop                  = { path = sound_dir .. "Cleaning-Loop.wav", id = nil }
 }
 
 function init_sounds()
@@ -435,6 +444,15 @@ function update_loop_volumes()
         set_sound_gain(sounds.cargo_loop.id, 0.0001)
         set_sound_gain(sounds.fuel_loop.id, 0.0001)
         set_sound_gain(sounds.passengers_loop.id, 0.0001)
+        if sounds.briefing_loop.id and sounds.briefing_loop.id ~= 0 then
+            set_sound_gain(sounds.briefing_loop.id, 0.0001)
+        end
+        if sounds.catering_loop.id and sounds.catering_loop.id ~= 0 then
+            set_sound_gain(sounds.catering_loop.id, 0.0001)
+        end
+        if sounds.cleaning_loop.id and sounds.cleaning_loop.id ~= 0 then
+            set_sound_gain(sounds.cleaning_loop.id, 0.0001)
+        end
     else
         if cargo_loop_playing then
             set_sound_gain(sounds.cargo_loop.id, view_is_external == 1 and 1.0 or 0.3)
@@ -444,6 +462,15 @@ function update_loop_volumes()
         end
         if pax_loop_playing then
             set_sound_gain(sounds.passengers_loop.id, view_is_external == 1 and 0.0001 or 0.9)
+        end
+        if briefing_loop_playing and sounds.briefing_loop.id and sounds.briefing_loop.id ~= 0 then
+            set_sound_gain(sounds.briefing_loop.id, view_is_external == 1 and 1.0 or 0.5)
+        end
+        if catering_loop_playing and sounds.catering_loop.id and sounds.catering_loop.id ~= 0 then
+            set_sound_gain(sounds.catering_loop.id, view_is_external == 1 and 1.0 or 0.3)
+        end
+        if cleaning_loop_playing and sounds.cleaning_loop.id and sounds.cleaning_loop.id ~= 0 then
+            set_sound_gain(sounds.cleaning_loop.id, view_is_external == 1 and 1.0 or 0.5)
         end
     end
 end
@@ -506,6 +533,8 @@ function load_user_settings()
                 custom_crew_briefing_min = tonumber(value)
             elseif key == "custom_crew_briefing_max" then
                 custom_crew_briefing_max = tonumber(value)
+            elseif key == "volume" then
+                Volume = tonumber(value) or 1.0
             end
         end
         file:close()
@@ -541,6 +570,7 @@ function save_user_settings()
         file:write("custom_cleaning_time_per_pax=" .. tostring(custom_cleaning_time_per_pax or 4.0) .. "\n")
         file:write("custom_crew_briefing_min=" .. tostring(custom_crew_briefing_min or 120) .. "\n")
         file:write("custom_crew_briefing_max=" .. tostring(custom_crew_briefing_max or 300) .. "\n")
+        file:write("volume=" .. tostring(Volume) .. "\n")
 
         file:close()
     end
@@ -624,10 +654,6 @@ function fetch_simbrief_data(id)
     sched_off = tonumber(val("sched_off")) or 0
     sched_on  = tonumber(val("sched_on"))  or 0
     sched_in  = tonumber(val("sched_in"))  or 0
-
-    temp_manual_passengers = passengers_total
-    temp_manual_cargo      = cargo_total
-    temp_manual_fuel       = fuel_total
 
     -- SECTION: SimBrief fields (keep existing behavior)
     local airline    = nonempty(nv("general",    "airline"),    val("airline"))
@@ -842,9 +868,6 @@ function start_embarkation()
         cargo_time_per_unit_max = cargo_time_per_kg_max
     end
     cargo_time_per_unit = random_range(cargo_time_per_unit_min, cargo_time_per_unit_max)
-    passengers_total = temp_manual_passengers
-    cargo_total = temp_manual_cargo
-    fuel_total = temp_manual_fuel or 0
 	local baseline = slm_initial_fuel_kg or sim_fuel_total_kg or 0
 	fuel_loaded = math.floor(baseline)
 
@@ -1287,8 +1310,6 @@ function start_disembarkation()
 
 	cargo_time_per_unit = random_range(cargo_time_per_unit_min, cargo_time_per_unit_max)
 
-    passengers_total = temp_manual_passengers
-    cargo_total = temp_manual_cargo
 	fuel_loaded = math.floor(sim_fuel_total_kg)
     disembark_start_time = os.clock()
     disembark_last_update_time = disembark_start_time
@@ -1757,6 +1778,11 @@ function start_crew_briefing()
     crew_briefing_done       = false
     crew_briefing_start_time = os.clock()
     crew_briefing_duration   = random_range(crew_briefing_time_min, crew_briefing_time_max)
+    if sounds.briefing_loop.id and sounds.briefing_loop.id ~= 0 then
+        briefing_loop_playing = true
+        let_sound_loop(sounds.briefing_loop.id, true)
+        play_sound(sounds.briefing_loop.id)
+    end
 end
 
 function manage_crew_briefing()
@@ -1766,6 +1792,11 @@ function manage_crew_briefing()
         crew_briefing_started = false
         crew_briefing_done    = true
         estimated_time_crew   = nil
+        if briefing_loop_playing then
+            briefing_loop_playing = false
+            let_sound_loop(sounds.briefing_loop.id, false)
+            stop_sound(sounds.briefing_loop.id)
+        end
     else
         estimated_time_crew = crew_briefing_duration - elapsed
     end
@@ -1778,6 +1809,11 @@ function start_catering()
     catering_duration   = passengers_total * catering_time_per_pax + random_range(2, 4)
     show_Catering = true
     Catering_chg  = true
+    if sounds.catering_loop.id and sounds.catering_loop.id ~= 0 then
+        catering_loop_playing = true
+        let_sound_loop(sounds.catering_loop.id, true)
+        play_sound(sounds.catering_loop.id)
+    end
 end
 
 function manage_catering()
@@ -1789,6 +1825,11 @@ function manage_catering()
         estimated_time_catering = nil
         show_Catering = false
         Catering_chg  = true
+        if catering_loop_playing then
+            catering_loop_playing = false
+            let_sound_loop(sounds.catering_loop.id, false)
+            stop_sound(sounds.catering_loop.id)
+        end
     else
         estimated_time_catering = catering_duration - elapsed
     end
@@ -1801,6 +1842,11 @@ function start_cleaning()
     cleaning_duration   = passengers_total * cleaning_time_per_pax + random_range(2, 4)
     show_Cleaning = true
     Cleaning_chg  = true
+    if sounds.cleaning_loop.id and sounds.cleaning_loop.id ~= 0 then
+        cleaning_loop_playing = true
+        let_sound_loop(sounds.cleaning_loop.id, true)
+        play_sound(sounds.cleaning_loop.id)
+    end
 end
 
 function manage_cleaning()
@@ -1812,6 +1858,11 @@ function manage_cleaning()
         estimated_time_cleaning = nil
         show_Cleaning = false
         Cleaning_chg  = true
+        if cleaning_loop_playing then
+            cleaning_loop_playing = false
+            let_sound_loop(sounds.cleaning_loop.id, false)
+            stop_sound(sounds.cleaning_loop.id)
+        end
     else
         estimated_time_cleaning = cleaning_duration - elapsed
     end
@@ -1832,15 +1883,22 @@ function manage_crew_deplane()
     end
 end
 
+function slm_force_arrival_mode()
+    passed_1000ft = true
+    landing_time  = current_zulu_hhmm()
+    -- Intentionally no save_user_settings() — temporary, lost on X-Plane reload
+    logMsg("[SLM DEV] Forced arrival mode")
+end
+
 function slm_turnaround_check_simbrief()
     local ok_http, http = pcall(require, "socket.http")
     if not ok_http or not http then
-        slm_auto_import_message = "SimBrief unreachable — please import manually if needed"
+        slm_auto_import_message = "SimBrief unreachable — check your connection and try again"
         return
     end
     local body, code = http.request("https://www.simbrief.com/api/xml.fetcher.php?userid=" .. simbrief_id)
     if not body or code ~= 200 then
-        slm_auto_import_message = "SimBrief unreachable — please import manually if needed"
+        slm_auto_import_message = "SimBrief unreachable — check your connection and try again"
         return
     end
     local new_ts = string.match(body, "<time_generated>(.-)</time_generated>") or ""
@@ -1848,7 +1906,7 @@ function slm_turnaround_check_simbrief()
         fetch_simbrief_data(simbrief_id)
         slm_auto_import_message = "New flight plan detected — imported automatically"
     else
-        slm_auto_import_message = "No new flight plan detected — please import manually if needed"
+        slm_auto_import_message = "No new flight plan detected — current plan retained"
     end
 end
 
@@ -1857,21 +1915,22 @@ end
 --------------------------------------------------------------------------------
 
 function start_departure_sequence()
-    passengers_total = temp_manual_passengers
-    cargo_total      = temp_manual_cargo
-    fuel_total       = temp_manual_fuel or 0
-    slm_sequence_mode = "departure"
+    slm_sequence_mode      = "departure"
+    slm_last_sequence_mode = "departure"
+    slm_sequence_phase     = "crew_and_catering"
+    crew_briefing_done     = false
+    catering_done          = false
     if skip_crew_briefing then
-        slm_sequence_phase = "catering"
-        start_catering()
+        crew_briefing_done = true
     else
-        slm_sequence_phase = "crew_briefing"
         start_crew_briefing()
     end
+    start_catering()
 end
 
 function start_turnaround()
     slm_sequence_mode       = "turnaround"
+    slm_last_sequence_mode  = "turnaround"
     slm_sequence_phase      = "arrival_ops"
     slm_auto_import_done    = false
     slm_auto_import_message = nil
@@ -1879,8 +1938,9 @@ function start_turnaround()
 end
 
 function start_night_stop()
-    slm_sequence_mode  = "night_stop"
-    slm_sequence_phase = "arrival_ops"
+    slm_sequence_mode      = "night_stop"
+    slm_last_sequence_mode = "night_stop"
+    slm_sequence_phase     = "arrival_ops"
     start_disembarkation()
 end
 
@@ -1889,10 +1949,8 @@ function manage_sequence()
 
     -- DEPARTURE
     if slm_sequence_mode == "departure" then
-        if slm_sequence_phase == "crew_briefing" and crew_briefing_done then
-            slm_sequence_phase = "catering"
-            start_catering()
-        elseif slm_sequence_phase == "catering" and catering_done then
+        if slm_sequence_phase == "crew_and_catering"
+           and crew_briefing_done and catering_done then
             slm_sequence_mode  = nil
             slm_sequence_phase = nil
             start_embarkation()
@@ -1908,16 +1966,17 @@ function manage_sequence()
         elseif slm_sequence_phase == "simbrief_check" and not slm_auto_import_done then
             slm_auto_import_done = true
             slm_turnaround_check_simbrief()
-            slm_sequence_phase = "crew_briefing"
+            slm_sequence_phase = "crew_and_catering"
+            crew_briefing_done = false
+            catering_done      = false
             if skip_crew_briefing then
                 crew_briefing_done = true
             else
                 start_crew_briefing()
             end
-        elseif slm_sequence_phase == "crew_briefing" and crew_briefing_done then
-            slm_sequence_phase = "catering"
             start_catering()
-        elseif slm_sequence_phase == "catering" and catering_done then
+        elseif slm_sequence_phase == "crew_and_catering"
+               and crew_briefing_done and catering_done then
             slm_sequence_mode  = nil
             slm_sequence_phase = nil
             start_embarkation()
@@ -1955,9 +2014,6 @@ function reset_loads()
     embark_done           = false
     disembark_started     = false
     disembark_done        = false
-    temp_manual_passengers = 0
-    temp_manual_cargo     = 0
-	temp_manual_fuel     = 0
 	fuel_loaded = 0
 	fuel_done = false
 	fuel_loading = false
@@ -2060,6 +2116,7 @@ function reset_loads()
 	-- Sequence
 	slm_sequence_mode       = nil
 	slm_sequence_phase      = nil
+	slm_last_sequence_mode  = nil
 	slm_auto_import_done    = false
 	slm_auto_import_message = nil
 
@@ -2099,6 +2156,28 @@ function reset_loads()
 	save_user_settings()
 
 	update_slm_datarefs()
+
+    if briefing_loop_playing then
+        briefing_loop_playing = false
+        if sounds.briefing_loop.id and sounds.briefing_loop.id ~= 0 then
+            let_sound_loop(sounds.briefing_loop.id, false)
+            stop_sound(sounds.briefing_loop.id)
+        end
+    end
+    if catering_loop_playing then
+        catering_loop_playing = false
+        if sounds.catering_loop.id and sounds.catering_loop.id ~= 0 then
+            let_sound_loop(sounds.catering_loop.id, false)
+            stop_sound(sounds.catering_loop.id)
+        end
+    end
+    if cleaning_loop_playing then
+        cleaning_loop_playing = false
+        if sounds.cleaning_loop.id and sounds.cleaning_loop.id ~= 0 then
+            let_sound_loop(sounds.cleaning_loop.id, false)
+            stop_sound(sounds.cleaning_loop.id)
+        end
+    end
 
     sound_played = {
         start_loading_cargo = false,
@@ -2461,7 +2540,7 @@ preset_values.veryfast  = capture_preset(apply_veryfast_timings)
 --------------------------------------------------------------------------------
 function create_embark_window()
     if embark_wnd == nil then
-        embark_wnd = float_wnd_create(425, 955, 1, true)
+        embark_wnd = float_wnd_create(425, 1150, 1, true)
         float_wnd_set_title(embark_wnd, "Simload Manager 3.0")
         float_wnd_set_imgui_builder(embark_wnd, "build_embark_window")
         float_wnd_set_onclose(embark_wnd, "on_close_embark_window")
@@ -2531,6 +2610,339 @@ function Ko_fi()
         os.execute("start " .. url)
     else
         os.execute("open " .. url)
+    end
+end
+
+--------------------------------------------------------------------------------
+-- SEQUENCE UI HELPERS
+--------------------------------------------------------------------------------
+
+-- Renders a single step in the progressive sequence display.
+-- status: "done" | "active" | "pending"
+-- frac: 0..1 progress fraction (used when active)
+-- eta_seconds: remaining seconds (used when active, optional)
+-- message: optional extra text shown below the bar when active
+function slm_draw_step(label, status, frac, eta_seconds, message)
+    local COL = imgui.constant.Col
+    if status == "done" then
+        imgui.PushStyleColor(COL.Text, 0xFF00CC00)
+        imgui.TextUnformatted("\xE2\x9C\x93 " .. label)
+        imgui.PopStyleColor()
+    elseif status == "active" then
+        imgui.TextUnformatted("\xE2\x96\xBA " .. label)
+        if frac ~= nil then
+            if frac >= 1.0 then imgui.PushStyleColor(COL.PlotHistogram, 0xFF00CC00) end
+            imgui.ProgressBar(frac, 200, 20, "")
+            if frac >= 1.0 then imgui.PopStyleColor() end
+        end
+        if message then
+            imgui.PushStyleColor(COL.Text, 0xFFAAAAAA)
+            imgui.TextUnformatted("   " .. message)
+            imgui.PopStyleColor()
+        end
+        if eta_seconds then
+            if eta_seconds < 60 then
+                imgui.TextUnformatted("   Estimated: < 1 minute")
+            else
+                local mins = math.ceil(eta_seconds / 60)
+                imgui.TextUnformatted(string.format("   Estimated: %d minute%s", mins, mins > 1 and "s" or ""))
+            end
+        end
+    else -- pending
+        imgui.PushStyleColor(COL.Text, 0xFF888888)
+        imgui.TextUnformatted("  " .. label)
+        imgui.PopStyleColor()
+    end
+end
+
+-- Draws the full progressive sequence step list.
+-- Replaces the flat progress bar section.
+function slm_draw_sequence_steps()
+    local mode = slm_last_sequence_mode
+    -- If no sequence ever started but direct ops are running (X-Plane command),
+    -- derive a temporary mode from the current operation.
+    if not mode then
+        if embark_started or embark_done then
+            mode = "departure"
+        elseif disembark_started or disembark_done then
+            mode = passed_1000ft and "turnaround" or "departure"
+        else
+            return
+        end
+    end
+
+    local COL = imgui.constant.Col
+
+    local function progress_bar_colored(frac, w, h)
+        if frac >= 1.0 then imgui.PushStyleColor(COL.PlotHistogram, 0xFF00CC00) end
+        imgui.ProgressBar(frac, w, h, "")
+        if frac >= 1.0 then imgui.PopStyleColor() end
+    end
+
+    -- =====================================================================
+    -- ARRIVAL OPS: Passenger Deboarding + Cargo Unloading
+    -- (Turnaround + Night Stop)
+    -- =====================================================================
+    if mode == "turnaround" or mode == "night_stop" then
+        if disembark_done then
+            slm_draw_step("Passenger Deboarding", "done")
+            slm_draw_step("Cargo Unloading",      "done")
+        elseif disembark_started then
+            -- PAX deboarding
+            local pax_cur = passengers_total - passengers_unloaded
+            local frac_pax = (passengers_total > 0) and math.min(1, pax_cur / passengers_total) or 0
+            imgui.TextUnformatted("\xE2\x96\xBA Passenger Deboarding")
+            progress_bar_colored(frac_pax, 200, 20)
+            imgui.SameLine()
+            imgui.TextUnformatted(string.format("%d / %d PAX", pax_cur, passengers_total))
+            if estimated_time_pax and estimated_time_pax > 0 then
+                local mins = math.ceil(estimated_time_pax / 60)
+                imgui.TextUnformatted(string.format("   Estimated: %d minute%s", mins, mins > 1 and "s" or ""))
+            end
+            imgui.NewLine()
+            -- Cargo unloading
+            local cargo_cur = cargo_total - cargo_unloaded
+            local frac_cargo = (cargo_total > 0) and math.min(1, cargo_cur / cargo_total) or 0
+            imgui.TextUnformatted("\xE2\x96\xBA Cargo Unloading")
+            progress_bar_colored(frac_cargo, 200, 20)
+            imgui.SameLine()
+            imgui.TextUnformatted(string.format("%.0f / %.0f %s", cargo_cur, cargo_total, unit_system))
+            if estimated_time_cargo and estimated_time_cargo > 0 then
+                local mins = math.ceil(estimated_time_cargo / 60)
+                imgui.TextUnformatted(string.format("   Estimated: %d minute%s", mins, mins > 1 and "s" or ""))
+            end
+        else
+            slm_draw_step("Passenger Deboarding", "pending")
+            slm_draw_step("Cargo Unloading",      "pending")
+        end
+        imgui.NewLine()
+    end
+
+    -- =====================================================================
+    -- CLEANING  (Turnaround + Night Stop)
+    -- =====================================================================
+    if mode == "turnaround" or mode == "night_stop" then
+        if cleaning_done then
+            slm_draw_step("Cabin Cleaning", "done")
+        elseif cleaning_started then
+            local frac = (cleaning_duration and cleaning_duration > 0) and
+                math.min(1.0, (os.clock() - cleaning_start_time) / cleaning_duration) or 0
+            slm_draw_step("Cabin Cleaning", "active", frac, estimated_time_cleaning)
+        else
+            slm_draw_step("Cabin Cleaning", "pending")
+        end
+        imgui.NewLine()
+    end
+
+    -- =====================================================================
+    -- NIGHT STOP: Crew Deplane  →  END
+    -- =====================================================================
+    if mode == "night_stop" then
+        if crew_deplane_done then
+            slm_draw_step("Crew Deplane", "done")
+        elseif crew_deplane_started then
+            local frac = (crew_deplane_duration and crew_deplane_duration > 0) and
+                math.min(1.0, (os.clock() - crew_deplane_start_time) / crew_deplane_duration) or 0
+            slm_draw_step("Crew Deplane", "active", frac)
+        else
+            slm_draw_step("Crew Deplane", "pending")
+        end
+        return  -- Night Stop ends here
+    end
+
+    -- =====================================================================
+    -- FLIGHT PLAN UPDATE  (Turnaround only)
+    -- =====================================================================
+    if mode == "turnaround" then
+        slm_draw_step("Flight Plan Update", slm_auto_import_done and "done" or "pending")
+        imgui.NewLine()
+    end
+
+    -- =====================================================================
+    -- CREW BRIEFING  (Departure + Turnaround)  — parallel with Catering
+    -- =====================================================================
+    if crew_briefing_done then
+        slm_draw_step("Crew Briefing", "done")
+    elseif crew_briefing_started then
+        local frac = (crew_briefing_duration and crew_briefing_duration > 0) and
+            math.min(1.0, (os.clock() - crew_briefing_start_time) / crew_briefing_duration) or 0
+        slm_draw_step("Crew Briefing", "active", frac, estimated_time_crew,
+            "Crew arriving and briefing — good time to review your flight plan!")
+    else
+        slm_draw_step("Crew Briefing", "pending")
+    end
+    imgui.NewLine()
+
+    -- =====================================================================
+    -- CATERING  (Departure + Turnaround)  — parallel with Crew Briefing
+    -- =====================================================================
+    if catering_done then
+        slm_draw_step("Catering", "done")
+    elseif catering_started then
+        local frac = (catering_duration and catering_duration > 0) and
+            math.min(1.0, (os.clock() - catering_start_time) / catering_duration) or 0
+        slm_draw_step("Catering", "active", frac, estimated_time_catering)
+    else
+        slm_draw_step("Catering", "pending")
+    end
+    imgui.NewLine()
+
+    -- =====================================================================
+    -- EMBARKATION  — Fuel / PAX / Cargo (order follows fuel_first flag)
+    -- =====================================================================
+
+    local function draw_embark_fuel()
+        if embark_done then
+            slm_draw_step(string.format("Fuel Loading (%.0f %s)", fuel_total, unit_system), "done")
+        elseif embark_started then
+            imgui.TextUnformatted("\xE2\x96\xBA Fuel Loading")
+            local fuel_fraction
+            local fuel_color_pushed = false
+            if slm_defuel_performed and not fuel_done then
+                local denom = slm_initial_fuel_kg or 1
+                fuel_fraction = (denom > 0) and (fuel_loaded / denom) or 0
+                imgui.PushStyleColor(COL.PlotHistogram, 0xFF0055FF)
+                fuel_color_pushed = true
+            elseif fuel_done then
+                fuel_fraction = (fuel_total > 0) and (fuel_loaded / fuel_total) or 0
+                imgui.PushStyleColor(COL.PlotHistogram, 0xFF00CC00)
+                fuel_color_pushed = true
+            else
+                fuel_fraction = (fuel_total > 0) and (fuel_loaded / fuel_total) or 0
+            end
+            fuel_fraction = math.max(0, math.min(1, fuel_fraction))
+            imgui.ProgressBar(fuel_fraction, 200, 20, "")
+            if fuel_color_pushed then imgui.PopStyleColor() end
+            imgui.SameLine()
+            imgui.TextUnformatted(string.format("%.0f / %.0f %s", fuel_loaded, fuel_total, unit_system))
+            if fuel_done then
+                imgui.TextUnformatted("   Estimated: ")
+                imgui.SameLine(nil, 0)
+                imgui.PushStyleColor(COL.Text, 0xFF00FF00)
+                imgui.TextUnformatted("Completed")
+                imgui.PopStyleColor()
+            elseif fuel_loading then
+                if fuel_ready_time and os.clock() < fuel_ready_time then
+                    imgui.TextUnformatted("   Waiting for fuel truck...")
+                elseif estimated_time_fuel then
+                    local fuel_remaining = fuel_total - fuel_loaded
+                    local time_remaining = fuel_remaining * (fuel_time_per_unit or 1)
+                    if time_remaining < 60 then
+                        imgui.TextUnformatted("   Estimated: < 1 minute")
+                    else
+                        local mins = math.ceil(time_remaining / 60)
+                        imgui.TextUnformatted(string.format("   Estimated: %d minute%s", mins, mins > 1 and "s" or ""))
+                    end
+                else
+                    imgui.TextUnformatted("   Estimated: --")
+                end
+            else
+                imgui.TextUnformatted("   Estimated: Waiting")
+            end
+        else
+            slm_draw_step("Fuel Loading", "pending")
+        end
+        imgui.NewLine()
+    end
+
+    local function draw_embark_pax()
+        if embark_done then
+            slm_draw_step(string.format("Passenger Boarding (%d PAX)", passengers_total), "done")
+        elseif embark_started then
+            local pax_cur = math.max(0, math.min(passengers_loaded, passengers_total))
+            local frac = (passengers_total > 0) and (pax_cur / passengers_total) or 0
+            imgui.TextUnformatted("\xE2\x96\xBA Passenger Boarding")
+            progress_bar_colored(frac, 200, 20)
+            imgui.SameLine()
+            imgui.TextUnformatted(string.format("%d / %d PAX", pax_cur, passengers_total))
+            if passengers_total == 0 then
+                imgui.TextUnformatted("   No PAX")
+            elseif pax_cur >= passengers_total then
+                imgui.TextUnformatted("   Estimated: ")
+                imgui.SameLine(nil, 0)
+                imgui.PushStyleColor(COL.Text, 0xFF00FF00)
+                imgui.TextUnformatted("Completed")
+                imgui.PopStyleColor()
+            elseif not pax_load_started then
+                if bus_triggered and pax_trigger_time then
+                    local t = pax_trigger_time - os.clock()
+                    imgui.TextUnformatted("   Estimated: ")
+                    imgui.SameLine(nil, 0)
+                    imgui.PushStyleColor(COL.Text, 0xFFFFA500)
+                    imgui.TextUnformatted(t > 60 and "Boarding soon" or "Boarding any moment")
+                    imgui.PopStyleColor()
+                else
+                    imgui.TextUnformatted("   Estimated: Boarding later")
+                end
+            elseif estimated_time_pax and estimated_time_pax > 0 then
+                if estimated_time_pax < 60 then
+                    imgui.TextUnformatted("   Estimated: < 1 minute")
+                else
+                    local mins = math.ceil(estimated_time_pax / 60)
+                    imgui.TextUnformatted(string.format("   Estimated: %d minute%s", mins, mins > 1 and "s" or ""))
+                end
+            else
+                imgui.TextUnformatted("   Estimated: --")
+            end
+        else
+            slm_draw_step("Passenger Boarding", "pending")
+        end
+        imgui.NewLine()
+    end
+
+    local function draw_embark_cargo()
+        if embark_done then
+            slm_draw_step(string.format("Cargo Loading (%.0f %s)", cargo_total, unit_system), "done")
+        elseif embark_started then
+            local cargo_cur = math.max(0, math.min(cargo_loaded, cargo_total))
+            local frac = (cargo_total > 0) and (cargo_cur / cargo_total) or 0
+            imgui.TextUnformatted("\xE2\x96\xBA Cargo Loading")
+            progress_bar_colored(frac, 200, 20)
+            imgui.SameLine()
+            imgui.TextUnformatted(string.format("%.0f / %.0f %s", cargo_cur, cargo_total, unit_system))
+            if cargo_total == 0 then
+                imgui.TextUnformatted("   No Cargo")
+            elseif cargo_cur >= cargo_total then
+                imgui.TextUnformatted("   Estimated: ")
+                imgui.SameLine(nil, 0)
+                imgui.PushStyleColor(COL.Text, 0xFF00FF00)
+                imgui.TextUnformatted("Completed")
+                imgui.PopStyleColor()
+            elseif cargo_loaded == 0 then
+                imgui.TextUnformatted("   Estimated: Waiting")
+            elseif estimated_time_cargo and estimated_time_cargo > 0 then
+                if estimated_time_cargo < 60 then
+                    imgui.TextUnformatted("   Estimated: < 1 minute")
+                else
+                    local mins = math.ceil(estimated_time_cargo / 60)
+                    imgui.TextUnformatted(string.format("   Estimated: %d minute%s", mins, mins > 1 and "s" or ""))
+                end
+            else
+                imgui.TextUnformatted("   Estimated: --")
+            end
+        else
+            slm_draw_step("Cargo Loading", "pending")
+        end
+        imgui.NewLine()
+    end
+
+    if fuel_first then
+        draw_embark_fuel()
+        draw_embark_pax()
+        draw_embark_cargo()
+    else
+        draw_embark_pax()
+        draw_embark_cargo()
+        draw_embark_fuel()
+    end
+
+    -- =====================================================================
+    -- LOADSHEET
+    -- =====================================================================
+    if loadsheet_ready then
+        slm_draw_step("Loadsheet Ready", "done")
+    else
+        slm_draw_step("Loadsheet", "pending")
     end
 end
 
@@ -2781,7 +3193,16 @@ end
     end
 	
 	imgui.NewLine()
-	
+
+	if is_muted then imgui.BeginDisabled() end
+	local chg_vol, new_vol = imgui.SliderFloat("Volume", Volume, 0.0, 1.0, "%.2f")
+	if chg_vol then
+		Volume = new_vol
+		set_all_sounds_gain(Volume)
+		save_user_settings()
+	end
+	if is_muted then imgui.EndDisabled() end
+
 	local changed_mute, new_mute = imgui.Checkbox("Mute sound", is_muted)
     if changed_mute then
         is_muted = new_mute
@@ -2792,7 +3213,7 @@ end
             set_all_sounds_gain(Volume)
         end
     end
-end	
+end
 
 	if not slm_update_checked or slm_update_status == "Unable to verify update at this time" then
 		imgui.PushStyleColor(imgui.constant.Col.Text, 0xFFAAAAAA) -- grey
@@ -2821,14 +3242,19 @@ end
 		imgui.EndDisabled()
 	end
 
-	if embark_started or disembark_started then imgui.BeginDisabled() end
-	imgui.PushItemWidth(130)
+	-- Read-only SimBrief data summary
+	if SLM_Loadsheet_Data then
+		imgui.PushStyleColor(imgui.constant.Col.Text, 0xFFAAAAAA)
+		imgui.TextUnformatted(string.format(
+			"  %d PAX  |  %.0f %s cargo  |  %.0f %s fuel",
+			passengers_total, cargo_total, unit_system, fuel_total, unit_system))
+		imgui.PopStyleColor()
+	else
+		imgui.PushStyleColor(imgui.constant.Col.Text, 0xFF4444FF)
+		imgui.TextUnformatted("  Please load SimBrief data before starting")
+		imgui.PopStyleColor()
+	end
 
-    _, temp_manual_cargo = imgui.InputInt("Cargo (" .. unit_system .. ")", temp_manual_cargo)
-    _, temp_manual_passengers = imgui.InputInt("Passengers", temp_manual_passengers)
-	_, temp_manual_fuel = imgui.InputInt("Fuel (" .. unit_system .. ")", temp_manual_fuel or 0)
-	if embark_started or disembark_started then imgui.EndDisabled() end
-	
 	local slm_actions_running = (embark_started or disembark_started
 		or crew_briefing_started or catering_started or cleaning_started
 		or crew_deplane_started or slm_sequence_mode ~= nil)
@@ -2870,7 +3296,8 @@ end
 		imgui.TextUnformatted(slm_auto_import_message)
 	end
 
-	if slm_actions_running then imgui.BeginDisabled() end
+	local simbrief_ok = (SLM_Loadsheet_Data ~= nil)
+	if slm_actions_running or not simbrief_ok then imgui.BeginDisabled() end
 
 	if not passed_1000ft then
 		-- Departure mode: Start Loading only
@@ -2887,290 +3314,32 @@ end
 			start_night_stop()
 		end
 	end
-	if slm_actions_running then imgui.EndDisabled() end
+	if slm_actions_running or not simbrief_ok then imgui.EndDisabled() end
 
 	imgui.SameLine()
 	if imgui.Button("Reset") then
 		reset_loads()
 	end
 
+	-- DEV button (only visible when slm_dev_mode = true)
+	if slm_dev_mode then
+		imgui.SameLine()
+		imgui.PushStyleColor(imgui.constant.Col.Button, 0xFF333355)
+		imgui.PushStyleColor(imgui.constant.Col.Text,   0xFFAAAAFF)
+		if imgui.Button("[DEV]") then
+			slm_force_arrival_mode()
+		end
+		imgui.PopStyleColor()
+		imgui.PopStyleColor()
+	end
+
 	imgui.Spacing()
     imgui.Separator()
 	imgui.NewLine()
 
-	-- Crew Briefing progress bar
-	if crew_briefing_started or crew_briefing_done then
-		local frac = crew_briefing_done and 1.0
-			or (crew_briefing_duration and crew_briefing_duration > 0
-				and math.min(1.0, (os.clock() - crew_briefing_start_time) / crew_briefing_duration)
-				or 0)
-		imgui.TextUnformatted("Crew Briefing:")
-		if frac >= 1.0 then imgui.PushStyleColor(imgui.constant.Col.PlotHistogram, 0xFF00CC00) end
-		imgui.ProgressBar(frac, 200, 20, "")
-		if frac >= 1.0 then imgui.PopStyleColor() end
-		imgui.TextUnformatted("Crew is arriving and conducting briefing — good time to review your flight plan!")
-		if crew_briefing_done then
-			imgui.TextUnformatted("Estimated: ")
-			imgui.SameLine(nil, 0)
-			imgui.PushStyleColor(imgui.constant.Col.Text, 0xFF00FF00)
-			imgui.TextUnformatted("Completed")
-			imgui.PopStyleColor()
-		elseif estimated_time_crew then
-			local mins = math.ceil(estimated_time_crew / 60)
-			imgui.TextUnformatted(string.format("Estimated: %d minute%s", mins, mins > 1 and "s" or ""))
-		end
-		imgui.NewLine()
-	end
-
-	-- Catering progress bar
-	if catering_started or catering_done then
-		local frac = catering_done and 1.0
-			or (catering_duration and catering_duration > 0
-				and math.min(1.0, (os.clock() - catering_start_time) / catering_duration)
-				or 0)
-		imgui.TextUnformatted("Catering:")
-		if frac >= 1.0 then imgui.PushStyleColor(imgui.constant.Col.PlotHistogram, 0xFF00CC00) end
-		imgui.ProgressBar(frac, 200, 20, "")
-		if frac >= 1.0 then imgui.PopStyleColor() end
-		if catering_done then
-			imgui.TextUnformatted("Estimated: ")
-			imgui.SameLine(nil, 0)
-			imgui.PushStyleColor(imgui.constant.Col.Text, 0xFF00FF00)
-			imgui.TextUnformatted("Completed")
-			imgui.PopStyleColor()
-		elseif estimated_time_catering then
-			local mins = math.ceil(estimated_time_catering / 60)
-			imgui.TextUnformatted(string.format("Estimated: %d minute%s", mins, mins > 1 and "s" or ""))
-		end
-		imgui.NewLine()
-	end
-
-    local cargo_current = 0
-    if embark_started then
-        cargo_current = cargo_loaded
-    elseif disembark_started then
-        cargo_current = cargo_total - cargo_unloaded
-    elseif embark_done and not disembark_started then
-        cargo_current = cargo_total
-    elseif disembark_done then
-        cargo_current = 0
-    else
-        cargo_current = 0
-    end
-
-       cargo_current = math.max(0, math.min(cargo_current, cargo_total))
-    local fraction_cargo = (cargo_total > 0) and (cargo_current / cargo_total) or 0
-
-    imgui.TextUnformatted("Cargo:")
-	if fraction_cargo >= 1.0 and not disembark_started then
-		imgui.PushStyleColor(imgui.constant.Col.PlotHistogram, 0xFF00CC00)
-	end
-	imgui.ProgressBar(fraction_cargo, 200, 20, "")
-	if fraction_cargo >= 1.0 and not disembark_started then
-		imgui.PopStyleColor()
-	end
-    imgui.SameLine()
-    imgui.TextUnformatted(string.format("%.0f / %.0f %s", cargo_current, cargo_total, unit_system))
-
-	local display_text = ""
-		if (embark_started or disembark_started or embark_done or disembark_done) then
-		if cargo_total == 0 then
-			imgui.TextUnformatted("No Cargo")
-
-		elseif disembark_done or (cargo_current >= cargo_total and cargo_total > 0) then
-			imgui.TextUnformatted("Estimated: ")
-			imgui.SameLine(nil, 0)
-			imgui.PushStyleColor(imgui.constant.Col.Text, 0xFF00FF00)
-			imgui.TextUnformatted("Completed")
-			imgui.PopStyleColor()
-
-		else
-		if embark_started and cargo_loaded == 0 then
-			imgui.TextUnformatted("Estimated: Waiting")
-
-		elseif estimated_time_cargo and estimated_time_cargo > 0 then
-			if estimated_time_cargo < 60 then
-				imgui.TextUnformatted("Estimated: < 1 minute")
-			else
-				local cargo_minutes = math.ceil(estimated_time_cargo / 60)
-				imgui.TextUnformatted(string.format("Estimated: %d minute%s", cargo_minutes, cargo_minutes > 1 and "s" or ""))
-			end
-		else
-			imgui.TextUnformatted("Estimated: --")
-		end
-	end
-	else
-		imgui.TextUnformatted("Estimated: Not started")
-	end
-	
-    imgui.TextUnformatted(display_text)
-    local pax_current = 0
-    if embark_started then
-        pax_current = passengers_loaded
-    elseif disembark_started then
-        pax_current = passengers_total - passengers_unloaded
-    elseif embark_done and not disembark_done then
-        pax_current = passengers_total
-    elseif disembark_done then
-        pax_current = 0
-    else
-        pax_current = 0
-    end
-
-	pax_current = math.max(0, math.min(pax_current, passengers_total))
-	local fraction_pax = (passengers_total > 0) and (pax_current / passengers_total) or 0
-
-	imgui.TextUnformatted("Passengers:")
-	if fraction_pax >= 1.0 and not disembark_started then imgui.PushStyleColor(imgui.constant.Col.PlotHistogram, 0xFF00CC00) end
-	imgui.ProgressBar(fraction_pax, 200, 20, "")
-	if fraction_pax >= 1.0 and not disembark_started then imgui.PopStyleColor() end
-	imgui.SameLine()
-	imgui.TextUnformatted(string.format("%d / %d PAX", pax_current, passengers_total))
-
-	if (embark_started or disembark_started or embark_done or disembark_done) then
-    if passengers_total == 0 then
-        imgui.TextUnformatted("No Pax")
-
-    elseif (embark_done and not disembark_started) or disembark_done then
-        imgui.TextUnformatted("Estimated: ")
-        imgui.SameLine(nil, 0)
-        imgui.PushStyleColor(imgui.constant.Col.Text, 0xFF00FF00)
-        imgui.TextUnformatted("Completed")
-        imgui.PopStyleColor()
-
-    elseif disembark_started and (passengers_unloaded < passengers_total) then
-        if estimated_time_pax and estimated_time_pax > 0 then
-            local pax_minutes = math.ceil(estimated_time_pax / 60)
-            imgui.TextUnformatted(string.format("Estimated: %d minutes", pax_minutes))
-        else
-            imgui.TextUnformatted("Estimated: --")
-        end
-
-    elseif embark_started and not pax_load_started then
-        if bus_triggered and pax_trigger_time then
-            local t = pax_trigger_time - os.clock()
-
-            imgui.TextUnformatted("Estimated: ")
-            imgui.SameLine(nil, 0)
-
-            if t > 60 then
-                imgui.PushStyleColor(imgui.constant.Col.Text, 0xFFFFA500)
-                imgui.TextUnformatted("Boarding soon")
-                imgui.PopStyleColor()
-            else
-                imgui.PushStyleColor(imgui.constant.Col.Text, 0xFFFFA500)
-                imgui.TextUnformatted("Boarding any moment")
-                imgui.PopStyleColor()
-            end
-        else
-            imgui.TextUnformatted("Estimated: ")
-            imgui.SameLine(nil, 0)
-            imgui.PushStyleColor(imgui.constant.Col.Text, 0xFFFFFFFF)
-            imgui.TextUnformatted("Boarding later")
-            imgui.PopStyleColor()
-        end
-
-    elseif pax_current >= passengers_total then
-        imgui.TextUnformatted("Estimated: ")
-        imgui.SameLine(nil, 0)
-        imgui.PushStyleColor(imgui.constant.Col.Text, 0xFF00FF00)
-        imgui.TextUnformatted("Completed")
-        imgui.PopStyleColor()
-
-    else
-        if estimated_time_pax and passengers_loaded < passengers_total then
-            if estimated_time_pax < 60 then
-                imgui.TextUnformatted("Estimated: < 1 minute")
-            else
-                local pax_minutes = math.ceil(estimated_time_pax / 60)
-                imgui.TextUnformatted(string.format("Estimated: %d minutes", pax_minutes))
-            end
-        else
-            imgui.TextUnformatted("Estimated: --")
-        end
-    end
-else
-    imgui.TextUnformatted("Estimated: Not started")
-end
+	slm_draw_sequence_steps()
 
 	imgui.NewLine()
-	
-	imgui.TextUnformatted("Fuel:")
-
-	local fuel_fraction
-	local fuel_color_pushed = false
-	if slm_defuel_performed and not fuel_done then
-		local denom = slm_initial_fuel_kg or 1
-		fuel_fraction = (denom > 0) and (fuel_loaded / denom) or 0
-		imgui.PushStyleColor(imgui.constant.Col.PlotHistogram, 0xFF0055FF)
-		fuel_color_pushed = true
-	elseif fuel_done and not disembark_started then
-		fuel_fraction = (fuel_total > 0) and (fuel_loaded / fuel_total) or 0
-		imgui.PushStyleColor(imgui.constant.Col.PlotHistogram, 0xFF00CC00)
-		fuel_color_pushed = true
-	else
-		fuel_fraction = (fuel_total > 0) and (fuel_loaded / fuel_total) or 0
-	end
-	fuel_fraction = math.max(0, math.min(1, fuel_fraction))
-	imgui.ProgressBar(fuel_fraction, 200, 20, "")
-	if fuel_color_pushed then imgui.PopStyleColor()	end
-
-	imgui.SameLine()
-	imgui.TextUnformatted(string.format("%.0f / %.0f %s", fuel_loaded, fuel_total, unit_system))
-
-	if (embark_started or embark_done) then
-		if fuel_done then
-		imgui.TextUnformatted("Estimated: ")
-		imgui.SameLine(nil, 0)
-		imgui.PushStyleColor(imgui.constant.Col.Text, 0xFF00FF00)
-		imgui.TextUnformatted("Completed")
-		imgui.PopStyleColor()
-
-	elseif fuel_loading then
-		if fuel_ready_time and os.clock() < fuel_ready_time then
-			imgui.TextUnformatted("Waiting for fuel truck...")
-		elseif estimated_time_fuel then
-			local fuel_remaining = fuel_total - fuel_loaded
-			local time_remaining = fuel_remaining * fuel_time_per_unit
-			if time_remaining < 60 then
-				imgui.TextUnformatted("Estimated: < 1 minute")
-			else
-				local fuel_minutes = math.ceil(time_remaining / 60)
-				imgui.TextUnformatted(string.format("Estimated: %d minute%s", fuel_minutes, fuel_minutes > 1 and "s" or ""))
-			end
-		else
-			imgui.TextUnformatted("Estimated: --")
-		end
-
-		else
-			imgui.TextUnformatted("Estimated: Waiting")
-		end
-	else
-		imgui.TextUnformatted("Estimated: Not started")
-	end
-
-	-- Cleaning progress bar (turnaround / night stop)
-	if cleaning_started or cleaning_done then
-		local frac = cleaning_done and 1.0
-			or (cleaning_duration and cleaning_duration > 0
-				and math.min(1.0, (os.clock() - cleaning_start_time) / cleaning_duration)
-				or 0)
-		imgui.TextUnformatted("Cleaning:")
-		if frac >= 1.0 then imgui.PushStyleColor(imgui.constant.Col.PlotHistogram, 0xFF00CC00) end
-		imgui.ProgressBar(frac, 200, 20, "")
-		if frac >= 1.0 then imgui.PopStyleColor() end
-		if cleaning_done then
-			imgui.TextUnformatted("Estimated: ")
-			imgui.SameLine(nil, 0)
-			imgui.PushStyleColor(imgui.constant.Col.Text, 0xFF00FF00)
-			imgui.TextUnformatted("Completed")
-			imgui.PopStyleColor()
-		elseif estimated_time_cleaning then
-			local mins = math.ceil(estimated_time_cleaning / 60)
-			imgui.TextUnformatted(string.format("Estimated: %d minute%s", mins, mins > 1 and "s" or ""))
-		end
-		imgui.NewLine()
-	end
 
 	if loadsheet_ready then
 		if imgui.Button("View Loadsheet") then
