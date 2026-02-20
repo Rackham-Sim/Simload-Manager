@@ -764,7 +764,7 @@ function fetch_simbrief_data(id)
             end
             start_catering()
         else
-            slm_auto_import_message = "No new flight plan detected. Please generate your next flight on SimBrief, then click 'Load SimBrief Data'."
+            slm_auto_import_message = "No new flight plan detected.\nPlease generate your next flight on SimBrief,\nthen click 'Load SimBrief Data'."
         end
     end
 end
@@ -2001,7 +2001,7 @@ function slm_turnaround_check_simbrief()
         fetch_simbrief_data(simbrief_id)
         slm_new_plan_imported   = true
         slm_auto_import_message = string.format(
-            "New flight plan loaded! -- %s %s -> %s",
+            "New flight plan loaded!\n  %s %s -> %s",
             SLM_Loadsheet_Data and SLM_Loadsheet_Data.airline or "N/A",
             SLM_Loadsheet_Data and SLM_Loadsheet_Data.fltnum  or "",
             SLM_Loadsheet_Data and SLM_Loadsheet_Data.dest    or "")
@@ -2016,7 +2016,7 @@ function slm_turnaround_check_simbrief()
         start_catering()
     else
         -- Same plan: block and wait for user to generate next flight
-        slm_auto_import_message = "No new flight plan detected. Please generate your next flight on SimBrief, then click 'Load SimBrief Data'."
+        slm_auto_import_message = "No new flight plan detected.\nPlease generate your next flight on SimBrief,\nthen click 'Load SimBrief Data'."
         slm_sequence_phase = "waiting_for_new_plan"
     end
 end
@@ -2743,9 +2743,7 @@ function slm_draw_step(label, status, frac, eta_seconds, message)
     elseif status == "active" then
         imgui.TextUnformatted(">> " .. label)
         if frac ~= nil then
-            if frac >= 1.0 then imgui.PushStyleColor(COL.PlotHistogram, 0xFF00CC00) end
             imgui.ProgressBar(frac, 200, 20, "")
-            if frac >= 1.0 then imgui.PopStyleColor() end
         end
         if message then
             imgui.PushStyleColor(COL.Text, 0xFFAAAAAA)
@@ -2786,9 +2784,7 @@ function slm_draw_sequence_steps()
     local COL = imgui.constant.Col
 
     local function progress_bar_colored(frac, w, h)
-        if frac >= 1.0 then imgui.PushStyleColor(COL.PlotHistogram, 0xFF00CC00) end
         imgui.ProgressBar(frac, w, h, "")
-        if frac >= 1.0 then imgui.PopStyleColor() end
     end
 
     -- =====================================================================
@@ -2878,7 +2874,9 @@ function slm_draw_sequence_steps()
         if slm_auto_import_message then
             local col = (slm_sequence_phase == "waiting_for_new_plan") and 0xFF00A5FF or 0xFF00FF00
             imgui.PushStyleColor(imgui.constant.Col.Text, col)
-            imgui.TextUnformatted("  " .. slm_auto_import_message)
+            for line in (slm_auto_import_message .. "\n"):gmatch("(.-)\n") do
+                imgui.TextUnformatted("  " .. line)
+            end
             imgui.PopStyleColor()
         end
         imgui.NewLine()
@@ -2931,8 +2929,6 @@ function slm_draw_sequence_steps()
                 fuel_color_pushed = true
             elseif fuel_done then
                 fuel_fraction = (fuel_total > 0) and (fuel_loaded / fuel_total) or 0
-                imgui.PushStyleColor(COL.PlotHistogram, 0xFF00CC00)
-                fuel_color_pushed = true
             else
                 fuel_fraction = (fuel_total > 0) and (fuel_loaded / fuel_total) or 0
             end
@@ -2972,24 +2968,18 @@ function slm_draw_sequence_steps()
     end
 
     local function draw_embark_pax()
-        if embark_done then
+        local pax_cur = math.max(0, math.min(passengers_loaded, passengers_total))
+        local pax_done_now = embark_done
+            or (embark_started and (passengers_total == 0 or pax_cur >= passengers_total))
+        if pax_done_now then
             slm_draw_step(string.format("Passenger Boarding (%d PAX)", passengers_total), "done")
         elseif embark_started then
-            local pax_cur = math.max(0, math.min(passengers_loaded, passengers_total))
             local frac = (passengers_total > 0) and (pax_cur / passengers_total) or 0
             imgui.TextUnformatted(">> Passenger Boarding")
             progress_bar_colored(frac, 200, 20)
             imgui.SameLine()
             imgui.TextUnformatted(string.format("%d / %d PAX", pax_cur, passengers_total))
-            if passengers_total == 0 then
-                imgui.TextUnformatted("   No PAX")
-            elseif pax_cur >= passengers_total then
-                imgui.TextUnformatted("   Estimated: ")
-                imgui.SameLine(nil, 0)
-                imgui.PushStyleColor(COL.Text, 0xFF00FF00)
-                imgui.TextUnformatted("Completed")
-                imgui.PopStyleColor()
-            elseif not pax_load_started then
+            if not pax_load_started then
                 if bus_triggered and pax_trigger_time then
                     local t = pax_trigger_time - os.clock()
                     imgui.TextUnformatted("   Estimated: ")
@@ -3017,24 +3007,18 @@ function slm_draw_sequence_steps()
     end
 
     local function draw_embark_cargo()
-        if embark_done then
+        local cargo_cur = math.max(0, math.min(cargo_loaded, cargo_total))
+        local cargo_done_now = embark_done
+            or (embark_started and (cargo_total == 0 or cargo_cur >= cargo_total))
+        if cargo_done_now then
             slm_draw_step(string.format("Cargo Loading (%.0f %s)", cargo_total, unit_system), "done")
         elseif embark_started then
-            local cargo_cur = math.max(0, math.min(cargo_loaded, cargo_total))
             local frac = (cargo_total > 0) and (cargo_cur / cargo_total) or 0
             imgui.TextUnformatted(">> Cargo Loading")
             progress_bar_colored(frac, 200, 20)
             imgui.SameLine()
             imgui.TextUnformatted(string.format("%.0f / %.0f %s", cargo_cur, cargo_total, unit_system))
-            if cargo_total == 0 then
-                imgui.TextUnformatted("   No Cargo")
-            elseif cargo_cur >= cargo_total then
-                imgui.TextUnformatted("   Estimated: ")
-                imgui.SameLine(nil, 0)
-                imgui.PushStyleColor(COL.Text, 0xFF00FF00)
-                imgui.TextUnformatted("Completed")
-                imgui.PopStyleColor()
-            elseif cargo_loaded == 0 then
+            if cargo_loaded == 0 then
                 imgui.TextUnformatted("   Estimated: Waiting")
             elseif estimated_time_cargo and estimated_time_cargo > 0 then
                 if estimated_time_cargo < 60 then
