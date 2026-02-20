@@ -239,48 +239,50 @@ sound_played = {
 
 --------------------------------------------------------------------------------
 -- TURNAROUND / MODE VARIABLES
+-- Note: declared as globals (not local) to stay under LuaJIT's 60-upvalue limit
+-- per closure. Consistent with existing SGES flags (show_Bus, Bus_chg, etc.).
 --------------------------------------------------------------------------------
-local last_ofp_timestamp    = nil     -- persisted in settings (string from SimBrief XML)
-local skip_crew_briefing    = false   -- persisted in settings
-local slm_sequence_mode     = nil     -- "departure" | "turnaround" | "night_stop" | nil
-local slm_sequence_phase    = nil     -- current phase in the sequence
+last_ofp_timestamp    = nil     -- persisted in settings (string from SimBrief XML)
+skip_crew_briefing    = false   -- persisted in settings
+slm_sequence_mode     = nil     -- "departure" | "turnaround" | "night_stop" | nil
+slm_sequence_phase    = nil     -- current phase in the sequence
 
 -- Crew Briefing
-local crew_briefing_started    = false
-local crew_briefing_done       = false
-local crew_briefing_start_time = nil
-local crew_briefing_duration   = nil
-local estimated_time_crew      = nil
+crew_briefing_started    = false
+crew_briefing_done       = false
+crew_briefing_start_time = nil
+crew_briefing_duration   = nil
+estimated_time_crew      = nil
 
 -- Catering
-local catering_started        = false
-local catering_done           = false
-local catering_start_time     = nil
-local catering_duration       = nil
-local estimated_time_catering = nil
+catering_started        = false
+catering_done           = false
+catering_start_time     = nil
+catering_duration       = nil
+estimated_time_catering = nil
 
 -- Cleaning
-local cleaning_started        = false
-local cleaning_done           = false
-local cleaning_start_time     = nil
-local cleaning_duration       = nil
-local estimated_time_cleaning = nil
+cleaning_started        = false
+cleaning_done           = false
+cleaning_start_time     = nil
+cleaning_duration       = nil
+estimated_time_cleaning = nil
 
 -- Crew Deplane (Night Stop only)
-local crew_deplane_started    = false
-local crew_deplane_done       = false
-local crew_deplane_start_time = nil
-local crew_deplane_duration   = nil
+crew_deplane_started    = false
+crew_deplane_done       = false
+crew_deplane_start_time = nil
+crew_deplane_duration   = nil
 
 -- Auto-import turnaround
-local slm_auto_import_done    = false
-local slm_auto_import_message = nil
+slm_auto_import_done    = false
+slm_auto_import_message = nil
 
--- SGES — new flags
-local show_Catering = false
-local Catering_chg  = true
-local show_Cleaning = false
-local Cleaning_chg  = true
+-- SGES — new flags (global, consistent with existing show_Bus, Bus_chg, etc.)
+show_Catering = false
+Catering_chg  = true
+show_Cleaning = false
+Cleaning_chg  = true
 
 -- Custom preset — new variables
 custom_catering_time_per_pax  = 4.0
@@ -289,10 +291,10 @@ custom_crew_briefing_min      = 120
 custom_crew_briefing_max      = 300
 
 -- Current timing (set by apply_*_timings)
-local catering_time_per_pax   = 4.0
-local cleaning_time_per_pax   = 4.0
-local crew_briefing_time_min  = 480
-local crew_briefing_time_max  = 900
+catering_time_per_pax   = 4.0
+cleaning_time_per_pax   = 4.0
+crew_briefing_time_min  = 480
+crew_briefing_time_max  = 900
 
 --------------------------------------------------------------------------------
 -- SLM DATAREFS (API v1.1)
