@@ -2747,7 +2747,9 @@ function slm_draw_step(label, status, frac, eta_seconds, message)
         end
         if message then
             imgui.PushStyleColor(COL.Text, 0xFFAAAAAA)
-            imgui.TextUnformatted("   " .. message)
+            for line in (message .. "\n"):gmatch("(.-)\n") do
+                imgui.TextUnformatted("   " .. line)
+            end
             imgui.PopStyleColor()
         end
         if eta_seconds then
@@ -2891,7 +2893,7 @@ function slm_draw_sequence_steps()
         local frac = (crew_briefing_duration and crew_briefing_duration > 0) and
             math.min(1.0, (os.clock() - crew_briefing_start_time) / crew_briefing_duration) or 0
         slm_draw_step("Crew Briefing", "active", frac, estimated_time_crew,
-            "Crew arriving and briefing — good time to review your flight plan!")
+            "Crew is arriving and conducting briefing.\nGood time to review your flight plan!")
     else
         slm_draw_step("Crew Briefing", "pending")
     end
@@ -2916,20 +2918,17 @@ function slm_draw_sequence_steps()
     -- =====================================================================
 
     local function draw_embark_fuel()
-        if embark_done then
+        local fuel_done_now = embark_done or (embark_started and fuel_done)
+        if fuel_done_now then
             slm_draw_step(string.format("Fuel Loading (%.0f %s)", fuel_total, unit_system), "done")
         elseif embark_started then
             imgui.TextUnformatted(">> Fuel Loading")
             local fuel_fraction
             local fuel_color_pushed = false
-            if slm_defuel_performed and not fuel_done then
+            if slm_defuel_performed then
                 local denom = slm_initial_fuel_kg or 1
                 fuel_fraction = (denom > 0) and (fuel_loaded / denom) or 0
                 imgui.PushStyleColor(COL.PlotHistogram, 0xFF0055FF)  -- blue: defueling
-                fuel_color_pushed = true
-            elseif fuel_done then
-                fuel_fraction = (fuel_total > 0) and (fuel_loaded / fuel_total) or 0
-                imgui.PushStyleColor(COL.PlotHistogram, 0xFF00CC00)  -- green: done
                 fuel_color_pushed = true
             else
                 fuel_fraction = (fuel_total > 0) and (fuel_loaded / fuel_total) or 0
@@ -2939,13 +2938,7 @@ function slm_draw_sequence_steps()
             if fuel_color_pushed then imgui.PopStyleColor() end
             imgui.SameLine()
             imgui.TextUnformatted(string.format("%.0f / %.0f %s", fuel_loaded, fuel_total, unit_system))
-            if fuel_done then
-                imgui.TextUnformatted("   Estimated: ")
-                imgui.SameLine(nil, 0)
-                imgui.PushStyleColor(COL.Text, 0xFF00FF00)
-                imgui.TextUnformatted("Completed")
-                imgui.PopStyleColor()
-            elseif fuel_loading then
+            if fuel_loading then
                 if fuel_ready_time and os.clock() < fuel_ready_time then
                     imgui.TextUnformatted("   Waiting for fuel truck...")
                 elseif estimated_time_fuel then
