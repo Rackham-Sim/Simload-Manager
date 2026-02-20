@@ -280,15 +280,18 @@ crew_deplane_duration   = nil
 -- Auto-import turnaround
 slm_auto_import_done    = false
 slm_auto_import_message = nil
+slm_new_plan_imported   = false  -- true when a new SimBrief plan was detected during turnaround
 
 -- Session mode tracker (not cleared when sequence ends naturally, only by reset)
 slm_last_sequence_mode = nil
 
 -- SGES — new flags (global, consistent with existing show_Bus, Bus_chg, etc.)
-show_Catering = false
-Catering_chg  = true
-show_Cleaning = false
-Cleaning_chg  = true
+show_Catering   = false
+Catering_chg    = true
+show_Cleaning   = false
+Cleaning_chg    = true
+show_StairsXPJ2 = false  -- rear stairs (remote + terminal modes)
+StairsXPJ2_chg  = true
 
 -- Custom preset — new variables
 custom_catering_time_per_pax  = 4.0
@@ -431,7 +434,7 @@ function set_all_sounds_gain(gain)
     local new_gain = (gain > 0) and gain or 0.0001
 
     for name, snd in pairs(sounds) do
-        if snd.id ~= 0 then
+        if snd.id and snd.id ~= 0 then
             set_sound_gain(snd.id, new_gain)
         end
     end
@@ -464,13 +467,13 @@ function update_loop_volumes()
             set_sound_gain(sounds.passengers_loop.id, view_is_external == 1 and 0.0001 or 0.9)
         end
         if briefing_loop_playing and sounds.briefing_loop.id and sounds.briefing_loop.id ~= 0 then
-            set_sound_gain(sounds.briefing_loop.id, view_is_external == 1 and 1.0 or 0.5)
+            set_sound_gain(sounds.briefing_loop.id, view_is_external == 1 and 1.0 or 0.0001)
         end
         if catering_loop_playing and sounds.catering_loop.id and sounds.catering_loop.id ~= 0 then
-            set_sound_gain(sounds.catering_loop.id, view_is_external == 1 and 1.0 or 0.3)
+            set_sound_gain(sounds.catering_loop.id, view_is_external == 1 and 1.0 or 0.0001)
         end
         if cleaning_loop_playing and sounds.cleaning_loop.id and sounds.cleaning_loop.id ~= 0 then
-            set_sound_gain(sounds.cleaning_loop.id, view_is_external == 1 and 1.0 or 0.5)
+            set_sound_gain(sounds.cleaning_loop.id, view_is_external == 1 and 1.0 or 0.0001)
         end
     end
 end
@@ -608,6 +611,7 @@ function fetch_simbrief_data(id)
     end
 
     -- SECTION: OFP timestamp (for turnaround auto-import detection)
+    local old_ts = last_ofp_timestamp
     local ofp_time_generated = val("time_generated")
     last_ofp_timestamp = (ofp_time_generated ~= "") and ofp_time_generated or last_ofp_timestamp
 
@@ -737,6 +741,29 @@ function fetch_simbrief_data(id)
     }
 
     save_user_settings()
+
+    -- If a turnaround was waiting for a new flight plan, check if this import resolved it
+    if slm_sequence_phase == "waiting_for_new_plan" then
+        if last_ofp_timestamp and last_ofp_timestamp ~= (old_ts or "") then
+            slm_new_plan_imported   = true
+            slm_auto_import_message = string.format(
+                "New flight plan loaded! -- %s %s -> %s",
+                SLM_Loadsheet_Data and SLM_Loadsheet_Data.airline or "N/A",
+                SLM_Loadsheet_Data and SLM_Loadsheet_Data.fltnum  or "",
+                SLM_Loadsheet_Data and SLM_Loadsheet_Data.dest    or "")
+            slm_sequence_phase = "crew_and_catering"
+            crew_briefing_done = false
+            catering_done      = false
+            if skip_crew_briefing then
+                crew_briefing_done = true
+            else
+                start_crew_briefing()
+            end
+            start_catering()
+        else
+            slm_auto_import_message = "No new flight plan detected. Please generate your next flight on SimBrief, then click 'Load SimBrief Data'."
+        end
+    end
 end
 
 
@@ -936,12 +963,16 @@ if fuel_first and not fuel_done then return end
     if not bus_triggered then
         if selected_location_group == "remote" then
 			if not aircraft_has_own_stairs then
-				show_StairsXPJ = true
-				StairsXPJ_chg = true
+				show_StairsXPJ  = true
+				StairsXPJ_chg   = true
+				show_StairsXPJ2 = true
+				StairsXPJ2_chg  = true
 				option_StairsXPJ_override = true
 			else
-				show_StairsXPJ = false
-				StairsXPJ_chg = true
+				show_StairsXPJ  = false
+				StairsXPJ_chg   = true
+				show_StairsXPJ2 = false
+				StairsXPJ2_chg  = true
 				option_StairsXPJ_override = false
 			end
             show_Bus = true
@@ -950,12 +981,16 @@ if fuel_first and not fuel_done then return end
             command_once("sim/ground_ops/jetway")
         elseif selected_location_group == "terminal" then
 			if not aircraft_has_own_stairs then
-				show_StairsXPJ = true
-				StairsXPJ_chg = true
+				show_StairsXPJ  = true
+				StairsXPJ_chg   = true
+				show_StairsXPJ2 = true
+				StairsXPJ2_chg  = true
 				option_StairsXPJ_override = true
 			else
-				show_StairsXPJ = false
-				StairsXPJ_chg = true
+				show_StairsXPJ  = false
+				StairsXPJ_chg   = true
+				show_StairsXPJ2 = false
+				StairsXPJ2_chg  = true
 				option_StairsXPJ_override = false
 			end
             boarding_from_the_terminal = true
@@ -1056,24 +1091,32 @@ end
 
         if selected_location_group == "remote" then
 			if not aircraft_has_own_stairs then
-				show_StairsXPJ = true
-				StairsXPJ_chg = true
+				show_StairsXPJ  = true
+				StairsXPJ_chg   = true
+				show_StairsXPJ2 = true
+				StairsXPJ2_chg  = true
 				option_StairsXPJ_override = true
 			else
-				show_StairsXPJ = false
-				StairsXPJ_chg = true
+				show_StairsXPJ  = false
+				StairsXPJ_chg   = true
+				show_StairsXPJ2 = false
+				StairsXPJ2_chg  = true
 				option_StairsXPJ_override = false
 			end
         elseif selected_location_group == "jetway" and not fuel_first then
             command_once("sim/ground_ops/jetway")
         elseif selected_location_group == "terminal"  then
 			if not aircraft_has_own_stairs then
-				show_StairsXPJ = true
-				StairsXPJ_chg = true
+				show_StairsXPJ  = true
+				StairsXPJ_chg   = true
+				show_StairsXPJ2 = true
+				StairsXPJ2_chg  = true
 				option_StairsXPJ_override = true
 			else
-				show_StairsXPJ = false
-				StairsXPJ_chg = true
+				show_StairsXPJ  = false
+				StairsXPJ_chg   = true
+				show_StairsXPJ2 = false
+				StairsXPJ2_chg  = true
 				option_StairsXPJ_override = false
 			end
         end
@@ -1152,24 +1195,32 @@ if cargo_loaded == 0 and not sound_played.start_loading_cargo then
 
     if selected_location_group == "remote" then
 		if not aircraft_has_own_stairs then
-			show_StairsXPJ = true
-			StairsXPJ_chg = true
+			show_StairsXPJ  = true
+			StairsXPJ_chg   = true
+			show_StairsXPJ2 = true
+			StairsXPJ2_chg  = true
 			option_StairsXPJ_override = true
 		else
-			show_StairsXPJ = false
-			StairsXPJ_chg = true
+			show_StairsXPJ  = false
+			StairsXPJ_chg   = true
+			show_StairsXPJ2 = false
+			StairsXPJ2_chg  = true
 			option_StairsXPJ_override = false
 		end
     elseif selected_location_group == "jetway" and not fuel_first then
         command_once("sim/ground_ops/jetway")
     elseif selected_location_group == "terminal" then
 		if not aircraft_has_own_stairs then
-			show_StairsXPJ = true
-			StairsXPJ_chg = true
+			show_StairsXPJ  = true
+			StairsXPJ_chg   = true
+			show_StairsXPJ2 = true
+			StairsXPJ2_chg  = true
 			option_StairsXPJ_override = true
 		else
-			show_StairsXPJ = false
-			StairsXPJ_chg = true
+			show_StairsXPJ  = false
+			StairsXPJ_chg   = true
+			show_StairsXPJ2 = false
+			StairsXPJ2_chg  = true
 			option_StairsXPJ_override = false
 		end
     end
@@ -1340,12 +1391,16 @@ function start_disembarkation()
 		Chocks_chg = true
 		if selected_location_group == "remote" then
 			if not aircraft_has_own_stairs then
-				show_StairsXPJ = true
-				StairsXPJ_chg = true
+				show_StairsXPJ  = true
+				StairsXPJ_chg   = true
+				show_StairsXPJ2 = true
+				StairsXPJ2_chg  = true
 				option_StairsXPJ_override = true
 			else
-				show_StairsXPJ = false
-				StairsXPJ_chg = true
+				show_StairsXPJ  = false
+				StairsXPJ_chg   = true
+				show_StairsXPJ2 = false
+				StairsXPJ2_chg  = true
 				option_StairsXPJ_override = false
 			end
 			show_Bus = true
@@ -1358,12 +1413,16 @@ function start_disembarkation()
 			start_disembarkation_pax_delay = os.clock() + 25
         elseif selected_location_group == "terminal" then
 			if not aircraft_has_own_stairs then
-				show_StairsXPJ = true
-				StairsXPJ_chg = true
+				show_StairsXPJ  = true
+				StairsXPJ_chg   = true
+				show_StairsXPJ2 = true
+				StairsXPJ2_chg  = true
 				option_StairsXPJ_override = true
 			else
-				show_StairsXPJ = false
-				StairsXPJ_chg = true
+				show_StairsXPJ  = false
+				StairsXPJ_chg   = true
+				show_StairsXPJ2 = false
+				StairsXPJ2_chg  = true
 				option_StairsXPJ_override = false
 			end
 			start_disembarkation_pax_delay = os.clock() + 8
@@ -1389,12 +1448,16 @@ function start_disembarkation()
 		Chocks_chg = true
 		if selected_location_group == "remote" then
 			if not aircraft_has_own_stairs then
-				show_StairsXPJ = true
-				StairsXPJ_chg = true
+				show_StairsXPJ  = true
+				StairsXPJ_chg   = true
+				show_StairsXPJ2 = true
+				StairsXPJ2_chg  = true
 				option_StairsXPJ_override = true
 			else
-				show_StairsXPJ = false
-				StairsXPJ_chg = true
+				show_StairsXPJ  = false
+				StairsXPJ_chg   = true
+				show_StairsXPJ2 = false
+				StairsXPJ2_chg  = true
 				option_StairsXPJ_override = false
 			end
         elseif selected_location_group == "jetway" then
@@ -1403,12 +1466,16 @@ function start_disembarkation()
 			end
         elseif selected_location_group == "terminal" then
 			if not aircraft_has_own_stairs then
-				show_StairsXPJ = true
-				StairsXPJ_chg = true
+				show_StairsXPJ  = true
+				StairsXPJ_chg   = true
+				show_StairsXPJ2 = true
+				StairsXPJ2_chg  = true
 				option_StairsXPJ_override = true
 			else
-				show_StairsXPJ = false
-				StairsXPJ_chg = true
+				show_StairsXPJ  = false
+				StairsXPJ_chg   = true
+				show_StairsXPJ2 = false
+				StairsXPJ2_chg  = true
 				option_StairsXPJ_override = false
 			end
         end
@@ -1427,12 +1494,16 @@ function start_disembarkation()
         sound_played.start_unboarding_passengers = true
 		if selected_location_group == "remote" then
 			if not aircraft_has_own_stairs then
-				show_StairsXPJ = true
-				StairsXPJ_chg = true
+				show_StairsXPJ  = true
+				StairsXPJ_chg   = true
+				show_StairsXPJ2 = true
+				StairsXPJ2_chg  = true
 				option_StairsXPJ_override = true
 			else
-				show_StairsXPJ = false
-				StairsXPJ_chg = true
+				show_StairsXPJ  = false
+				StairsXPJ_chg   = true
+				show_StairsXPJ2 = false
+				StairsXPJ2_chg  = true
 				option_StairsXPJ_override = false
 			end
 			show_Bus = true
@@ -1443,12 +1514,16 @@ function start_disembarkation()
 			end
         elseif selected_location_group == "terminal" then
 			if not aircraft_has_own_stairs then
-				show_StairsXPJ = true
-				StairsXPJ_chg = true
+				show_StairsXPJ  = true
+				StairsXPJ_chg   = true
+				show_StairsXPJ2 = true
+				StairsXPJ2_chg  = true
 				option_StairsXPJ_override = true
 			else
-				show_StairsXPJ = false
-				StairsXPJ_chg = true
+				show_StairsXPJ  = false
+				StairsXPJ_chg   = true
+				show_StairsXPJ2 = false
+				StairsXPJ2_chg  = true
 				option_StairsXPJ_override = false
 			end
 			boarding_from_the_terminal = true
@@ -1582,10 +1657,12 @@ function manage_disembark()
 		People2_chg = true
 		show_People1 = false
 		People1_chg = true
-		show_Chocks = false
-		Chocks_chg = true
-		show_StairsXPJ = false
-		StairsXPJ_chg = true
+		show_Chocks     = false
+		Chocks_chg      = true
+		show_StairsXPJ  = false
+		StairsXPJ_chg   = true
+		show_StairsXPJ2 = false
+		StairsXPJ2_chg  = true
     end
 end
 
@@ -1614,12 +1691,16 @@ function start_fuel_loading()
 
         if selected_location_group == "remote" or selected_location_group == "terminal" then
 			if not aircraft_has_own_stairs then
-				show_StairsXPJ = true
-				StairsXPJ_chg = true
+				show_StairsXPJ  = true
+				StairsXPJ_chg   = true
+				show_StairsXPJ2 = true
+				StairsXPJ2_chg  = true
 				option_StairsXPJ_override = true
 			else
-				show_StairsXPJ = false
-				StairsXPJ_chg = true
+				show_StairsXPJ  = false
+				StairsXPJ_chg   = true
+				show_StairsXPJ2 = false
+				StairsXPJ2_chg  = true
 				option_StairsXPJ_override = false
 			end
         elseif selected_location_group == "jetway" then
@@ -1756,8 +1837,9 @@ function check_if_all_done()
                 show_People3   = false; People3_chg   = true
                 show_People2   = false; People2_chg   = true
                 show_People1   = false; People1_chg   = true
-                show_Chocks    = false; Chocks_chg    = true
-                show_StairsXPJ = false; StairsXPJ_chg = true
+                show_Chocks     = false; Chocks_chg     = true
+                show_StairsXPJ  = false; StairsXPJ_chg  = true
+                show_StairsXPJ2 = false; StairsXPJ2_chg = true
 
                 if selected_location_group == "jetway" then
                     command_once("sim/ground_ops/jetway")
@@ -1894,19 +1976,38 @@ function slm_turnaround_check_simbrief()
     local ok_http, http = pcall(require, "socket.http")
     if not ok_http or not http then
         slm_auto_import_message = "SimBrief unreachable — check your connection and try again"
+        slm_sequence_phase = "waiting_for_new_plan"
         return
     end
     local body, code = http.request("https://www.simbrief.com/api/xml.fetcher.php?userid=" .. simbrief_id)
     if not body or code ~= 200 then
         slm_auto_import_message = "SimBrief unreachable — check your connection and try again"
+        slm_sequence_phase = "waiting_for_new_plan"
         return
     end
     local new_ts = string.match(body, "<time_generated>(.-)</time_generated>") or ""
     if new_ts ~= "" and new_ts ~= (last_ofp_timestamp or "") then
+        -- New plan detected: import, start crew & catering
         fetch_simbrief_data(simbrief_id)
-        slm_auto_import_message = "New flight plan detected — imported automatically"
+        slm_new_plan_imported   = true
+        slm_auto_import_message = string.format(
+            "New flight plan loaded! -- %s %s -> %s",
+            SLM_Loadsheet_Data and SLM_Loadsheet_Data.airline or "N/A",
+            SLM_Loadsheet_Data and SLM_Loadsheet_Data.fltnum  or "",
+            SLM_Loadsheet_Data and SLM_Loadsheet_Data.dest    or "")
+        slm_sequence_phase = "crew_and_catering"
+        crew_briefing_done = false
+        catering_done      = false
+        if skip_crew_briefing then
+            crew_briefing_done = true
+        else
+            start_crew_briefing()
+        end
+        start_catering()
     else
-        slm_auto_import_message = "No new flight plan detected — current plan retained"
+        -- Same plan: block and wait for user to generate next flight
+        slm_auto_import_message = "No new flight plan detected. Please generate your next flight on SimBrief, then click 'Load SimBrief Data'."
+        slm_sequence_phase = "waiting_for_new_plan"
     end
 end
 
@@ -1966,15 +2067,8 @@ function manage_sequence()
         elseif slm_sequence_phase == "simbrief_check" and not slm_auto_import_done then
             slm_auto_import_done = true
             slm_turnaround_check_simbrief()
-            slm_sequence_phase = "crew_and_catering"
-            crew_briefing_done = false
-            catering_done      = false
-            if skip_crew_briefing then
-                crew_briefing_done = true
-            else
-                start_crew_briefing()
-            end
-            start_catering()
+            -- slm_turnaround_check_simbrief() sets slm_sequence_phase to
+            -- "crew_and_catering" (new plan found) or "waiting_for_new_plan" (same plan)
         elseif slm_sequence_phase == "crew_and_catering"
                and crew_briefing_done and catering_done then
             slm_sequence_mode  = nil
@@ -2042,8 +2136,10 @@ function reset_loads()
 	Pax_chg = true
 	show_Bus = false
 	Bus_chg = true
-	show_StairsXPJ = false
-	StairsXPJ_chg = true
+	show_StairsXPJ  = false
+	StairsXPJ_chg   = true
+	show_StairsXPJ2 = false
+	StairsXPJ2_chg  = true
 	option_StairsXPJ_override = false
 	bus_triggered = false
 	show_FUEL = false
@@ -2119,6 +2215,7 @@ function reset_loads()
 	slm_last_sequence_mode  = nil
 	slm_auto_import_done    = false
 	slm_auto_import_message = nil
+	slm_new_plan_imported   = false
 
 	-- Crew Briefing
 	crew_briefing_started    = false
@@ -2626,10 +2723,10 @@ function slm_draw_step(label, status, frac, eta_seconds, message)
     local COL = imgui.constant.Col
     if status == "done" then
         imgui.PushStyleColor(COL.Text, 0xFF00CC00)
-        imgui.TextUnformatted("\xE2\x9C\x93 " .. label)
+        imgui.TextUnformatted("[DONE] " .. label)
         imgui.PopStyleColor()
     elseif status == "active" then
-        imgui.TextUnformatted("\xE2\x96\xBA " .. label)
+        imgui.TextUnformatted(">> " .. label)
         if frac ~= nil then
             if frac >= 1.0 then imgui.PushStyleColor(COL.PlotHistogram, 0xFF00CC00) end
             imgui.ProgressBar(frac, 200, 20, "")
@@ -2691,7 +2788,7 @@ function slm_draw_sequence_steps()
             -- PAX deboarding
             local pax_cur = passengers_total - passengers_unloaded
             local frac_pax = (passengers_total > 0) and math.min(1, pax_cur / passengers_total) or 0
-            imgui.TextUnformatted("\xE2\x96\xBA Passenger Deboarding")
+            imgui.TextUnformatted(">> Passenger Deboarding")
             progress_bar_colored(frac_pax, 200, 20)
             imgui.SameLine()
             imgui.TextUnformatted(string.format("%d / %d PAX", pax_cur, passengers_total))
@@ -2703,7 +2800,7 @@ function slm_draw_sequence_steps()
             -- Cargo unloading
             local cargo_cur = cargo_total - cargo_unloaded
             local frac_cargo = (cargo_total > 0) and math.min(1, cargo_cur / cargo_total) or 0
-            imgui.TextUnformatted("\xE2\x96\xBA Cargo Unloading")
+            imgui.TextUnformatted(">> Cargo Unloading")
             progress_bar_colored(frac_cargo, 200, 20)
             imgui.SameLine()
             imgui.TextUnformatted(string.format("%.0f / %.0f %s", cargo_cur, cargo_total, unit_system))
@@ -2743,7 +2840,7 @@ function slm_draw_sequence_steps()
         elseif crew_deplane_started then
             local frac = (crew_deplane_duration and crew_deplane_duration > 0) and
                 math.min(1.0, (os.clock() - crew_deplane_start_time) / crew_deplane_duration) or 0
-            slm_draw_step("Crew Deplane", "active", frac)
+            slm_draw_step("Crew Deplane", "active", frac, nil, "Crew is deplaning...")
         else
             slm_draw_step("Crew Deplane", "pending")
         end
@@ -2754,7 +2851,21 @@ function slm_draw_sequence_steps()
     -- FLIGHT PLAN UPDATE  (Turnaround only)
     -- =====================================================================
     if mode == "turnaround" then
-        slm_draw_step("Flight Plan Update", slm_auto_import_done and "done" or "pending")
+        local fp_status
+        if slm_new_plan_imported then
+            fp_status = "done"
+        elseif slm_sequence_phase == "waiting_for_new_plan" then
+            fp_status = "active"
+        else
+            fp_status = "pending"
+        end
+        slm_draw_step("Flight Plan Update", fp_status)
+        if slm_auto_import_message then
+            local col = (slm_sequence_phase == "waiting_for_new_plan") and 0xFF00A5FF or 0xFF00FF00
+            imgui.PushStyleColor(imgui.constant.Col.Text, col)
+            imgui.TextUnformatted("  " .. slm_auto_import_message)
+            imgui.PopStyleColor()
+        end
         imgui.NewLine()
     end
 
@@ -2795,7 +2906,7 @@ function slm_draw_sequence_steps()
         if embark_done then
             slm_draw_step(string.format("Fuel Loading (%.0f %s)", fuel_total, unit_system), "done")
         elseif embark_started then
-            imgui.TextUnformatted("\xE2\x96\xBA Fuel Loading")
+            imgui.TextUnformatted(">> Fuel Loading")
             local fuel_fraction
             local fuel_color_pushed = false
             if slm_defuel_performed and not fuel_done then
@@ -2851,7 +2962,7 @@ function slm_draw_sequence_steps()
         elseif embark_started then
             local pax_cur = math.max(0, math.min(passengers_loaded, passengers_total))
             local frac = (passengers_total > 0) and (pax_cur / passengers_total) or 0
-            imgui.TextUnformatted("\xE2\x96\xBA Passenger Boarding")
+            imgui.TextUnformatted(">> Passenger Boarding")
             progress_bar_colored(frac, 200, 20)
             imgui.SameLine()
             imgui.TextUnformatted(string.format("%d / %d PAX", pax_cur, passengers_total))
@@ -2896,7 +3007,7 @@ function slm_draw_sequence_steps()
         elseif embark_started then
             local cargo_cur = math.max(0, math.min(cargo_loaded, cargo_total))
             local frac = (cargo_total > 0) and (cargo_cur / cargo_total) or 0
-            imgui.TextUnformatted("\xE2\x96\xBA Cargo Loading")
+            imgui.TextUnformatted(">> Cargo Loading")
             progress_bar_colored(frac, 200, 20)
             imgui.SameLine()
             imgui.TextUnformatted(string.format("%.0f / %.0f %s", cargo_cur, cargo_total, unit_system))
@@ -3289,12 +3400,6 @@ end
 	imgui.PushStyleColor(imgui.constant.Col.Text, passed_1000ft and 0xFF00A5FF or 0xFF00FF00)
 	imgui.TextUnformatted(passed_1000ft and "Mode: Arrival" or "Mode: Departure")
 	imgui.PopStyleColor()
-	if slm_sequence_phase then
-		imgui.TextUnformatted("Phase: " .. slm_sequence_phase)
-	end
-	if slm_auto_import_message then
-		imgui.TextUnformatted(slm_auto_import_message)
-	end
 
 	local simbrief_ok = (SLM_Loadsheet_Data ~= nil)
 	if slm_actions_running or not simbrief_ok then imgui.BeginDisabled() end
