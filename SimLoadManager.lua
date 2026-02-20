@@ -526,7 +526,8 @@ function load_user_settings()
             elseif key == "custom_fuel_time_per_kg" then
                 custom_fuel_time_per_kg = tonumber(value)
             elseif key == "passed_1000ft" then
-                passed_1000ft = (value == "true")
+                -- no longer persisted between sessions (always starts in Departure mode)
+                _ = value
             elseif key == "last_ofp_timestamp" then
                 last_ofp_timestamp = (value ~= "") and value or nil
             elseif key == "skip_crew_briefing" then
@@ -569,7 +570,7 @@ function save_user_settings()
         file:write("custom_disembark_cargo_time_per_kg_min=" .. tostring(custom_disembark_cargo_time_per_kg_min or 0.2) .. "\n")
         file:write("custom_disembark_cargo_time_per_kg_max=" .. tostring(custom_disembark_cargo_time_per_kg_max or 0.6) .. "\n")
         file:write("custom_fuel_time_per_kg=" .. tostring(custom_fuel_time_per_kg or 0.053) .. "\n")
-        file:write("passed_1000ft=" .. tostring(passed_1000ft) .. "\n")
+        -- passed_1000ft is intentionally not persisted (always starts fresh as Departure)
         file:write("last_ofp_timestamp=" .. tostring(last_ofp_timestamp or "") .. "\n")
         file:write("skip_crew_briefing=" .. tostring(skip_crew_briefing) .. "\n")
         file:write("custom_catering_time_per_pax=" .. tostring(custom_catering_time_per_pax or 4.0) .. "\n")
@@ -2579,7 +2580,6 @@ function detect_takeoff_and_landing()
     if onground_prev == 0 and onground == 1 and landing_time == "--:--Z" then
         if passed_1000ft then
             landing_time = current_zulu_hhmm()
-            save_user_settings()   -- persist passed_1000ft = true for X-Plane reload
         end
     end
 
@@ -2925,10 +2925,12 @@ function slm_draw_sequence_steps()
             if slm_defuel_performed and not fuel_done then
                 local denom = slm_initial_fuel_kg or 1
                 fuel_fraction = (denom > 0) and (fuel_loaded / denom) or 0
-                imgui.PushStyleColor(COL.PlotHistogram, 0xFF0055FF)
+                imgui.PushStyleColor(COL.PlotHistogram, 0xFF0055FF)  -- blue: defueling
                 fuel_color_pushed = true
             elseif fuel_done then
                 fuel_fraction = (fuel_total > 0) and (fuel_loaded / fuel_total) or 0
+                imgui.PushStyleColor(COL.PlotHistogram, 0xFF00CC00)  -- green: done
+                fuel_color_pushed = true
             else
                 fuel_fraction = (fuel_total > 0) and (fuel_loaded / fuel_total) or 0
             end
