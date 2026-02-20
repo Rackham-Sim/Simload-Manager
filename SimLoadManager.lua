@@ -1,4 +1,4 @@
---SIMLOAD MANAGER V2.1.3
+--SIMLOAD MANAGER V3.0
 
 --------------------------------------------------------------------------------
 -- IMGUi Check
@@ -12,7 +12,7 @@ end
 --------------------------------------------------------------------------------
 -- UPDATE CHECK
 --------------------------------------------------------------------------------
-SLM_VERSION = "2.1.3"
+SLM_VERSION = "3.0"
 
 local SLM_UPDATE_URL =
     "http://raw.githack.com/Rackham-Sim/Simload-Manager/main/version.txt"
@@ -2085,7 +2085,7 @@ preset_values.veryfast  = capture_preset(apply_veryfast_timings)
 function create_embark_window()
     if embark_wnd == nil then
         embark_wnd = float_wnd_create(425, 775, 1, true)
-        float_wnd_set_title(embark_wnd, "Simload Manager 2.1.3")
+        float_wnd_set_title(embark_wnd, "Simload Manager 3.0")
         float_wnd_set_imgui_builder(embark_wnd, "build_embark_window")
         float_wnd_set_onclose(embark_wnd, "on_close_embark_window")
         logMsg("[SLM] Embark window created.")
