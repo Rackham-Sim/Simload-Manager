@@ -238,6 +238,63 @@ sound_played = {
 }
 
 --------------------------------------------------------------------------------
+-- TURNAROUND / MODE VARIABLES
+--------------------------------------------------------------------------------
+local last_ofp_timestamp    = nil     -- persisted in settings (string from SimBrief XML)
+local skip_crew_briefing    = false   -- persisted in settings
+local slm_sequence_mode     = nil     -- "departure" | "turnaround" | "night_stop" | nil
+local slm_sequence_phase    = nil     -- current phase in the sequence
+
+-- Crew Briefing
+local crew_briefing_started    = false
+local crew_briefing_done       = false
+local crew_briefing_start_time = nil
+local crew_briefing_duration   = nil
+local estimated_time_crew      = nil
+
+-- Catering
+local catering_started        = false
+local catering_done           = false
+local catering_start_time     = nil
+local catering_duration       = nil
+local estimated_time_catering = nil
+
+-- Cleaning
+local cleaning_started        = false
+local cleaning_done           = false
+local cleaning_start_time     = nil
+local cleaning_duration       = nil
+local estimated_time_cleaning = nil
+
+-- Crew Deplane (Night Stop only)
+local crew_deplane_started    = false
+local crew_deplane_done       = false
+local crew_deplane_start_time = nil
+local crew_deplane_duration   = nil
+
+-- Auto-import turnaround
+local slm_auto_import_done    = false
+local slm_auto_import_message = nil
+
+-- SGES — new flags
+local show_Catering = false
+local Catering_chg  = true
+local show_Cleaning = false
+local Cleaning_chg  = true
+
+-- Custom preset — new variables
+custom_catering_time_per_pax  = 4.0
+custom_cleaning_time_per_pax  = 4.0
+custom_crew_briefing_min      = 120
+custom_crew_briefing_max      = 300
+
+-- Current timing (set by apply_*_timings)
+local catering_time_per_pax   = 4.0
+local cleaning_time_per_pax   = 4.0
+local crew_briefing_time_min  = 480
+local crew_briefing_time_max  = 900
+
+--------------------------------------------------------------------------------
 -- SLM DATAREFS (API v1.1)
 --------------------------------------------------------------------------------
 
@@ -278,6 +335,11 @@ SLM_ls_actual_pax        = create_dataref_table("FlyWithLua/SimLoadManager/loads
 SLM_ls_actual_cargo      = create_dataref_table("FlyWithLua/SimLoadManager/loadsheet/actual_cargo", "Float")
 SLM_ls_actual_fuel_block = create_dataref_table("FlyWithLua/SimLoadManager/loadsheet/actual_fuel_block", "Float")
 SLM_ls_actual_payload    = create_dataref_table("FlyWithLua/SimLoadManager/loadsheet/actual_payload", "Float")
+
+SLM_mode                   = create_dataref_table("FlyWithLua/SimLoadManager/mode", "Int")
+SLM_crew_briefing_fraction = create_dataref_table("FlyWithLua/SimLoadManager/crew_briefing_fraction", "Float")
+SLM_catering_fraction      = create_dataref_table("FlyWithLua/SimLoadManager/catering_fraction", "Float")
+SLM_cleaning_fraction      = create_dataref_table("FlyWithLua/SimLoadManager/cleaning_fraction", "Float")
 
 
 --------------------------------------------------------------------------------
@@ -428,11 +490,25 @@ function load_user_settings()
                 custom_disembark_cargo_time_per_kg_max = tonumber(value)
             elseif key == "custom_fuel_time_per_kg" then
                 custom_fuel_time_per_kg = tonumber(value)
+            elseif key == "passed_1000ft" then
+                passed_1000ft = (value == "true")
+            elseif key == "last_ofp_timestamp" then
+                last_ofp_timestamp = (value ~= "") and value or nil
+            elseif key == "skip_crew_briefing" then
+                skip_crew_briefing = (value == "true")
+            elseif key == "custom_catering_time_per_pax" then
+                custom_catering_time_per_pax = tonumber(value)
+            elseif key == "custom_cleaning_time_per_pax" then
+                custom_cleaning_time_per_pax = tonumber(value)
+            elseif key == "custom_crew_briefing_min" then
+                custom_crew_briefing_min = tonumber(value)
+            elseif key == "custom_crew_briefing_max" then
+                custom_crew_briefing_max = tonumber(value)
             end
         end
         file:close()
     end
-	
+
 	if not file_exists then
 		save_user_settings()
     end
@@ -456,6 +532,13 @@ function save_user_settings()
         file:write("custom_disembark_cargo_time_per_kg_min=" .. tostring(custom_disembark_cargo_time_per_kg_min or 0.2) .. "\n")
         file:write("custom_disembark_cargo_time_per_kg_max=" .. tostring(custom_disembark_cargo_time_per_kg_max or 0.6) .. "\n")
         file:write("custom_fuel_time_per_kg=" .. tostring(custom_fuel_time_per_kg or 0.053) .. "\n")
+        file:write("passed_1000ft=" .. tostring(passed_1000ft) .. "\n")
+        file:write("last_ofp_timestamp=" .. tostring(last_ofp_timestamp or "") .. "\n")
+        file:write("skip_crew_briefing=" .. tostring(skip_crew_briefing) .. "\n")
+        file:write("custom_catering_time_per_pax=" .. tostring(custom_catering_time_per_pax or 4.0) .. "\n")
+        file:write("custom_cleaning_time_per_pax=" .. tostring(custom_cleaning_time_per_pax or 4.0) .. "\n")
+        file:write("custom_crew_briefing_min=" .. tostring(custom_crew_briefing_min or 120) .. "\n")
+        file:write("custom_crew_briefing_max=" .. tostring(custom_crew_briefing_max or 300) .. "\n")
 
         file:close()
     end
@@ -491,6 +574,10 @@ function fetch_simbrief_data(id)
     local function fnum(tag)
         return tonumber(string.match(body, "<fuel>.-<" .. tag .. ">([%d%.]+)</" .. tag .. ">")) or 0
     end
+
+    -- SECTION: OFP timestamp (for turnaround auto-import detection)
+    local ofp_time_generated = val("time_generated")
+    last_ofp_timestamp = (ofp_time_generated ~= "") and ofp_time_generated or last_ofp_timestamp
 
     -- SECTION: Units
     local sb_unit = val("units")
@@ -616,8 +703,12 @@ function fetch_simbrief_data(id)
         fuel_altn    = fuel_altn,
         fuel_reserve = fuel_res,
         fuel_block   = fuel_block,
-        fuel_land    = fuel_land
+        fuel_land    = fuel_land,
+
+        time_generated = ofp_time_generated
     }
+
+    save_user_settings()
 end
 
 
@@ -632,6 +723,10 @@ function apply_realistic_timings()
     disembark_cargo_time_per_kg_max = 0.6
     fuel_time_per_kg = 0.053
 	fuel_time_per_unit = fuel_time_per_kg
+    catering_time_per_pax  = 4.0
+    cleaning_time_per_pax  = 4.0
+    crew_briefing_time_min = 480
+    crew_briefing_time_max = 900
     timing_preset = "realistic"
 end
 
@@ -647,6 +742,10 @@ function apply_fast_timings()
     disembark_cargo_time_per_kg_max = 0.07
     fuel_time_per_kg = 0.043
 	fuel_time_per_unit = fuel_time_per_kg
+    catering_time_per_pax  = 2.0
+    cleaning_time_per_pax  = 2.0
+    crew_briefing_time_min = 120
+    crew_briefing_time_max = 240
     timing_preset = "fast"
 end
 
@@ -662,7 +761,10 @@ function apply_veryfast_timings()
     disembark_cargo_time_per_kg_max = 0.04
     fuel_time_per_kg = 0.020
     fuel_time_per_unit = fuel_time_per_kg
-
+    catering_time_per_pax  = 0.8
+    cleaning_time_per_pax  = 0.8
+    crew_briefing_time_min = 30
+    crew_briefing_time_max = 60
     timing_preset = "veryfast"
 end
 
@@ -677,6 +779,10 @@ function apply_custom_timings()
     disembark_cargo_time_per_kg_min = custom_disembark_cargo_time_per_kg_min or 0.25
     disembark_cargo_time_per_kg_max = custom_disembark_cargo_time_per_kg_max or 0.5
     fuel_time_per_kg = custom_fuel_time_per_kg or 0.05
+    catering_time_per_pax  = custom_catering_time_per_pax or 4.0
+    cleaning_time_per_pax  = custom_cleaning_time_per_pax or 4.0
+    crew_briefing_time_min = custom_crew_briefing_min or 120
+    crew_briefing_time_max = custom_crew_briefing_max or 300
 end
 
 
@@ -1641,6 +1747,199 @@ function check_if_all_done()
 end
 
 --------------------------------------------------------------------------------
+-- TURNAROUND TIMER FUNCTIONS
+--------------------------------------------------------------------------------
+
+function start_crew_briefing()
+    crew_briefing_started    = true
+    crew_briefing_done       = false
+    crew_briefing_start_time = os.clock()
+    crew_briefing_duration   = random_range(crew_briefing_time_min, crew_briefing_time_max)
+end
+
+function manage_crew_briefing()
+    if not crew_briefing_started or crew_briefing_done then return end
+    local elapsed = os.clock() - crew_briefing_start_time
+    if elapsed >= crew_briefing_duration then
+        crew_briefing_started = false
+        crew_briefing_done    = true
+        estimated_time_crew   = nil
+    else
+        estimated_time_crew = crew_briefing_duration - elapsed
+    end
+end
+
+function start_catering()
+    catering_started    = true
+    catering_done       = false
+    catering_start_time = os.clock()
+    catering_duration   = passengers_total * catering_time_per_pax + random_range(2, 4)
+    show_Catering = true
+    Catering_chg  = true
+end
+
+function manage_catering()
+    if not catering_started or catering_done then return end
+    local elapsed = os.clock() - catering_start_time
+    if elapsed >= catering_duration then
+        catering_started        = false
+        catering_done           = true
+        estimated_time_catering = nil
+        show_Catering = false
+        Catering_chg  = true
+    else
+        estimated_time_catering = catering_duration - elapsed
+    end
+end
+
+function start_cleaning()
+    cleaning_started    = true
+    cleaning_done       = false
+    cleaning_start_time = os.clock()
+    cleaning_duration   = passengers_total * cleaning_time_per_pax + random_range(2, 4)
+    show_Cleaning = true
+    Cleaning_chg  = true
+end
+
+function manage_cleaning()
+    if not cleaning_started or cleaning_done then return end
+    local elapsed = os.clock() - cleaning_start_time
+    if elapsed >= cleaning_duration then
+        cleaning_started        = false
+        cleaning_done           = true
+        estimated_time_cleaning = nil
+        show_Cleaning = false
+        Cleaning_chg  = true
+    else
+        estimated_time_cleaning = cleaning_duration - elapsed
+    end
+end
+
+function start_crew_deplane()
+    crew_deplane_started    = true
+    crew_deplane_done       = false
+    crew_deplane_start_time = os.clock()
+    crew_deplane_duration   = random_range(crew_briefing_time_min, crew_briefing_time_max)
+end
+
+function manage_crew_deplane()
+    if not crew_deplane_started or crew_deplane_done then return end
+    if os.clock() - crew_deplane_start_time >= crew_deplane_duration then
+        crew_deplane_started = false
+        crew_deplane_done    = true
+    end
+end
+
+function slm_turnaround_check_simbrief()
+    local ok_http, http = pcall(require, "socket.http")
+    if not ok_http or not http then
+        slm_auto_import_message = "SimBrief unreachable — please import manually if needed"
+        return
+    end
+    local body, code = http.request("https://www.simbrief.com/api/xml.fetcher.php?userid=" .. simbrief_id)
+    if not body or code ~= 200 then
+        slm_auto_import_message = "SimBrief unreachable — please import manually if needed"
+        return
+    end
+    local new_ts = string.match(body, "<time_generated>(.-)</time_generated>") or ""
+    if new_ts ~= "" and new_ts ~= (last_ofp_timestamp or "") then
+        fetch_simbrief_data(simbrief_id)
+        slm_auto_import_message = "New flight plan detected — imported automatically"
+    else
+        slm_auto_import_message = "No new flight plan detected — please import manually if needed"
+    end
+end
+
+--------------------------------------------------------------------------------
+-- SEQUENCE FUNCTIONS
+--------------------------------------------------------------------------------
+
+function start_departure_sequence()
+    passengers_total = temp_manual_passengers
+    cargo_total      = temp_manual_cargo
+    fuel_total       = temp_manual_fuel or 0
+    slm_sequence_mode = "departure"
+    if skip_crew_briefing then
+        slm_sequence_phase = "catering"
+        start_catering()
+    else
+        slm_sequence_phase = "crew_briefing"
+        start_crew_briefing()
+    end
+end
+
+function start_turnaround()
+    slm_sequence_mode       = "turnaround"
+    slm_sequence_phase      = "arrival_ops"
+    slm_auto_import_done    = false
+    slm_auto_import_message = nil
+    start_disembarkation()
+end
+
+function start_night_stop()
+    slm_sequence_mode  = "night_stop"
+    slm_sequence_phase = "arrival_ops"
+    start_disembarkation()
+end
+
+function manage_sequence()
+    if not slm_sequence_mode then return end
+
+    -- DEPARTURE
+    if slm_sequence_mode == "departure" then
+        if slm_sequence_phase == "crew_briefing" and crew_briefing_done then
+            slm_sequence_phase = "catering"
+            start_catering()
+        elseif slm_sequence_phase == "catering" and catering_done then
+            slm_sequence_mode  = nil
+            slm_sequence_phase = nil
+            start_embarkation()
+        end
+
+    -- TURNAROUND
+    elseif slm_sequence_mode == "turnaround" then
+        if slm_sequence_phase == "arrival_ops" and disembark_done then
+            slm_sequence_phase = "cleaning"
+            start_cleaning()
+        elseif slm_sequence_phase == "cleaning" and cleaning_done then
+            slm_sequence_phase = "simbrief_check"
+        elseif slm_sequence_phase == "simbrief_check" and not slm_auto_import_done then
+            slm_auto_import_done = true
+            slm_turnaround_check_simbrief()
+            slm_sequence_phase = "crew_briefing"
+            if skip_crew_briefing then
+                crew_briefing_done = true
+            else
+                start_crew_briefing()
+            end
+        elseif slm_sequence_phase == "crew_briefing" and crew_briefing_done then
+            slm_sequence_phase = "catering"
+            start_catering()
+        elseif slm_sequence_phase == "catering" and catering_done then
+            slm_sequence_mode  = nil
+            slm_sequence_phase = nil
+            start_embarkation()
+        end
+
+    -- NIGHT STOP
+    elseif slm_sequence_mode == "night_stop" then
+        if slm_sequence_phase == "arrival_ops" and disembark_done then
+            slm_sequence_phase = "cleaning"
+            start_cleaning()
+        elseif slm_sequence_phase == "cleaning" and cleaning_done then
+            slm_sequence_phase = "crew_deplane"
+            start_crew_deplane()
+        elseif slm_sequence_phase == "crew_deplane" and crew_deplane_done then
+            show_Chocks = true
+            Chocks_chg  = true
+            show_Cones  = true
+            Cones_chg   = true
+            slm_sequence_phase = "done"
+        end
+    end
+end
+
+--------------------------------------------------------------------------------
 -- RESET
 --------------------------------------------------------------------------------
 function reset_loads()
@@ -1756,6 +2055,47 @@ function reset_loads()
 	SLM_ls_diff_fuel_block[0] = 0
 	SLM_ls_diff_payload[0]    = 0
 
+	-- Sequence
+	slm_sequence_mode       = nil
+	slm_sequence_phase      = nil
+	slm_auto_import_done    = false
+	slm_auto_import_message = nil
+
+	-- Crew Briefing
+	crew_briefing_started    = false
+	crew_briefing_done       = false
+	crew_briefing_start_time = nil
+	crew_briefing_duration   = nil
+	estimated_time_crew      = nil
+
+	-- Catering
+	catering_started        = false
+	catering_done           = false
+	catering_start_time     = nil
+	catering_duration       = nil
+	estimated_time_catering = nil
+	show_Catering = false
+	Catering_chg  = true
+
+	-- Cleaning
+	cleaning_started        = false
+	cleaning_done           = false
+	cleaning_start_time     = nil
+	cleaning_duration       = nil
+	estimated_time_cleaning = nil
+	show_Cleaning = false
+	Cleaning_chg  = true
+
+	-- Crew Deplane
+	crew_deplane_started    = false
+	crew_deplane_done       = false
+	crew_deplane_start_time = nil
+	crew_deplane_duration   = nil
+
+	-- Mode (passed_1000ft = false already set above)
+	last_ofp_timestamp = nil
+	save_user_settings()
+
 	update_slm_datarefs()
 
     sound_played = {
@@ -1851,11 +2191,34 @@ function update_slm_datarefs()
         SLM_state[0] = 3
     elseif disembark_done then
         SLM_state[0] = 4
+    elseif crew_briefing_started then
+        SLM_state[0] = 5
+    elseif catering_started then
+        SLM_state[0] = 6
+    elseif cleaning_started then
+        SLM_state[0] = 7
+    elseif crew_deplane_started then
+        SLM_state[0] = 8
+    elseif slm_sequence_phase == "done" then
+        SLM_state[0] = 9
     else
         SLM_state[0] = 0
     end
 
-    SLM_is_busy[0] = (embark_started or disembark_started) and 1 or 0
+    SLM_is_busy[0] = (embark_started or disembark_started
+        or crew_briefing_started or catering_started or cleaning_started
+        or crew_deplane_started or slm_sequence_mode ~= nil) and 1 or 0
+
+    SLM_mode[0] = passed_1000ft and 1 or 0
+
+    SLM_crew_briefing_fraction[0] = (crew_briefing_duration and crew_briefing_duration > 0)
+        and math.min(1, (os.clock() - (crew_briefing_start_time or os.clock())) / crew_briefing_duration) or 0
+
+    SLM_catering_fraction[0] = (catering_duration and catering_duration > 0)
+        and math.min(1, (os.clock() - (catering_start_time or os.clock())) / catering_duration) or 0
+
+    SLM_cleaning_fraction[0] = (cleaning_duration and cleaning_duration > 0)
+        and math.min(1, (os.clock() - (cleaning_start_time or os.clock())) / cleaning_duration) or 0
     SLM_loadsheet_ready[0] = loadsheet_ready and 1 or 0
 
     -- LOCATION / OPTIONS
@@ -2023,6 +2386,7 @@ function detect_takeoff_and_landing()
     if onground_prev == 0 and onground == 1 and landing_time == "--:--Z" then
         if passed_1000ft then
             landing_time = current_zulu_hhmm()
+            save_user_settings()   -- persist passed_1000ft = true for X-Plane reload
         end
     end
 
@@ -2044,7 +2408,11 @@ local function capture_preset(func)
         cargo_time_per_kg_max = cargo_time_per_kg_max,
         disembark_cargo_time_per_kg_min = disembark_cargo_time_per_kg_min,
         disembark_cargo_time_per_kg_max = disembark_cargo_time_per_kg_max,
-        fuel_time_per_kg = fuel_time_per_kg
+        fuel_time_per_kg = fuel_time_per_kg,
+        catering_time_per_pax  = catering_time_per_pax,
+        cleaning_time_per_pax  = cleaning_time_per_pax,
+        crew_briefing_time_min = crew_briefing_time_min,
+        crew_briefing_time_max = crew_briefing_time_max
     }
 
     func()
@@ -2058,9 +2426,12 @@ local function capture_preset(func)
         cargo_time_per_kg_max = cargo_time_per_kg_max,
         disembark_cargo_time_per_kg_min = disembark_cargo_time_per_kg_min,
         disembark_cargo_time_per_kg_max = disembark_cargo_time_per_kg_max,
-        fuel_time_per_kg = fuel_time_per_kg
+        fuel_time_per_kg = fuel_time_per_kg,
+        catering_time_per_pax  = catering_time_per_pax,
+        cleaning_time_per_pax  = cleaning_time_per_pax,
+        crew_briefing_time_min = crew_briefing_time_min,
+        crew_briefing_time_max = crew_briefing_time_max
     }
-
 
     pax_time_per_passenger = snapshot.pax_time_per_passenger
     pax_time_variation = snapshot.pax_time_variation
@@ -2071,6 +2442,10 @@ local function capture_preset(func)
     disembark_cargo_time_per_kg_min = snapshot.disembark_cargo_time_per_kg_min
     disembark_cargo_time_per_kg_max = snapshot.disembark_cargo_time_per_kg_max
     fuel_time_per_kg = snapshot.fuel_time_per_kg
+    catering_time_per_pax  = snapshot.catering_time_per_pax
+    cleaning_time_per_pax  = snapshot.cleaning_time_per_pax
+    crew_briefing_time_min = snapshot.crew_briefing_time_min
+    crew_briefing_time_max = snapshot.crew_briefing_time_max
 
     return result
 end
@@ -2084,7 +2459,7 @@ preset_values.veryfast  = capture_preset(apply_veryfast_timings)
 --------------------------------------------------------------------------------
 function create_embark_window()
     if embark_wnd == nil then
-        embark_wnd = float_wnd_create(425, 775, 1, true)
+        embark_wnd = float_wnd_create(425, 955, 1, true)
         float_wnd_set_title(embark_wnd, "Simload Manager 3.0")
         float_wnd_set_imgui_builder(embark_wnd, "build_embark_window")
         float_wnd_set_onclose(embark_wnd, "on_close_embark_window")
@@ -2201,7 +2576,12 @@ function build_embark_window(wnd, x, y)
 			fuel_first = new_fuel_first
 			save_user_settings()
 		end
-	if embark_started or disembark_started then imgui.EndDisabled() end	
+		local chg_skip, new_skip = imgui.Checkbox("Skip Crew Briefing", skip_crew_briefing)
+		if chg_skip then
+			skip_crew_briefing = new_skip
+			save_user_settings()
+		end
+	if embark_started or disembark_started then imgui.EndDisabled() end
 		imgui.NewLine()
 		
        imgui.TextUnformatted("Timing preset:")
@@ -2342,6 +2722,50 @@ if timing_preset == "custom" then
 		preset_values.veryfast.fuel_time_per_kg
 	))
 
+    -- Catering time per pax
+    c, v = imgui.InputFloat("Catering time (s/pax)", custom_catering_time_per_pax, 0, 0, "%.1f")
+    if c then custom_catering_time_per_pax = v changed = true end
+    imgui.SameLine()
+    imgui.TextUnformatted(string.format(
+        "-> Realistic: %.1f | Fast: %.1f | Very Fast: %.1f",
+        preset_values.realistic.catering_time_per_pax,
+        preset_values.fast.catering_time_per_pax,
+        preset_values.veryfast.catering_time_per_pax
+    ))
+
+    -- Cleaning time per pax
+    c, v = imgui.InputFloat("Cleaning time (s/pax)", custom_cleaning_time_per_pax, 0, 0, "%.1f")
+    if c then custom_cleaning_time_per_pax = v changed = true end
+    imgui.SameLine()
+    imgui.TextUnformatted(string.format(
+        "-> Realistic: %.1f | Fast: %.1f | Very Fast: %.1f",
+        preset_values.realistic.cleaning_time_per_pax,
+        preset_values.fast.cleaning_time_per_pax,
+        preset_values.veryfast.cleaning_time_per_pax
+    ))
+
+    -- Crew briefing min
+    c, v = imgui.InputFloat("Crew briefing min (s)", custom_crew_briefing_min, 0, 0, "%.0f")
+    if c then custom_crew_briefing_min = v changed = true end
+    imgui.SameLine()
+    imgui.TextUnformatted(string.format(
+        "-> Realistic: %.0f | Fast: %.0f | Very Fast: %.0f",
+        preset_values.realistic.crew_briefing_time_min,
+        preset_values.fast.crew_briefing_time_min,
+        preset_values.veryfast.crew_briefing_time_min
+    ))
+
+    -- Crew briefing max
+    c, v = imgui.InputFloat("Crew briefing max (s)", custom_crew_briefing_max, 0, 0, "%.0f")
+    if c then custom_crew_briefing_max = v changed = true end
+    imgui.SameLine()
+    imgui.TextUnformatted(string.format(
+        "-> Realistic: %.0f | Fast: %.0f | Very Fast: %.0f",
+        preset_values.realistic.crew_briefing_time_max,
+        preset_values.fast.crew_briefing_time_max,
+        preset_values.veryfast.crew_briefing_time_max
+    ))
+
     imgui.PopItemWidth()
 
     if changed then
@@ -2403,8 +2827,10 @@ end
 	_, temp_manual_fuel = imgui.InputInt("Fuel (" .. unit_system .. ")", temp_manual_fuel or 0)
 	if embark_started or disembark_started then imgui.EndDisabled() end
 	
-	local slm_actions_running = (embark_started or disembark_started)
-	
+	local slm_actions_running = (embark_started or disembark_started
+		or crew_briefing_started or catering_started or cleaning_started
+		or crew_deplane_started or slm_sequence_mode ~= nil)
+
 	imgui.Spacing()
 	if slm_actions_running then imgui.BeginDisabled() end
 
@@ -2430,15 +2856,34 @@ end
 
 	imgui.Spacing()
 	imgui.Separator()
-	
+
+	-- Mode display
+	imgui.PushStyleColor(imgui.constant.Col.Text, passed_1000ft and 0xFF00A5FF or 0xFF00FF00)
+	imgui.TextUnformatted(passed_1000ft and "Mode: Arrival" or "Mode: Departure")
+	imgui.PopStyleColor()
+	if slm_sequence_phase then
+		imgui.TextUnformatted("Phase: " .. slm_sequence_phase)
+	end
+	if slm_auto_import_message then
+		imgui.TextUnformatted(slm_auto_import_message)
+	end
+
 	if slm_actions_running then imgui.BeginDisabled() end
 
-	if imgui.Button("Start Loading") then
-		start_embarkation()
-	end
-	imgui.SameLine()
-	if imgui.Button("Start Unloading") then
-		start_disembarkation()
+	if not passed_1000ft then
+		-- Departure mode: Start Loading only
+		if imgui.Button("Start Loading") then
+			start_departure_sequence()
+		end
+	else
+		-- Arrival mode: Start Turnaround + Start RON
+		if imgui.Button("Start Turnaround") then
+			start_turnaround()
+		end
+		imgui.SameLine()
+		if imgui.Button("Start RON") then
+			start_night_stop()
+		end
 	end
 	if slm_actions_running then imgui.EndDisabled() end
 
@@ -2450,6 +2895,53 @@ end
 	imgui.Spacing()
     imgui.Separator()
 	imgui.NewLine()
+
+	-- Crew Briefing progress bar
+	if crew_briefing_started or crew_briefing_done then
+		local frac = crew_briefing_done and 1.0
+			or (crew_briefing_duration and crew_briefing_duration > 0
+				and math.min(1.0, (os.clock() - crew_briefing_start_time) / crew_briefing_duration)
+				or 0)
+		imgui.TextUnformatted("Crew Briefing:")
+		if frac >= 1.0 then imgui.PushStyleColor(imgui.constant.Col.PlotHistogram, 0xFF00CC00) end
+		imgui.ProgressBar(frac, 200, 20, "")
+		if frac >= 1.0 then imgui.PopStyleColor() end
+		imgui.TextUnformatted("Crew is arriving and conducting briefing — good time to review your flight plan!")
+		if crew_briefing_done then
+			imgui.TextUnformatted("Estimated: ")
+			imgui.SameLine(nil, 0)
+			imgui.PushStyleColor(imgui.constant.Col.Text, 0xFF00FF00)
+			imgui.TextUnformatted("Completed")
+			imgui.PopStyleColor()
+		elseif estimated_time_crew then
+			local mins = math.ceil(estimated_time_crew / 60)
+			imgui.TextUnformatted(string.format("Estimated: %d minute%s", mins, mins > 1 and "s" or ""))
+		end
+		imgui.NewLine()
+	end
+
+	-- Catering progress bar
+	if catering_started or catering_done then
+		local frac = catering_done and 1.0
+			or (catering_duration and catering_duration > 0
+				and math.min(1.0, (os.clock() - catering_start_time) / catering_duration)
+				or 0)
+		imgui.TextUnformatted("Catering:")
+		if frac >= 1.0 then imgui.PushStyleColor(imgui.constant.Col.PlotHistogram, 0xFF00CC00) end
+		imgui.ProgressBar(frac, 200, 20, "")
+		if frac >= 1.0 then imgui.PopStyleColor() end
+		if catering_done then
+			imgui.TextUnformatted("Estimated: ")
+			imgui.SameLine(nil, 0)
+			imgui.PushStyleColor(imgui.constant.Col.Text, 0xFF00FF00)
+			imgui.TextUnformatted("Completed")
+			imgui.PopStyleColor()
+		elseif estimated_time_catering then
+			local mins = math.ceil(estimated_time_catering / 60)
+			imgui.TextUnformatted(string.format("Estimated: %d minute%s", mins, mins > 1 and "s" or ""))
+		end
+		imgui.NewLine()
+	end
 
     local cargo_current = 0
     if embark_started then
@@ -2655,7 +3147,28 @@ end
 		imgui.TextUnformatted("Estimated: Not started")
 	end
 
-	imgui.NewLine()
+	-- Cleaning progress bar (turnaround / night stop)
+	if cleaning_started or cleaning_done then
+		local frac = cleaning_done and 1.0
+			or (cleaning_duration and cleaning_duration > 0
+				and math.min(1.0, (os.clock() - cleaning_start_time) / cleaning_duration)
+				or 0)
+		imgui.TextUnformatted("Cleaning:")
+		if frac >= 1.0 then imgui.PushStyleColor(imgui.constant.Col.PlotHistogram, 0xFF00CC00) end
+		imgui.ProgressBar(frac, 200, 20, "")
+		if frac >= 1.0 then imgui.PopStyleColor() end
+		if cleaning_done then
+			imgui.TextUnformatted("Estimated: ")
+			imgui.SameLine(nil, 0)
+			imgui.PushStyleColor(imgui.constant.Col.Text, 0xFF00FF00)
+			imgui.TextUnformatted("Completed")
+			imgui.PopStyleColor()
+		elseif estimated_time_cleaning then
+			local mins = math.ceil(estimated_time_cleaning / 60)
+			imgui.TextUnformatted(string.format("Estimated: %d minute%s", mins, mins > 1 and "s" or ""))
+		end
+		imgui.NewLine()
+	end
 
 	if loadsheet_ready then
 		if imgui.Button("View Loadsheet") then
@@ -2870,6 +3383,11 @@ do_every_frame("detect_block_times()")
 do_every_frame("detect_takeoff_and_landing()")
 do_every_frame("slm_update_init_once()")
 do_every_frame("update_slm_datarefs()")
+do_every_frame("manage_sequence()")
+do_every_frame("manage_crew_briefing()")
+do_every_frame("manage_catering()")
+do_every_frame("manage_cleaning()")
+do_every_frame("manage_crew_deplane()")
 
 
 
