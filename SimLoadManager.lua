@@ -1,4 +1,4 @@
---SIMLOAD MANAGER V2.1.2
+--SIMLOAD MANAGER V2.1.3
 
 --------------------------------------------------------------------------------
 -- IMGUi Check
@@ -12,7 +12,7 @@ end
 --------------------------------------------------------------------------------
 -- UPDATE CHECK
 --------------------------------------------------------------------------------
-SLM_VERSION = "2.1.2"
+SLM_VERSION = "2.1.3"
 
 local SLM_UPDATE_URL =
     "http://raw.githack.com/Rackham-Sim/Simload-Manager/main/version.txt"
@@ -192,6 +192,8 @@ local landing_time = "--:--Z"
 local block_on_time = "--:--Z"
 local passed_1000ft = false
 slm_loadsheet_shown = false
+slm_initial_fuel_kg = nil
+slm_initial_fuel_captured = false
 
 SB_pax_weight = 0
 SB_bag_weight = 0
@@ -206,6 +208,7 @@ dataref("onground", "sim/flightmodel/failures/onground_any", "readonly")
 dataref("zulu_hours", "sim/cockpit2/clock_timer/zulu_time_hours", "readonly")
 dataref("zulu_minutes", "sim/cockpit2/clock_timer/zulu_time_minutes", "readonly")
 dataref("altitude_ft", "sim/cockpit2/gauges/indicators/altitude_ft_pilot", "readonly")
+dataref("sim_fuel_total_kg", "sim/flightmodel/weight/m_fuel_total", "readonly")
 
 autodgs_on_ground = 0
 autodgs_available = false
@@ -309,8 +312,6 @@ fuel_time_per_unit = fuel_time_per_kg
 function random_range(min, max)
     return min + math.random() * (max - min)
 end
-
-local fuel_start_ratio = math.random(5, 25) / 100
 
 --------------------------------------------------------------------------------
 -- SOUND
@@ -526,8 +527,9 @@ function fetch_simbrief_data(id)
     passengers_total = pax_count
     cargo_total      = cargo_plan
 
-    fuel_total       = fnum("plan_ramp")
-    fuel_loaded      = math.floor(fuel_total * fuel_start_ratio)
+	fuel_total = fnum("plan_ramp")
+	local baseline = slm_initial_fuel_kg or sim_fuel_total_kg or 0
+	fuel_loaded = math.floor(baseline)
 
     sched_out = tonumber(val("sched_out")) or 0
     sched_off = tonumber(val("sched_off")) or 0
@@ -690,6 +692,19 @@ else
     apply_realistic_timings()
 end
 
+-- INITIAL FUEL CAPTURE
+
+function slm_capture_initial_fuel_once()
+
+    if slm_initial_fuel_captured then return end
+
+    if sim_fuel_total_kg then
+        slm_initial_fuel_kg = sim_fuel_total_kg
+        slm_initial_fuel_captured = true
+    end
+
+end
+
 
 
 --------------------------------------------------------------------------------
@@ -722,7 +737,14 @@ function start_embarkation()
     passengers_total = temp_manual_passengers
     cargo_total = temp_manual_cargo
     fuel_total = temp_manual_fuel or 0
-    fuel_loaded = math.floor(fuel_total * fuel_start_ratio)
+	local baseline = slm_initial_fuel_kg or sim_fuel_total_kg or 0
+	fuel_loaded = math.floor(baseline)
+
+	if fuel_total > 0 and fuel_loaded > fuel_total then
+		slm_defuel_performed = true
+	else
+		slm_defuel_performed = false
+	end
     start_time = os.clock()
     last_update_time = start_time
     pax_load_started = false
@@ -1159,7 +1181,7 @@ function start_disembarkation()
 
     passengers_total = temp_manual_passengers
     cargo_total = temp_manual_cargo
-
+	fuel_loaded = math.floor(sim_fuel_total_kg)
     disembark_start_time = os.clock()
     disembark_last_update_time = disembark_start_time
     pax_unload_started = false
@@ -1507,13 +1529,43 @@ function manage_fuel_loading()
         if not fuel_last_update_time then fuel_last_update_time = now end
         local elapsed = now - fuel_last_update_time
 
+        local diff = (fuel_total or 0) - (fuel_loaded or 0)
+        if diff == 0 then
+            show_FUEL = false
+            FUEL_chg = true
+
+            if fuel_loop_playing then
+                fuel_loop_playing = false
+                let_sound_loop(sounds.fuel_loop.id, false)
+                stop_sound(sounds.fuel_loop.id)
+            end
+
+            fuel_loading = false
+            fuel_done = true
+
+            if not sound_played.finished_fuel_loading then
+                play_sound_by_key("finished_fuel_loading")
+                sound_played.finished_fuel_loading = true
+            end
+            return
+        end
+
+        local direction = (diff > 0) and 1 or -1
         local increment = math.floor(elapsed / fuel_time_per_unit)
+
         if increment > 0 then
-            fuel_loaded = math.min(fuel_loaded + increment, fuel_total)
+            fuel_loaded = (fuel_loaded or 0) + (increment * direction)
+
+            if direction == 1 and fuel_loaded >= fuel_total then
+                fuel_loaded = fuel_total
+            elseif direction == -1 and fuel_loaded <= fuel_total then
+                fuel_loaded = fuel_total
+            end
+
             fuel_last_update_time = now
         end
 
-        if fuel_loaded >= fuel_total then
+        if fuel_loaded == fuel_total then
             show_FUEL = false
             FUEL_chg = true
 
@@ -1534,11 +1586,12 @@ function manage_fuel_loading()
     end
 end
 
+
 function check_if_all_done()
     if embark_started
        and (cargo_total == 0 or cargo_loaded >= cargo_total)
        and (passengers_total == 0 or passengers_loaded >= passengers_total)
-       and (fuel_total == 0 or fuel_loaded >= fuel_total)
+       and (fuel_total == 0 or fuel_done)
     then
         if end_time == nil then
             end_time = os.clock() + FINISHED_ALL_DELAY
@@ -1640,7 +1693,7 @@ function reset_loads()
 	FUEL_chg = true
 	simbrief_data_loaded = false
 	loadsheet_ready = false
-	
+	slm_defuel_performed = false
 	estimated_time_cargo = nil
     estimated_time_pax   = nil
     estimated_time_fuel  = nil
@@ -1762,8 +1815,8 @@ function update_remaining_time()
 
             -- Fuel
             if fuel_total > 0 and fuel_time_per_unit then
-                local fuel_remaining = fuel_total - fuel_loaded
-                estimated_time_fuel = fuel_remaining * fuel_time_per_unit
+				local fuel_remaining = math.abs((fuel_total or 0) - (fuel_loaded or 0))
+				estimated_time_fuel = fuel_remaining * (fuel_time_per_unit or 0)
             else
                 estimated_time_fuel = nil
             end
@@ -2032,7 +2085,7 @@ preset_values.veryfast  = capture_preset(apply_veryfast_timings)
 function create_embark_window()
     if embark_wnd == nil then
         embark_wnd = float_wnd_create(425, 775, 1, true)
-        float_wnd_set_title(embark_wnd, "Simload Manager 2.1.2")
+        float_wnd_set_title(embark_wnd, "Simload Manager 2.1.3")
         float_wnd_set_imgui_builder(embark_wnd, "build_embark_window")
         float_wnd_set_onclose(embark_wnd, "on_close_embark_window")
         logMsg("[SLM] Embark window created.")
@@ -2350,10 +2403,34 @@ end
 	_, temp_manual_fuel = imgui.InputInt("Fuel (" .. unit_system .. ")", temp_manual_fuel or 0)
 	if embark_started or disembark_started then imgui.EndDisabled() end
 	
-	imgui.NewLine()
-
 	local slm_actions_running = (embark_started or disembark_started)
+	
+	imgui.Spacing()
+	if slm_actions_running then imgui.BeginDisabled() end
 
+	imgui.TextUnformatted("Select your location :")
+	if imgui.RadioButton("Remote Stand", selected_location_group == "remote") then
+		slm_set_location_remote()
+	end
+	imgui.SameLine()
+	if imgui.RadioButton("Gate W/O Jetway", selected_location_group == "terminal") then
+		slm_set_location_terminal()
+	end
+	imgui.SameLine()
+	if imgui.RadioButton("Gate Jetway", selected_location_group == "jetway") then
+		slm_set_location_jetway()
+	end
+
+	local chg_own, new_own = imgui.Checkbox("Do not call stairs", aircraft_has_own_stairs)
+	if chg_own then
+		aircraft_has_own_stairs = new_own
+	end
+
+	if slm_actions_running then imgui.EndDisabled() end
+
+	imgui.Spacing()
+	imgui.Separator()
+	
 	if slm_actions_running then imgui.BeginDisabled() end
 
 	if imgui.Button("Start Loading") then
@@ -2364,42 +2441,11 @@ end
 		start_disembarkation()
 	end
 	if slm_actions_running then imgui.EndDisabled() end
-	
+
 	imgui.SameLine()
 	if imgui.Button("Reset") then
 		reset_loads()
 	end
-
-    imgui.Spacing()
-	if slm_actions_running then imgui.BeginDisabled() end
-	
-    imgui.TextUnformatted("Select your location :")
-
-    if imgui.RadioButton("Remote Stand", selected_location_group == "remote") then
-        slm_set_location_remote()
-    end
-    imgui.SameLine()
-    if imgui.RadioButton("Gate W/O Jetway", selected_location_group == "terminal") then
-        slm_set_location_terminal()
-    end
-    imgui.SameLine()
-    if imgui.RadioButton("Gate Jetway", selected_location_group == "jetway") then
-        slm_set_location_jetway()
-    end
-	
-	if slm_actions_running then imgui.EndDisabled() end
-	
-		imgui.Spacing()
-	local slm_actions_running = (embark_started or disembark_started)
-
-	if slm_actions_running then imgui.BeginDisabled() end
-
-	local chg_own, new_own = imgui.Checkbox("Do not call stairs", aircraft_has_own_stairs)
-	if chg_own then
-		aircraft_has_own_stairs = new_own
-	end
-
-	if slm_actions_running then imgui.EndDisabled() end
 
 	imgui.Spacing()
     imgui.Separator()
@@ -2418,11 +2464,17 @@ end
         cargo_current = 0
     end
 
-    cargo_current = math.max(0, math.min(cargo_current, cargo_total))
+       cargo_current = math.max(0, math.min(cargo_current, cargo_total))
     local fraction_cargo = (cargo_total > 0) and (cargo_current / cargo_total) or 0
 
     imgui.TextUnformatted("Cargo:")
-    imgui.ProgressBar(fraction_cargo, 200, 20, "")
+	if fraction_cargo >= 1.0 and not disembark_started then
+		imgui.PushStyleColor(imgui.constant.Col.PlotHistogram, 0xFF00CC00)
+	end
+	imgui.ProgressBar(fraction_cargo, 200, 20, "")
+	if fraction_cargo >= 1.0 and not disembark_started then
+		imgui.PopStyleColor()
+	end
     imgui.SameLine()
     imgui.TextUnformatted(string.format("%.0f / %.0f %s", cargo_current, cargo_total, unit_system))
 
@@ -2475,7 +2527,9 @@ end
 	local fraction_pax = (passengers_total > 0) and (pax_current / passengers_total) or 0
 
 	imgui.TextUnformatted("Passengers:")
+	if fraction_pax >= 1.0 and not disembark_started then imgui.PushStyleColor(imgui.constant.Col.PlotHistogram, 0xFF00CC00) end
 	imgui.ProgressBar(fraction_pax, 200, 20, "")
+	if fraction_pax >= 1.0 and not disembark_started then imgui.PopStyleColor() end
 	imgui.SameLine()
 	imgui.TextUnformatted(string.format("%d / %d PAX", pax_current, passengers_total))
 
@@ -2548,35 +2602,51 @@ end
 	imgui.NewLine()
 	
 	imgui.TextUnformatted("Fuel:")
-	local fuel_fraction = (fuel_total > 0) and (fuel_loaded / fuel_total) or 0
+
+	local fuel_fraction
+	local fuel_color_pushed = false
+	if slm_defuel_performed and not fuel_done then
+		local denom = slm_initial_fuel_kg or 1
+		fuel_fraction = (denom > 0) and (fuel_loaded / denom) or 0
+		imgui.PushStyleColor(imgui.constant.Col.PlotHistogram, 0xFF0055FF)
+		fuel_color_pushed = true
+	elseif fuel_done and not disembark_started then
+		fuel_fraction = (fuel_total > 0) and (fuel_loaded / fuel_total) or 0
+		imgui.PushStyleColor(imgui.constant.Col.PlotHistogram, 0xFF00CC00)
+		fuel_color_pushed = true
+	else
+		fuel_fraction = (fuel_total > 0) and (fuel_loaded / fuel_total) or 0
+	end
+	fuel_fraction = math.max(0, math.min(1, fuel_fraction))
 	imgui.ProgressBar(fuel_fraction, 200, 20, "")
+	if fuel_color_pushed then imgui.PopStyleColor()	end
+
 	imgui.SameLine()
 	imgui.TextUnformatted(string.format("%.0f / %.0f %s", fuel_loaded, fuel_total, unit_system))
-	
+
 	if (embark_started or embark_done) then
 		if fuel_done then
-			imgui.TextUnformatted("Estimated: ")
-			imgui.SameLine(nil, 0)
-			imgui.PushStyleColor(imgui.constant.Col.Text, 0xFF00FF00)
-			imgui.TextUnformatted("Completed")
-			imgui.PopStyleColor()
+		imgui.TextUnformatted("Estimated: ")
+		imgui.SameLine(nil, 0)
+		imgui.PushStyleColor(imgui.constant.Col.Text, 0xFF00FF00)
+		imgui.TextUnformatted("Completed")
+		imgui.PopStyleColor()
 
-		elseif fuel_loading then
-			if fuel_ready_time and os.clock() < fuel_ready_time then
-				imgui.TextUnformatted("Waiting for fuel truck...")
-			elseif estimated_time_fuel then
-				local fuel_remaining = fuel_total - fuel_loaded
-				local time_remaining = fuel_remaining * fuel_time_per_unit
-
-				if time_remaining < 60 then
-					imgui.TextUnformatted("Estimated: < 1 minute")
-				else
-					local fuel_minutes = math.ceil(time_remaining / 60)
-					imgui.TextUnformatted(string.format("Estimated: %d minute%s", fuel_minutes, fuel_minutes > 1 and "s" or ""))
-				end
+	elseif fuel_loading then
+		if fuel_ready_time and os.clock() < fuel_ready_time then
+			imgui.TextUnformatted("Waiting for fuel truck...")
+		elseif estimated_time_fuel then
+			local fuel_remaining = fuel_total - fuel_loaded
+			local time_remaining = fuel_remaining * fuel_time_per_unit
+			if time_remaining < 60 then
+				imgui.TextUnformatted("Estimated: < 1 minute")
 			else
-				imgui.TextUnformatted("Estimated: --")
+				local fuel_minutes = math.ceil(time_remaining / 60)
+				imgui.TextUnformatted(string.format("Estimated: %d minute%s", fuel_minutes, fuel_minutes > 1 and "s" or ""))
 			end
+		else
+			imgui.TextUnformatted("Estimated: --")
+		end
 
 		else
 			imgui.TextUnformatted("Estimated: Waiting")
@@ -2584,7 +2654,6 @@ end
 	else
 		imgui.TextUnformatted("Estimated: Not started")
 	end
-
 
 	imgui.NewLine()
 
@@ -2605,7 +2674,7 @@ end
 	imgui.TextUnformatted("Flight Times (UTC) - Imported via Simbrief ")
 	imgui.NewLine()
 
-	imgui.TextUnformatted("              | Sched. | Act.")
+	imgui.TextUnformatted("                | Sched. | Act.")
 
 	local function colored_time_line(label, sched_timestamp, actual_time)
     local sched_str = timestamp_to_utc_hhmmz(sched_timestamp) or "--:--Z"
@@ -2706,6 +2775,8 @@ add_macro("Open SimLoad Manager",
 do_every_frame("manage_embark()")
 do_every_frame("manage_disembark()")
 do_every_frame("update_remaining_time()")
+do_sometimes("slm_capture_initial_fuel_once()")
+
 
 
 create_command("FlyWithLua/SimloadManager/SimloadManagerToggle",
@@ -2791,13 +2862,6 @@ function flightloop_check_SGES_toggle()
         toggle_SGES_flag = false
         command_once("Simple_Ground_Equipment_and_Services/Window/Toggle")
     end
-end
-
-local slm_update_init_done = false
-function slm_update_init_once()
-    if slm_update_init_done then return end
-    slm_update_init_done = true
-    slm_check_update()
 end
 
 do_every_frame("flightloop_check_SGES_toggle()")
