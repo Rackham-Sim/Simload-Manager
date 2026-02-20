@@ -443,6 +443,7 @@ end
 init_sounds()
 
 function update_loop_volumes()
+    local vol = math.max(0.0001, Volume)  -- safe floor so gain is never 0
     if is_muted then
         set_sound_gain(sounds.cargo_loop.id, 0.0001)
         set_sound_gain(sounds.fuel_loop.id, 0.0001)
@@ -457,23 +458,25 @@ function update_loop_volumes()
             set_sound_gain(sounds.cleaning_loop.id, 0.0001)
         end
     else
+        -- External sounds: louder outside, quieter inside
         if cargo_loop_playing then
-            set_sound_gain(sounds.cargo_loop.id, view_is_external == 1 and 1.0 or 0.3)
+            set_sound_gain(sounds.cargo_loop.id, (view_is_external == 1 and 1.0 or 0.3) * vol)
         end
         if fuel_loop_playing then
-            set_sound_gain(sounds.fuel_loop.id, view_is_external == 1 and 1.0 or 0.3)
+            set_sound_gain(sounds.fuel_loop.id, (view_is_external == 1 and 1.0 or 0.3) * vol)
         end
+        -- Internal sounds: audible only from inside (pax, briefing, catering, cleaning)
         if pax_loop_playing then
-            set_sound_gain(sounds.passengers_loop.id, view_is_external == 1 and 0.0001 or 0.9)
+            set_sound_gain(sounds.passengers_loop.id, (view_is_external == 1 and 0.0001 or 0.9) * vol)
         end
         if briefing_loop_playing and sounds.briefing_loop.id and sounds.briefing_loop.id ~= 0 then
-            set_sound_gain(sounds.briefing_loop.id, view_is_external == 1 and 1.0 or 0.0001)
+            set_sound_gain(sounds.briefing_loop.id, (view_is_external == 1 and 0.0001 or 0.9) * vol)
         end
         if catering_loop_playing and sounds.catering_loop.id and sounds.catering_loop.id ~= 0 then
-            set_sound_gain(sounds.catering_loop.id, view_is_external == 1 and 1.0 or 0.0001)
+            set_sound_gain(sounds.catering_loop.id, (view_is_external == 1 and 0.0001 or 0.9) * vol)
         end
         if cleaning_loop_playing and sounds.cleaning_loop.id and sounds.cleaning_loop.id ~= 0 then
-            set_sound_gain(sounds.cleaning_loop.id, view_is_external == 1 and 1.0 or 0.0001)
+            set_sound_gain(sounds.cleaning_loop.id, (view_is_external == 1 and 0.0001 or 0.9) * vol)
         end
     end
 end
@@ -1657,12 +1660,16 @@ function manage_disembark()
 		People2_chg = true
 		show_People1 = false
 		People1_chg = true
-		show_Chocks     = false
-		Chocks_chg      = true
-		show_StairsXPJ  = false
-		StairsXPJ_chg   = true
-		show_StairsXPJ2 = false
-		StairsXPJ2_chg  = true
+		show_Chocks = false
+		Chocks_chg  = true
+		-- Keep stairs/jetway during turnaround and night_stop sequences.
+		-- They will be retracted at end of embarkation (PAX boarding done).
+		if slm_sequence_mode ~= "turnaround" and slm_sequence_mode ~= "night_stop" then
+			show_StairsXPJ  = false
+			StairsXPJ_chg   = true
+			show_StairsXPJ2 = false
+			StairsXPJ2_chg  = true
+		end
     end
 end
 
@@ -1864,6 +1871,7 @@ function start_crew_briefing()
         briefing_loop_playing = true
         let_sound_loop(sounds.briefing_loop.id, true)
         play_sound(sounds.briefing_loop.id)
+        update_loop_volumes()
     end
 end
 
@@ -1895,6 +1903,7 @@ function start_catering()
         catering_loop_playing = true
         let_sound_loop(sounds.catering_loop.id, true)
         play_sound(sounds.catering_loop.id)
+        update_loop_volumes()
     end
 end
 
@@ -1928,6 +1937,7 @@ function start_cleaning()
         cleaning_loop_playing = true
         let_sound_loop(sounds.cleaning_loop.id, true)
         play_sound(sounds.cleaning_loop.id)
+        update_loop_volumes()
     end
 end
 
@@ -2089,6 +2099,11 @@ function manage_sequence()
             Chocks_chg  = true
             show_Cones  = true
             Cones_chg   = true
+            -- Crew has deplaned: retract stairs (no departure follows in night_stop)
+            show_StairsXPJ  = false
+            StairsXPJ_chg   = true
+            show_StairsXPJ2 = false
+            StairsXPJ2_chg  = true
             slm_sequence_phase = "done"
         end
     end
@@ -3047,14 +3062,6 @@ function slm_draw_sequence_steps()
         draw_embark_fuel()
     end
 
-    -- =====================================================================
-    -- LOADSHEET
-    -- =====================================================================
-    if loadsheet_ready then
-        slm_draw_step("Loadsheet Ready", "done")
-    else
-        slm_draw_step("Loadsheet", "pending")
-    end
 end
 
 --------------------------------------------------------------------------------
@@ -3310,6 +3317,7 @@ end
 	if chg_vol then
 		Volume = new_vol
 		set_all_sounds_gain(Volume)
+		update_loop_volumes()
 		save_user_settings()
 	end
 	if is_muted then imgui.EndDisabled() end
