@@ -190,7 +190,7 @@ local takeoff_time = "--:--Z"
 local onground_prev = 1
 local landing_time = "--:--Z"
 local block_on_time = "--:--Z"
-local passed_1000ft = false
+local passed_500ft = false
 slm_loadsheet_shown = false
 slm_initial_fuel_kg = nil
 slm_initial_fuel_captured = false
@@ -207,7 +207,8 @@ dataref("beacon", "sim/cockpit/electrical/beacon_lights_on", "readonly")
 dataref("onground", "sim/flightmodel/failures/onground_any", "readonly")
 dataref("zulu_hours", "sim/cockpit2/clock_timer/zulu_time_hours", "readonly")
 dataref("zulu_minutes", "sim/cockpit2/clock_timer/zulu_time_minutes", "readonly")
-dataref("altitude_ft", "sim/cockpit2/gauges/indicators/altitude_ft_pilot", "readonly")
+dataref("gear_on_ground", "sim/flightmodel2/gear/on_ground", "readonly", 10)
+dataref("y_agl",         "sim/flightmodel/position/y_agl",           "readonly")
 dataref("sim_fuel_total_kg", "sim/flightmodel/weight/m_fuel_total", "readonly")
 
 autodgs_on_ground = 0
@@ -507,7 +508,7 @@ function load_user_settings()
                 custom_disembark_cargo_time_per_kg_max = tonumber(value)
             elseif key == "custom_fuel_time_per_kg" then
                 custom_fuel_time_per_kg = tonumber(value)
-            elseif key == "passed_1000ft" then
+            elseif key == "passed_500ft" then
                 -- no longer persisted between sessions (always starts in Departure mode)
                 _ = value
             elseif key == "last_ofp_timestamp" then
@@ -551,7 +552,7 @@ function save_user_settings()
         file:write("custom_disembark_cargo_time_per_kg_min=" .. tostring(custom_disembark_cargo_time_per_kg_min or 0.2) .. "\n")
         file:write("custom_disembark_cargo_time_per_kg_max=" .. tostring(custom_disembark_cargo_time_per_kg_max or 0.6) .. "\n")
         file:write("custom_fuel_time_per_kg=" .. tostring(custom_fuel_time_per_kg or 0.053) .. "\n")
-        -- passed_1000ft is intentionally not persisted (always starts fresh as Departure)
+        -- passed_500ft is intentionally not persisted (always starts fresh as Departure)
         file:write("last_ofp_timestamp=" .. tostring(last_ofp_timestamp or "") .. "\n")
         file:write("skip_crew_briefing=" .. tostring(skip_crew_briefing) .. "\n")
         file:write("custom_catering_time_per_pax=" .. tostring(custom_catering_time_per_pax or 4.0) .. "\n")
@@ -1968,7 +1969,7 @@ function manage_crew_deplane()
 end
 
 function slm_force_arrival_mode()
-    passed_1000ft = true
+    passed_500ft = true
     landing_time  = current_zulu_hhmm()
     -- Intentionally no save_user_settings() — temporary, lost on X-Plane reload
     logMsg("[SLM DEV] Forced arrival mode")
@@ -2177,7 +2178,7 @@ function reset_loads()
 	onground_prev = 1
 	landing_time = "--:--Z"
 	block_on_time = "--:--Z"
-	passed_1000ft = false
+	passed_500ft = false
 	SLM_real_pax        = 0
 	SLM_real_cargo      = 0
 	SLM_real_fuel_block = 0
@@ -2383,7 +2384,7 @@ function update_slm_datarefs()
         or crew_briefing_started or catering_started or cleaning_started
         or crew_deplane_started or slm_sequence_mode ~= nil) and 1 or 0
 
-    SLM_mode[0] = passed_1000ft and 1 or 0
+    SLM_mode[0] = passed_500ft and 1 or 0
 
     SLM_crew_briefing_fraction[0] = (crew_briefing_duration and crew_briefing_duration > 0)
         and math.min(1, (os.clock() - (crew_briefing_start_time or os.clock())) / crew_briefing_duration) or 0
@@ -2542,15 +2543,19 @@ end
 function detect_takeoff_and_landing()
      if onground_prev == 1 and onground == 0 and takeoff_time == "--:--Z" then
         takeoff_time = current_zulu_hhmm()
-        passed_1000ft = false
+        passed_500ft = false
     end
 
-    if not passed_1000ft and altitude_ft > 1000 then
-        passed_1000ft = true
+    if not passed_500ft
+        and gear_on_ground[0] == 0
+        and gear_on_ground[1] == 0
+        and gear_on_ground[2] == 0
+        and y_agl > 152 then
+        passed_500ft = true
     end
 
     if onground_prev == 0 and onground == 1 and landing_time == "--:--Z" then
-        if passed_1000ft then
+        if passed_500ft then
             landing_time = current_zulu_hhmm()
         end
     end
@@ -2740,7 +2745,7 @@ function slm_draw_sequence_steps()
         if embark_started or embark_done then
             mode = "departure"
         elseif disembark_started or disembark_done then
-            mode = passed_1000ft and "turnaround" or "departure"
+            mode = passed_500ft and "turnaround" or "departure"
         else
             return
         end
@@ -3324,14 +3329,14 @@ end
 	imgui.Separator()
 
 	-- Mode display
-	imgui.PushStyleColor(imgui.constant.Col.Text, passed_1000ft and 0xFF00A5FF or 0xFF00FF00)
-	imgui.TextUnformatted(passed_1000ft and "Mode: Arrival" or "Mode: Departure")
+	imgui.PushStyleColor(imgui.constant.Col.Text, passed_500ft and 0xFF00A5FF or 0xFF00FF00)
+	imgui.TextUnformatted(passed_500ft and "Mode: Arrival" or "Mode: Departure")
 	imgui.PopStyleColor()
 
 	local simbrief_ok = (SLM_Loadsheet_Data ~= nil)
 	if slm_actions_running or not simbrief_ok then imgui.BeginDisabled() end
 
-	if not passed_1000ft then
+	if not passed_500ft then
 		-- Departure mode: Start Loading only
 		if imgui.Button("Start Loading") then
 			start_departure_sequence()
@@ -3494,19 +3499,19 @@ local function slm_is_busy()
 end
 
 function slm_cmd_start_loading()
-    if not passed_1000ft and SLM_Loadsheet_Data ~= nil and not slm_is_busy() then
+    if not passed_500ft and SLM_Loadsheet_Data ~= nil and not slm_is_busy() then
         start_departure_sequence()
     end
 end
 
 function slm_cmd_start_turnaround()
-    if passed_1000ft and SLM_Loadsheet_Data ~= nil and not slm_is_busy() then
+    if passed_500ft and SLM_Loadsheet_Data ~= nil and not slm_is_busy() then
         start_turnaround()
     end
 end
 
 function slm_cmd_start_ron()
-    if passed_1000ft and SLM_Loadsheet_Data ~= nil and not slm_is_busy() then
+    if passed_500ft and SLM_Loadsheet_Data ~= nil and not slm_is_busy() then
         start_night_stop()
     end
 end
