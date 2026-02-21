@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(wc:*)",
+      "Bash(python:*)",
+      "Bash(echo No settings found:*)"
+    ]
+  }
+}

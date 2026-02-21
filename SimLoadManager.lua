@@ -2624,7 +2624,7 @@ preset_values.veryfast  = capture_preset(apply_veryfast_timings)
 --------------------------------------------------------------------------------
 function create_embark_window()
     if embark_wnd == nil then
-        embark_wnd = float_wnd_create(425, 1150, 1, true)
+        embark_wnd = float_wnd_create(425, 900, 1, true)
         float_wnd_set_title(embark_wnd, "Simload Manager 3.0")
         float_wnd_set_imgui_builder(embark_wnd, "build_embark_window")
         float_wnd_set_onclose(embark_wnd, "on_close_embark_window")
