@@ -1,7 +1,7 @@
 --SIMLOAD MANAGER V3.0
 
 --------------------------------------------------------------------------------
--- IMGUi Check
+-- IMGUI CHECK
 --------------------------------------------------------------------------------
 if not SUPPORTS_FLOATING_WINDOWS then
     logMsg("imgui not supported by your FlyWithLua version")
@@ -116,9 +116,6 @@ end
 --------------------------------------------------------------------------------
 -- VARIABLES
 --------------------------------------------------------------------------------
-local IMGUI_COL_TEXT = 0
-local IMGUI_COL_PLOT_HISTOGRAM = 40
-
 embark_wnd = nil
 unit_system = "kg"
 simbrief_id = "REPLACE_WITH_YOUR_SIMBRIEF_ID"
@@ -241,51 +238,42 @@ sound_played = {
 }
 
 --------------------------------------------------------------------------------
--- TURNAROUND / MODE VARIABLES
--- Note: declared as globals (not local) to stay under LuaJIT's 60-upvalue limit
--- per closure. Consistent with existing SGES flags (show_Bus, Bus_chg, etc.).
+-- TURNAROUND VARIABLES
 --------------------------------------------------------------------------------
 last_ofp_timestamp    = nil     -- persisted in settings (string from SimBrief XML)
 skip_crew_briefing    = false   -- persisted in settings
 slm_sequence_mode     = nil     -- "departure" | "turnaround" | "night_stop" | nil
 slm_sequence_phase    = nil     -- current phase in the sequence
 
--- Crew Briefing
 crew_briefing_started    = false
 crew_briefing_done       = false
 crew_briefing_start_time = nil
 crew_briefing_duration   = nil
 estimated_time_crew      = nil
 
--- Catering
 catering_started        = false
 catering_done           = false
 catering_start_time     = nil
 catering_duration       = nil
 estimated_time_catering = nil
 
--- Cleaning
 cleaning_started        = false
 cleaning_done           = false
 cleaning_start_time     = nil
 cleaning_duration       = nil
 estimated_time_cleaning = nil
 
--- Crew Deplane (Night Stop only)
 crew_deplane_started    = false
 crew_deplane_done       = false
 crew_deplane_start_time = nil
 crew_deplane_duration   = nil
 
--- Auto-import turnaround
 slm_auto_import_done    = false
 slm_auto_import_message = nil
 slm_new_plan_imported   = false  -- true when a new SimBrief plan was detected during turnaround
 
--- Session mode tracker (not cleared when sequence ends naturally, only by reset)
 slm_last_sequence_mode = nil
 
--- SGES — new flags (global, consistent with existing show_Bus, Bus_chg, etc.)
 show_Catering   = false
 Catering_chg    = true
 show_Cleaning   = false
@@ -293,13 +281,11 @@ Cleaning_chg    = true
 show_StairsXPJ2 = false  -- rear stairs (remote + terminal modes)
 StairsXPJ2_chg  = true
 
--- Custom preset — new variables
 custom_catering_time_per_pax  = 4.0
 custom_cleaning_time_per_pax  = 4.0
 custom_crew_briefing_min      = 120
 custom_crew_briefing_max      = 300
 
--- Current timing (set by apply_*_timings)
 catering_time_per_pax   = 4.0
 cleaning_time_per_pax   = 4.0
 crew_briefing_time_min  = 480
@@ -361,14 +347,12 @@ local pax_time_per_passenger = 6
 local pax_time_variation = 9
 local cargo_time_per_kg_min = 0.3
 local cargo_time_per_kg_max = 0.5
-local pax_delay_before_start = 300
 
 local disembark_pax_time_per_passenger = 3
 local disembark_pax_time_variation = 5
 local disembark_cargo_time_per_kg_min = 0.2
 local disembark_cargo_time_per_kg_max = 0.4
 
--- Default custom values (same as Realistic preset)
 custom_pax_time_per_passenger = 5
 custom_pax_time_variation = 3
 custom_disembark_pax_time_per_passenger = 4
@@ -458,14 +442,12 @@ function update_loop_volumes()
             set_sound_gain(sounds.cleaning_loop.id, 0.0001)
         end
     else
-        -- External sounds: louder outside, quieter inside
         if cargo_loop_playing then
             set_sound_gain(sounds.cargo_loop.id, (view_is_external == 1 and 1.0 or 0.3) * vol)
         end
         if fuel_loop_playing then
             set_sound_gain(sounds.fuel_loop.id, (view_is_external == 1 and 1.0 or 0.3) * vol)
         end
-        -- Internal sounds: audible only from inside (pax, briefing, catering, cleaning)
         if pax_loop_playing then
             set_sound_gain(sounds.passengers_loop.id, (view_is_external == 1 and 0.0001 or 0.9) * vol)
         end
@@ -553,7 +535,6 @@ function load_user_settings()
 end
 
 
-
 function save_user_settings()
     local file = io.open(settings_file, "w")
     if file then
@@ -584,6 +565,9 @@ function save_user_settings()
 end
 
 
+--------------------------------------------------------------------------------
+-- SIMBRIEF
+--------------------------------------------------------------------------------
 
 function fetch_simbrief_data(id)
     simbrief_data_loaded = true
@@ -594,7 +578,6 @@ function fetch_simbrief_data(id)
         return
     end
 
-    -- SECTION: Helpers
     local function val(tag)
         return string.match(body, "<" .. tag .. ">(.-)</" .. tag .. ">") or ""
     end
@@ -614,12 +597,10 @@ function fetch_simbrief_data(id)
         return tonumber(string.match(body, "<fuel>.-<" .. tag .. ">([%d%.]+)</" .. tag .. ">")) or 0
     end
 
-    -- SECTION: OFP timestamp (for turnaround auto-import detection)
     local old_ts = last_ofp_timestamp
     local ofp_time_generated = val("time_generated")
     last_ofp_timestamp = (ofp_time_generated ~= "") and ofp_time_generated or last_ofp_timestamp
 
-    -- SECTION: Units
     local sb_unit = val("units")
     if sb_unit == "kgs" then
         unit_system = "kg"
@@ -627,12 +608,10 @@ function fetch_simbrief_data(id)
         unit_system = "lbs"
     end
 
-    -- SECTION: Weights (STRICT)
     local pax_count   = nnum("weights", "pax_count")
     local bag_count   = nnum("weights", "bag_count")
     local pax_weight  = nnum("weights", "pax_weight")
     local bag_weight  = nnum("weights", "bag_weight")
-	local bag_count = nnum("weights", "bag_count")
 
     local freight     = nnum("weights", "freight_added")
     local cargo_plan  = nnum("weights", "cargo")
@@ -646,11 +625,9 @@ function fetch_simbrief_data(id)
     local est_ldw = nnum("weights", "est_ldw")
     local max_ldw = nnum("weights", "max_ldw")
 
-    -- Derived planned masses (BAGS are not given as a mass tag)
     local pax_mass_planned = pax_count * pax_weight
     local bag_mass_planned = bag_count * bag_weight
 
-    -- SECTION: Core totals used by SLM (STRICT)
     passengers_total = pax_count
     cargo_total      = cargo_plan
 
@@ -663,7 +640,6 @@ function fetch_simbrief_data(id)
     sched_on  = tonumber(val("sched_on"))  or 0
     sched_in  = tonumber(val("sched_in"))  or 0
 
-    -- SECTION: SimBrief fields (keep existing behavior)
     local airline    = nonempty(nv("general",    "airline"),    val("airline"))
     local fltnum     = nonempty(nv("general",    "fltnum"),     val("fltnum"))
     local orig       = nonempty(nv("origin",     "icao_code"),  val("orig"))
@@ -677,7 +653,6 @@ function fetch_simbrief_data(id)
     local captain    = nonempty(nv("crew", "cpt"), nonempty(val("cpt"), val("pilot_name")))
     local dispatcher = nonempty(nv("crew", "dx"),  nonempty(val("dx"),  val("dispatcher")))
 
-    -- SECTION: Fuel (STRICT source is <fuel>)
     local fuel_taxi  = fnum("taxi")
     local fuel_trip  = fnum("enroute_burn")
     local fuel_cont  = fnum("contingency")
@@ -686,7 +661,6 @@ function fetch_simbrief_data(id)
     local fuel_block = fnum("plan_ramp")
     local fuel_land  = fnum("plan_landing")
 
-    -- SECTION: Export to globals used elsewhere
     SB_pax_weight = pax_weight
     SB_bag_weight = bag_weight
     SB_pax_count  = pax_count
@@ -694,7 +668,6 @@ function fetch_simbrief_data(id)
     SB_pax_mass_planned = pax_mass_planned
     SB_bag_mass_planned = bag_mass_planned
 
-    -- SECTION: Loadsheet data
     SLM_Loadsheet_Data = {
         airline = nonempty(airline, "N/A"),
         fltnum  = nonempty(fltnum,  "N/A"),
@@ -746,7 +719,6 @@ function fetch_simbrief_data(id)
 
     save_user_settings()
 
-    -- If a turnaround was waiting for a new flight plan, check if this import resolved it
     if slm_sequence_phase == "waiting_for_new_plan" then
         if last_ofp_timestamp and last_ofp_timestamp ~= (old_ts or "") then
             slm_new_plan_imported   = true
@@ -857,7 +829,6 @@ else
     apply_realistic_timings()
 end
 
--- INITIAL FUEL CAPTURE
 
 function slm_capture_initial_fuel_once()
 
@@ -869,7 +840,6 @@ function slm_capture_initial_fuel_once()
     end
 
 end
-
 
 
 --------------------------------------------------------------------------------
@@ -911,8 +881,7 @@ function start_embarkation()
     last_update_time = start_time
     pax_load_started = false
     cargo_start_reference_time = os.clock()
-    -- Deploy stairs/jetway as fallback when embarkation is started directly
-    -- (without a crew briefing sequence; jetway guard avoids double-toggle)
+
     if selected_location_group == "remote" or selected_location_group == "terminal" then
         if not aircraft_has_own_stairs then
             show_StairsXPJ        = true
@@ -922,14 +891,12 @@ function start_embarkation()
             option_StairsXPJ_override = true
         end
     elseif selected_location_group == "jetway" then
-        -- Only call if crew briefing did not already open the jetway
         if not crew_briefing_done and not crew_briefing_started then
             command_once("sim/ground_ops/jetway")
         end
     end
     init_sounds()
 end
-
 
 
 function manage_embark()
@@ -960,7 +927,6 @@ function manage_embark()
     local elapsed = now - last_update_time
 
 
-    -- Case A: Neither cargo nor passengers
     ----------------------------------------------------------------------------
 if cargo_total == 0 and passengers_total == 0 then
     if not fuel_loading and not fuel_done then
@@ -971,7 +937,6 @@ if cargo_total == 0 and passengers_total == 0 then
     return
 end
 
-    -- Case B: No cargo (but passengers exist)
     ----------------------------------------------------------------------------
 if cargo_total == 0 then
 if fuel_first and not fuel_done then return end
@@ -1075,7 +1040,6 @@ if fuel_first and not fuel_done then return end
     return
 end
 
-    -- Case C: No passengers (but cargo exists)
     ----------------------------------------------------------------------------
    if passengers_total == 0 then
    if fuel_first and not fuel_done then return end
@@ -1170,8 +1134,6 @@ end
 end
 
 
--- Case D: Both cargo and passengers present (mixed)
-----------------------------------------------------------------------------
 if fuel_first and not fuel_done then
     start_fuel_loading()
     manage_fuel_loading()
@@ -1549,9 +1511,7 @@ function manage_disembark()
 
     local now = os.clock()
     local elapsed = now - disembark_last_update_time
-	--local cargo_time_per_unit = random_range(cargo_time_per_unit_min, cargo_time_per_unit_max)
 
-    -- Cargo management
     ----------------------------------------------------------------------------
     if cargo_total > 0 then
         if cargo_unloaded < cargo_total then
@@ -1589,7 +1549,6 @@ function manage_disembark()
         cargo_unloaded = 0
     end
 
-    -- Passenger management with a delay
     ----------------------------------------------------------------------------
     if passengers_total > 0 then
         if cargo_total > 0 and now < start_disembarkation_pax_delay then
@@ -1650,7 +1609,6 @@ function manage_disembark()
         passengers_unloaded = 0
     end
 	
-    -- End of disembark management: if for each category the total is 0 or fully unloaded, finish phase
     ----------------------------------------------------------------------------
     if (cargo_total == 0 or cargo_unloaded >= cargo_total) and 
        (passengers_total == 0 or passengers_unloaded >= passengers_total) then
@@ -1672,8 +1630,7 @@ function manage_disembark()
 		People1_chg = true
 		show_Chocks = false
 		Chocks_chg  = true
-		-- Keep stairs/jetway during turnaround and night_stop sequences.
-		-- They will be retracted at end of embarkation (PAX boarding done).
+
 		if slm_sequence_mode ~= "turnaround" and slm_sequence_mode ~= "night_stop" then
 			show_StairsXPJ  = false
 			StairsXPJ_chg   = true
@@ -1684,7 +1641,7 @@ function manage_disembark()
 end
 
 --------------------------------------------------------------------------------
--- FUEL MANAGEMENT & END OF OPERATIONS
+-- FUEL
 --------------------------------------------------------------------------------
 
 function start_fuel_loading()
@@ -1834,7 +1791,6 @@ function check_if_all_done()
                 local cargo_actual = cargo_loaded or 0
                 local fuel_actual  = fuel_loaded or 0
 
-                -- Weights-first: use SimBrief weights-derived pax weight (no loadsheet fallback to avoid mismatches)
                 local pax_w = SB_pax_weight or 0
 
                 local pax_mass = pax_actual * pax_w
@@ -1843,7 +1799,6 @@ function check_if_all_done()
                 SLM_real_cargo      = cargo_actual
                 SLM_real_fuel_block = fuel_actual
 
-                -- Payload actual = Pax mass (already calculated) + Cargo actual (bags + freight already included in cargo)
                 SLM_real_payload    = pax_mass + cargo_actual
 
                 loadsheet_ready = true
@@ -1869,7 +1824,7 @@ function check_if_all_done()
 end
 
 --------------------------------------------------------------------------------
--- TURNAROUND TIMER FUNCTIONS
+-- CREW BRIEFING
 --------------------------------------------------------------------------------
 
 function start_crew_briefing()
@@ -1877,7 +1832,6 @@ function start_crew_briefing()
     crew_briefing_done       = false
     crew_briefing_start_time = os.clock()
     crew_briefing_duration   = random_range(crew_briefing_time_min, crew_briefing_time_max)
-    -- Deploy ground crew and stairs/jetway so crew can board immediately
     show_People1 = true;  People1_chg = true
     show_People2 = true;  People2_chg = true
     show_People3 = true;  People3_chg = true
@@ -1918,6 +1872,10 @@ function manage_crew_briefing()
     end
 end
 
+--------------------------------------------------------------------------------
+-- CATERING
+--------------------------------------------------------------------------------
+
 function start_catering()
     catering_started    = true
     catering_done       = false
@@ -1952,6 +1910,10 @@ function manage_catering()
     end
 end
 
+--------------------------------------------------------------------------------
+-- CLEANING
+--------------------------------------------------------------------------------
+
 function start_cleaning()
     cleaning_started    = true
     cleaning_done       = false
@@ -1985,6 +1947,10 @@ function manage_cleaning()
         estimated_time_cleaning = cleaning_duration - elapsed
     end
 end
+
+--------------------------------------------------------------------------------
+-- CREW DEPLANE
+--------------------------------------------------------------------------------
 
 function start_crew_deplane()
     crew_deplane_started    = true
@@ -2023,7 +1989,7 @@ function slm_turnaround_check_simbrief()
     end
     local new_ts = string.match(body, "<time_generated>(.-)</time_generated>") or ""
     if new_ts ~= "" and new_ts ~= (last_ofp_timestamp or "") then
-        -- New plan detected: import, start crew & catering
+
         fetch_simbrief_data(simbrief_id)
         slm_new_plan_imported   = true
         slm_auto_import_message = string.format(
@@ -2041,14 +2007,14 @@ function slm_turnaround_check_simbrief()
         end
         start_catering()
     else
-        -- Same plan: block and wait for user to generate next flight
+
         slm_auto_import_message = "No new flight plan detected.\nPlease generate your next flight on SimBrief,\nthen click 'Load SimBrief Data'."
         slm_sequence_phase = "waiting_for_new_plan"
     end
 end
 
 --------------------------------------------------------------------------------
--- SEQUENCE FUNCTIONS
+-- TURNAROUND ET SEQUENCES
 --------------------------------------------------------------------------------
 
 function start_departure_sequence()
@@ -2084,7 +2050,6 @@ end
 function manage_sequence()
     if not slm_sequence_mode then return end
 
-    -- DEPARTURE
     if slm_sequence_mode == "departure" then
         if slm_sequence_phase == "crew_and_catering"
            and crew_briefing_done and catering_done then
@@ -2093,7 +2058,6 @@ function manage_sequence()
             start_embarkation()
         end
 
-    -- TURNAROUND
     elseif slm_sequence_mode == "turnaround" then
         if slm_sequence_phase == "arrival_ops" and disembark_done then
             slm_sequence_phase = "cleaning"
@@ -2103,8 +2067,8 @@ function manage_sequence()
         elseif slm_sequence_phase == "simbrief_check" and not slm_auto_import_done then
             slm_auto_import_done = true
             slm_turnaround_check_simbrief()
-            -- slm_turnaround_check_simbrief() sets slm_sequence_phase to
-            -- "crew_and_catering" (new plan found) or "waiting_for_new_plan" (same plan)
+
+
         elseif slm_sequence_phase == "crew_and_catering"
                and crew_briefing_done and catering_done then
             slm_sequence_mode  = nil
@@ -2112,7 +2076,6 @@ function manage_sequence()
             start_embarkation()
         end
 
-    -- NIGHT STOP
     elseif slm_sequence_mode == "night_stop" then
         if slm_sequence_phase == "arrival_ops" and disembark_done then
             slm_sequence_phase = "cleaning"
@@ -2125,7 +2088,7 @@ function manage_sequence()
             Chocks_chg  = true
             show_Cones  = true
             Cones_chg   = true
-            -- Crew has deplaned: retract stairs (no departure follows in night_stop)
+
             show_StairsXPJ  = false
             StairsXPJ_chg   = true
             show_StairsXPJ2 = false
@@ -2250,7 +2213,6 @@ function reset_loads()
 	SLM_ls_diff_fuel_block[0] = 0
 	SLM_ls_diff_payload[0]    = 0
 
-	-- Sequence
 	slm_sequence_mode       = nil
 	slm_sequence_phase      = nil
 	slm_last_sequence_mode  = nil
@@ -2258,14 +2220,12 @@ function reset_loads()
 	slm_auto_import_message = nil
 	slm_new_plan_imported   = false
 
-	-- Crew Briefing
 	crew_briefing_started    = false
 	crew_briefing_done       = false
 	crew_briefing_start_time = nil
 	crew_briefing_duration   = nil
 	estimated_time_crew      = nil
 
-	-- Catering
 	catering_started        = false
 	catering_done           = false
 	catering_start_time     = nil
@@ -2274,7 +2234,6 @@ function reset_loads()
 	show_Catering = false
 	Catering_chg  = true
 
-	-- Cleaning
 	cleaning_started        = false
 	cleaning_done           = false
 	cleaning_start_time     = nil
@@ -2283,13 +2242,11 @@ function reset_loads()
 	show_Cleaning = false
 	Cleaning_chg  = true
 
-	-- Crew Deplane
 	crew_deplane_started    = false
 	crew_deplane_done       = false
 	crew_deplane_start_time = nil
 	crew_deplane_duration   = nil
 
-	-- Mode (passed_1000ft = false already set above)
 	last_ofp_timestamp = nil
 	save_user_settings()
 
@@ -2372,7 +2329,6 @@ function update_remaining_time()
 			estimated_time_cargo = time_cargo
 			estimated_time_pax   = time_pax
 
-            -- Fuel
             if fuel_total > 0 and fuel_time_per_unit then
 				local fuel_remaining = math.abs((fuel_total or 0) - (fuel_loaded or 0))
 				estimated_time_fuel = fuel_remaining * (fuel_time_per_unit or 0)
@@ -2401,7 +2357,6 @@ end
 --------------------------------------------------------------------------------
 function update_slm_datarefs()
 
-    -- GLOBAL STATE
     if embark_started then
         SLM_state[0] = 1
     elseif disembark_started then
@@ -2440,7 +2395,6 @@ function update_slm_datarefs()
         and math.min(1, (os.clock() - (cleaning_start_time or os.clock())) / cleaning_duration) or 0
     SLM_loadsheet_ready[0] = loadsheet_ready and 1 or 0
 
-    -- LOCATION / OPTIONS
     if selected_location_group == "remote" then
         SLM_location_mode[0] = 0
     elseif selected_location_group == "terminal" then
@@ -2451,12 +2405,10 @@ function update_slm_datarefs()
 
     SLM_aircraft_own_stairs[0] = aircraft_has_own_stairs and 1 or 0
 
-    -- TOTALS
     SLM_pax_total[0]   = passengers_total or 0
     SLM_cargo_total[0] = cargo_total or 0
     SLM_fuel_total[0]  = fuel_total or 0
 
-    -- DONE
 	if embark_started then
 		SLM_pax_done[0] = passengers_loaded or 0
 	elseif disembark_started then
@@ -2489,7 +2441,6 @@ function update_slm_datarefs()
 		SLM_cargo_done[0] = 0
 	end
 
-    -- FRACTIONS
     SLM_pax_fraction[0] =
         (passengers_total > 0) and (SLM_pax_done[0] / passengers_total) or 0
 
@@ -2499,7 +2450,6 @@ function update_slm_datarefs()
     SLM_fuel_fraction[0] =
         (fuel_total > 0) and (fuel_loaded / fuel_total) or 0
 
-    -- ETA
     SLM_eta_pax[0]   = estimated_time_pax   or 0
     SLM_eta_cargo[0] = estimated_time_cargo or 0
     SLM_eta_fuel[0]  = estimated_time_fuel  or 0
@@ -2510,7 +2460,6 @@ function update_slm_datarefs()
     if estimated_time_fuel  then eta_total = eta_total + estimated_time_fuel end
     SLM_eta_total[0] = eta_total
 
-    -- STATES
     if passengers_total == 0 or not pax_load_started then
         SLM_pax_state[0] = 0
     elseif SLM_pax_done[0] >= passengers_total then
@@ -2535,7 +2484,6 @@ function update_slm_datarefs()
         SLM_fuel_state[0] = 1
     end
 
-    -- LOADSHEET ACTUAL
     if loadsheet_ready then
         SLM_ls_actual_pax[0]        = SLM_real_pax or 0
         SLM_ls_actual_cargo[0]      = SLM_real_cargo or 0
@@ -2548,7 +2496,6 @@ function update_slm_datarefs()
         SLM_ls_actual_payload[0]    = 0
     end
 
-    -- LOADSHEET DIFF (Actual - SimBrief)
     if loadsheet_ready and simbrief_data_loaded and SLM_Loadsheet_Data then
         SLM_ls_diff_pax[0] =
             (SLM_real_pax or 0) - (SB_pax_count or 0)
@@ -2570,7 +2517,7 @@ function update_slm_datarefs()
 end
 
 --------------------------------------------------------------------------------
--- Flight Times (UTC)
+-- DETECTION DES TEMPS DE VOL
 --------------------------------------------------------------------------------
 function timestamp_to_utc_hhmmz(epoch)
     if epoch == 0 then return "--:--Z" end
@@ -2612,7 +2559,7 @@ function detect_takeoff_and_landing()
 end
 
 --------------------------------------------------------------------------------
--- PRESET VALUES auto-filled from apply_*_timings()
+-- PRESETS TIMING SNAPSHOT
 --------------------------------------------------------------------------------
 local preset_values = {}
 
@@ -2751,14 +2698,8 @@ function Ko_fi()
 end
 
 --------------------------------------------------------------------------------
--- SEQUENCE UI HELPERS
+-- INTERFACE IMGUI HELPERS
 --------------------------------------------------------------------------------
-
--- Renders a single step in the progressive sequence display.
--- status: "done" | "active" | "pending"
--- frac: 0..1 progress fraction (used when active)
--- eta_seconds: remaining seconds (used when active, optional)
--- message: optional extra text shown below the bar when active
 function slm_draw_step(label, status, frac, eta_seconds, message)
     local COL = imgui.constant.Col
     if status == "done" then
@@ -2792,12 +2733,9 @@ function slm_draw_step(label, status, frac, eta_seconds, message)
     end
 end
 
--- Draws the full progressive sequence step list.
--- Replaces the flat progress bar section.
 function slm_draw_sequence_steps()
     local mode = slm_last_sequence_mode
-    -- If no sequence ever started but direct ops are running (X-Plane command),
-    -- derive a temporary mode from the current operation.
+
     if not mode then
         if embark_started or embark_done then
             mode = "departure"
@@ -2814,17 +2752,13 @@ function slm_draw_sequence_steps()
         imgui.ProgressBar(frac, w, h, "")
     end
 
-    -- =====================================================================
-    -- ARRIVAL OPS: Passenger Deboarding + Cargo Unloading
-    -- (Turnaround + Night Stop)
-    -- =====================================================================
     if mode == "turnaround" or mode == "night_stop" then
         if disembark_done then
             slm_draw_step("Passenger Deboarding", "done")
             imgui.NewLine()
             slm_draw_step("Cargo Unloading",      "done")
         elseif disembark_started then
-            -- PAX deboarding
+
             local pax_cur = passengers_total - passengers_unloaded
             local frac_pax = (passengers_total > 0) and math.min(1, pax_cur / passengers_total) or 0
             imgui.TextUnformatted(">> Passenger Deboarding")
@@ -2836,7 +2770,7 @@ function slm_draw_sequence_steps()
                 imgui.TextUnformatted(string.format("   Estimated: %d minute%s", mins, mins > 1 and "s" or ""))
             end
             imgui.NewLine()
-            -- Cargo unloading
+
             local cargo_cur = cargo_total - cargo_unloaded
             local frac_cargo = (cargo_total > 0) and math.min(1, cargo_cur / cargo_total) or 0
             imgui.TextUnformatted(">> Cargo Unloading")
@@ -2854,9 +2788,6 @@ function slm_draw_sequence_steps()
         imgui.NewLine()
     end
 
-    -- =====================================================================
-    -- CLEANING  (Turnaround + Night Stop)
-    -- =====================================================================
     if mode == "turnaround" or mode == "night_stop" then
         if cleaning_done then
             slm_draw_step("Cabin Cleaning", "done")
@@ -2870,9 +2801,6 @@ function slm_draw_sequence_steps()
         imgui.NewLine()
     end
 
-    -- =====================================================================
-    -- NIGHT STOP: Crew Deplane  →  END
-    -- =====================================================================
     if mode == "night_stop" then
         if crew_deplane_done then
             slm_draw_step("Crew Deplane", "done")
@@ -2886,9 +2814,6 @@ function slm_draw_sequence_steps()
         return  -- Night Stop ends here
     end
 
-    -- =====================================================================
-    -- FLIGHT PLAN UPDATE  (Turnaround only)
-    -- =====================================================================
     if mode == "turnaround" then
         local fp_status
         if slm_new_plan_imported then
@@ -2910,9 +2835,6 @@ function slm_draw_sequence_steps()
         imgui.NewLine()
     end
 
-    -- =====================================================================
-    -- CREW BRIEFING  (Departure + Turnaround)  — parallel with Catering
-    -- =====================================================================
     if crew_briefing_done then
         slm_draw_step("Crew Briefing", "done")
     elseif crew_briefing_started then
@@ -2925,9 +2847,6 @@ function slm_draw_sequence_steps()
     end
     imgui.NewLine()
 
-    -- =====================================================================
-    -- CATERING  (Departure + Turnaround)  — parallel with Crew Briefing
-    -- =====================================================================
     if catering_done then
         slm_draw_step("Catering", "done")
     elseif catering_started then
@@ -2939,9 +2858,6 @@ function slm_draw_sequence_steps()
     end
     imgui.NewLine()
 
-    -- =====================================================================
-    -- EMBARKATION  — Fuel / PAX / Cargo (order follows fuel_first flag)
-    -- =====================================================================
 
     local function draw_embark_fuel()
         local fuel_done_now = embark_done or (embark_started and fuel_done)
@@ -3070,7 +2986,7 @@ function slm_draw_sequence_steps()
 end
 
 --------------------------------------------------------------------------------
--- IMGUi
+-- INTERFACE IMGUI
 --------------------------------------------------------------------------------
 function build_embark_window(wnd, x, y)
     if imgui.CollapsingHeader("Settings") then
@@ -3248,7 +3164,6 @@ if timing_preset == "custom" then
 		preset_values.veryfast.disembark_cargo_time_per_kg_max
 	))
 
-    -- Fuel
     c, v = imgui.InputFloat("Fuel time per kg", custom_fuel_time_per_kg, 0, 0, "%0.3f")
     if c then custom_fuel_time_per_kg = v changed = true end
     imgui.SameLine()
@@ -3351,7 +3266,6 @@ end
 	imgui.PopStyleColor()
 
 
-   
     imgui.Separator()
 	imgui.NewLine()
 	if embark_started or disembark_started then
@@ -3570,7 +3484,7 @@ end
 
 
 --------------------------------------------------------------------------------
--- MAIN
+-- BOUCLES PRINCIPALES
 --------------------------------------------------------------------------------
 add_macro("Open SimLoad Manager",
           "if embark_wnd == nil then create_embark_window() else close_embark_window() end")
@@ -3578,7 +3492,6 @@ do_every_frame("manage_embark()")
 do_every_frame("manage_disembark()")
 do_every_frame("update_remaining_time()")
 do_sometimes("slm_capture_initial_fuel_once()")
-
 
 
 create_command("FlyWithLua/SimloadManager/SimloadManagerToggle",
@@ -3640,7 +3553,6 @@ create_command(
 )
 			   
 
-
 function check_simbrief_trigger()
     if trigger_simbrief_import then
         trigger_simbrief_import = false
@@ -3677,7 +3589,6 @@ do_every_frame("manage_crew_briefing()")
 do_every_frame("manage_catering()")
 do_every_frame("manage_cleaning()")
 do_every_frame("manage_crew_deplane()")
-
 
 
 load_user_settings()

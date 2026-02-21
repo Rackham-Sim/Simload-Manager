@@ -76,12 +76,6 @@ function draw_loadsheet_window(wnd, x, y)
     local c_title = 0xFFFFA500
     local c_text  = 0xFFFFFFFF
 	
-	local function diff_color(pct)
-	if math.abs(pct) <= 5 then return 0xFF00FF00 end
-	return 0xFF00A5FF
-    end
-
-
     --------------------------------------------------------
     -- Header
     --------------------------------------------------------
