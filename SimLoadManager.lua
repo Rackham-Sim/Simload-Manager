@@ -911,6 +911,18 @@ function start_embarkation()
     last_update_time = start_time
     pax_load_started = false
     cargo_start_reference_time = os.clock()
+    -- Deploy stairs/jetway immediately so crew can board before passengers
+    if selected_location_group == "remote" or selected_location_group == "terminal" then
+        if not aircraft_has_own_stairs then
+            show_StairsXPJ        = true
+            StairsXPJ_chg         = true
+            show_StairsXPJ2       = true
+            StairsXPJ2_chg        = true
+            option_StairsXPJ_override = true
+        end
+    elseif selected_location_group == "jetway" then
+        command_once("sim/ground_ops/jetway")
+    end
     init_sounds()
 end
 
@@ -981,8 +993,6 @@ if fuel_first and not fuel_done then return end
 			end
             show_Bus = true
             Bus_chg = true
-        elseif selected_location_group == "jetway" and not fuel_first then
-            command_once("sim/ground_ops/jetway")
         elseif selected_location_group == "terminal" then
 			if not aircraft_has_own_stairs then
 				show_StairsXPJ  = true
@@ -998,7 +1008,6 @@ if fuel_first and not fuel_done then return end
 				option_StairsXPJ_override = false
 			end
             boarding_from_the_terminal = true
-            show_Pax = true
             show_Pax = true
             Pax_chg = true
         end
@@ -1107,8 +1116,6 @@ end
 				StairsXPJ2_chg  = true
 				option_StairsXPJ_override = false
 			end
-        elseif selected_location_group == "jetway" and not fuel_first then
-            command_once("sim/ground_ops/jetway")
         elseif selected_location_group == "terminal"  then
 			if not aircraft_has_own_stairs then
 				show_StairsXPJ  = true
@@ -1211,8 +1218,6 @@ if cargo_loaded == 0 and not sound_played.start_loading_cargo then
 			StairsXPJ2_chg  = true
 			option_StairsXPJ_override = false
 		end
-    elseif selected_location_group == "jetway" and not fuel_first then
-        command_once("sim/ground_ops/jetway")
     elseif selected_location_group == "terminal" then
 		if not aircraft_has_own_stairs then
 			show_StairsXPJ  = true
@@ -2796,6 +2801,7 @@ function slm_draw_sequence_steps()
     if mode == "turnaround" or mode == "night_stop" then
         if disembark_done then
             slm_draw_step("Passenger Deboarding", "done")
+            imgui.NewLine()
             slm_draw_step("Cargo Unloading",      "done")
         elseif disembark_started then
             -- PAX deboarding
