@@ -1877,7 +1877,11 @@ function start_crew_briefing()
     crew_briefing_done       = false
     crew_briefing_start_time = os.clock()
     crew_briefing_duration   = random_range(crew_briefing_time_min, crew_briefing_time_max)
-    -- Deploy stairs/jetway so crew can board immediately
+    -- Deploy ground crew and stairs/jetway so crew can board immediately
+    show_People1 = true;  People1_chg = true
+    show_People2 = true;  People2_chg = true
+    show_People3 = true;  People3_chg = true
+    show_People4 = true;  People4_chg = true
     if selected_location_group == "remote" or selected_location_group == "terminal" then
         if not aircraft_has_own_stairs then
             show_StairsXPJ        = true
