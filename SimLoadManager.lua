@@ -911,7 +911,8 @@ function start_embarkation()
     last_update_time = start_time
     pax_load_started = false
     cargo_start_reference_time = os.clock()
-    -- Deploy stairs/jetway immediately so crew can board before passengers
+    -- Deploy stairs/jetway as fallback when embarkation is started directly
+    -- (without a crew briefing sequence; jetway guard avoids double-toggle)
     if selected_location_group == "remote" or selected_location_group == "terminal" then
         if not aircraft_has_own_stairs then
             show_StairsXPJ        = true
@@ -921,7 +922,10 @@ function start_embarkation()
             option_StairsXPJ_override = true
         end
     elseif selected_location_group == "jetway" then
-        command_once("sim/ground_ops/jetway")
+        -- Only call if crew briefing did not already open the jetway
+        if not crew_briefing_done and not crew_briefing_started then
+            command_once("sim/ground_ops/jetway")
+        end
     end
     init_sounds()
 end
@@ -1873,6 +1877,18 @@ function start_crew_briefing()
     crew_briefing_done       = false
     crew_briefing_start_time = os.clock()
     crew_briefing_duration   = random_range(crew_briefing_time_min, crew_briefing_time_max)
+    -- Deploy stairs/jetway so crew can board immediately
+    if selected_location_group == "remote" or selected_location_group == "terminal" then
+        if not aircraft_has_own_stairs then
+            show_StairsXPJ        = true
+            StairsXPJ_chg         = true
+            show_StairsXPJ2       = true
+            StairsXPJ2_chg        = true
+            option_StairsXPJ_override = true
+        end
+    elseif selected_location_group == "jetway" then
+        command_once("sim/ground_ops/jetway")
+    end
     if sounds.briefing_loop.id and sounds.briefing_loop.id ~= 0 then
         briefing_loop_playing = true
         let_sound_loop(sounds.briefing_loop.id, true)
