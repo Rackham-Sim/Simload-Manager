@@ -3484,6 +3484,35 @@ end
 
 
 --------------------------------------------------------------------------------
+-- COMMANDES X-PLANE — WRAPPERS
+--------------------------------------------------------------------------------
+local function slm_is_busy()
+    return embark_started or disembark_started
+        or crew_briefing_started or catering_started
+        or cleaning_started or crew_deplane_started
+        or slm_sequence_mode ~= nil
+end
+
+function slm_cmd_start_loading()
+    if not passed_1000ft and SLM_Loadsheet_Data ~= nil and not slm_is_busy() then
+        start_departure_sequence()
+    end
+end
+
+function slm_cmd_start_turnaround()
+    if passed_1000ft and SLM_Loadsheet_Data ~= nil and not slm_is_busy() then
+        start_turnaround()
+    end
+end
+
+function slm_cmd_start_ron()
+    if passed_1000ft and SLM_Loadsheet_Data ~= nil and not slm_is_busy() then
+        start_night_stop()
+    end
+end
+
+
+--------------------------------------------------------------------------------
 -- BOUCLES PRINCIPALES
 --------------------------------------------------------------------------------
 add_macro("Open SimLoad Manager",
@@ -3501,14 +3530,20 @@ create_command("FlyWithLua/SimloadManager/SimloadManagerToggle",
                "")
 			   
 create_command("FlyWithLua/SimloadManager/StartLoading",
-               "Start embarkation",
-               "start_embarkation()",
+               "Start loading (Departure mode only)",
+               "slm_cmd_start_loading()",
                "",
                "")
 
-create_command("FlyWithLua/SimloadManager/StartUnloading",
-               "Start disembarkation",
-               "start_disembarkation()",
+create_command("FlyWithLua/SimloadManager/StartTurnaround",
+               "Start turnaround (Arrival mode only)",
+               "slm_cmd_start_turnaround()",
+               "",
+               "")
+
+create_command("FlyWithLua/SimloadManager/StartRON",
+               "Start night stop / RON (Arrival mode only)",
+               "slm_cmd_start_ron()",
                "",
                "")
 
