@@ -53,6 +53,8 @@ local load_controllers = {
 	"Mark",
 	"Othmar",
 	"Pea",
+	"Christy.D",
+	"Guilb'Air",
 	"Sydney.M"
 }
 
