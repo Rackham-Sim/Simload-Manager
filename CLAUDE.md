@@ -8,7 +8,7 @@ SimLoad Manager (SLM) is an X-Plane 12 flight simulator plugin written in Lua fo
 
 No build step is required — Lua scripts are interpreted directly by FlyWithLua at X-Plane runtime.
 
-Your Onlyplace tu work is : C:\Users\Etien\Documents\SITES&PLUGINS\plugins\Simloadmanager\WIP\GITHUB
+Your only place tu work is : C:\Users\Etien\Documents\SITES&PLUGINS\plugins\Simloadmanager\WIP\GITHUB
 
 ## Running & Testing
 
