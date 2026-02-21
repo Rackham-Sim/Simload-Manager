@@ -207,8 +207,7 @@ dataref("beacon", "sim/cockpit/electrical/beacon_lights_on", "readonly")
 dataref("onground", "sim/flightmodel/failures/onground_any", "readonly")
 dataref("zulu_hours", "sim/cockpit2/clock_timer/zulu_time_hours", "readonly")
 dataref("zulu_minutes", "sim/cockpit2/clock_timer/zulu_time_minutes", "readonly")
-dataref("gear_on_ground", "sim/flightmodel2/gear/on_ground", "readonly", 10)
-dataref("y_agl",         "sim/flightmodel/position/y_agl",           "readonly")
+dataref("y_agl", "sim/flightmodel/position/y_agl", "readonly")
 dataref("sim_fuel_total_kg", "sim/flightmodel/weight/m_fuel_total", "readonly")
 
 autodgs_on_ground = 0
@@ -2546,11 +2545,7 @@ function detect_takeoff_and_landing()
         passed_500ft = false
     end
 
-    if not passed_500ft
-        and gear_on_ground[0] == 0
-        and gear_on_ground[1] == 0
-        and gear_on_ground[2] == 0
-        and y_agl > 152 then
+    if not passed_500ft and onground == 0 and y_agl > 152 then
         passed_500ft = true
     end
 
