@@ -2875,7 +2875,7 @@ function slm_draw_sequence_steps()
         local frac = (crew_briefing_duration and crew_briefing_duration > 0) and
             math.min(1.0, (os.clock() - crew_briefing_start_time) / crew_briefing_duration) or 0
         slm_draw_step("Crew Briefing", "active", frac, estimated_time_crew,
-            "Crew is arriving and conducting briefing.\nGood time to review your flight plan!")
+            "Crew is arriving and conducting briefing.\nNow is the perfect time to review your flight plan and complete the aircraft weights!")
     else
         slm_draw_step("Crew Briefing", "pending")
     end

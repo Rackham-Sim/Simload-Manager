@@ -5,7 +5,9 @@
       "Bash(git commit:*)",
       "Bash(wc:*)",
       "Bash(python:*)",
-      "Bash(echo No settings found:*)"
+      "Bash(echo No settings found:*)",
+      "Bash(git:*)",
+      "Bash(cd C:\\\\Users\\\\Etien\\\\Documents\\\\SITES&PLUGINS\\\\plugins\\\\Simloadmanager\\\\WIP\\\\GITHUB:*)"
     ]
   }
 }
