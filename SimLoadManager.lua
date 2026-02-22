@@ -14,7 +14,7 @@ end
 --------------------------------------------------------------------------------
 SLM_VERSION = "3.0"
 
-local slm_dev_mode = false   -- set to true to show [DEV] button in UI
+local slm_dev_mode = true   -- set to true to show [DEV] button in UI
 
 local SLM_UPDATE_URL =
     "http://raw.githack.com/Rackham-Sim/Simload-Manager/main/version.txt"
@@ -1967,13 +1967,15 @@ function manage_crew_deplane()
     end
 end
 
+function slm_on_arrival()
+    landing_time             = current_zulu_hhmm()
+    slm_initial_fuel_kg      = sim_fuel_total_kg
+    slm_initial_fuel_captured = true
+end
+
 function slm_force_arrival_mode()
     passed_500ft = true
-    landing_time  = current_zulu_hhmm()
-    SLM_Loadsheet_Data   = nil
-    simbrief_data_loaded = false
-    loadsheet_ready      = false
-    -- Intentionally no save_user_settings() — temporary, lost on X-Plane reload
+    slm_on_arrival()
     logMsg("[SLM DEV] Forced arrival mode")
 end
 
@@ -2585,7 +2587,7 @@ function detect_takeoff_and_landing()
 
     if onground_prev == 0 and onground == 1 and landing_time == "--:--Z" then
         if passed_500ft then
-            landing_time = current_zulu_hhmm()
+            slm_on_arrival()
         end
     end
 
@@ -2875,7 +2877,7 @@ function slm_draw_sequence_steps()
         local frac = (crew_briefing_duration and crew_briefing_duration > 0) and
             math.min(1.0, (os.clock() - crew_briefing_start_time) / crew_briefing_duration) or 0
         slm_draw_step("Crew Briefing", "active", frac, estimated_time_crew,
-            "Crew is arriving and conducting briefing.\nNow is the perfect time to review your flight plan and complete the aircraft weights!")
+            "Crew is arriving and conducting briefing.\nTime to review your flight plan and set weights!")
     else
         slm_draw_step("Crew Briefing", "pending")
     end
