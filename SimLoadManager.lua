@@ -1970,6 +1970,9 @@ end
 function slm_force_arrival_mode()
     passed_500ft = true
     landing_time  = current_zulu_hhmm()
+    SLM_Loadsheet_Data   = nil
+    simbrief_data_loaded = false
+    loadsheet_ready      = false
     -- Intentionally no save_user_settings() — temporary, lost on X-Plane reload
     logMsg("[SLM DEV] Forced arrival mode")
 end
@@ -2573,6 +2576,9 @@ function detect_takeoff_and_landing()
 
     if not passed_500ft and onground == 0 and y_agl > 305 then
         passed_500ft = true
+        SLM_Loadsheet_Data   = nil
+        simbrief_data_loaded = false
+        loadsheet_ready      = false
     end
 
     if onground_prev == 0 and onground == 1 and landing_time == "--:--Z" then
