@@ -2046,6 +2046,7 @@ function start_turnaround()
     catering_started        = false
     cleaning_done           = false
     cleaning_started        = false
+    slm_initial_fuel_kg     = sim_fuel_total_kg  -- fresh snapshot: fuel animation starts from actual remaining
     start_disembarkation()
 end
 
@@ -2058,6 +2059,7 @@ function start_night_stop()
     crew_deplane_done      = false
     crew_deplane_started   = false
     crew_deplane_start_time = nil
+    slm_initial_fuel_kg    = sim_fuel_total_kg  -- fresh snapshot: fuel animation starts from actual remaining
     start_disembarkation()
 end
 
@@ -3032,19 +3034,16 @@ function build_embark_window(wnd, x, y)
         end
 
         imgui.Spacing()
+        local busy = embark_started or disembark_started
+            or crew_briefing_started or catering_started
+            or cleaning_started or crew_deplane_started
+            or slm_sequence_mode ~= nil
+        if busy then imgui.BeginDisabled() end
+
         imgui.TextUnformatted("Cargo Unit System:")
-
-        if simbrief_data_loaded or embark_started or disembark_started then
-            imgui.BeginDisabled()
-        end
-
         local changed_unit_kg = imgui.RadioButton("Kilograms (kg)", unit_system == "kg")
         imgui.SameLine()
         local changed_unit_lbs = imgui.RadioButton("Pounds (lbs)", unit_system == "lbs")
-
-       if simbrief_data_loaded or embark_started or disembark_started then
-            imgui.EndDisabled()
-        end
 
         if changed_unit_kg then
             unit_system = "kg"
@@ -3055,7 +3054,6 @@ function build_embark_window(wnd, x, y)
         end
 
         imgui.NewLine()
-	if embark_started or disembark_started then imgui.BeginDisabled() end
 		local changed_fuel_first, new_fuel_first = imgui.Checkbox("Fuel First", fuel_first)
 		if changed_fuel_first then
 			fuel_first = new_fuel_first
@@ -3066,14 +3064,9 @@ function build_embark_window(wnd, x, y)
 			skip_crew_briefing = new_skip
 			save_user_settings()
 		end
-	if embark_started or disembark_started then imgui.EndDisabled() end
 		imgui.NewLine()
-		
-       imgui.TextUnformatted("Timing preset:")
 
-    if embark_started or disembark_started then
-        imgui.BeginDisabled()
-    end
+       imgui.TextUnformatted("Timing preset:")
 
     local selected_realistic = timing_preset == "realistic"
     local selected_fast = timing_preset == "fast"
@@ -3258,10 +3251,8 @@ if timing_preset == "custom" then
     end
 end
 
-    if embark_started or disembark_started then
-        imgui.EndDisabled()
-    end
-	
+        if busy then imgui.EndDisabled() end
+
 	imgui.NewLine()
 
 	if is_muted then imgui.BeginDisabled() end
