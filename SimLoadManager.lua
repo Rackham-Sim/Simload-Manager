@@ -2760,7 +2760,7 @@ function slm_draw_step(label, status, frac, eta_seconds, message)
         end
     else -- pending
         imgui.PushStyleColor(COL.Text, 0xFF888888)
-        imgui.TextUnformatted("  " .. label)
+        imgui.TextUnformatted("[Pending] " .. label)
         imgui.PopStyleColor()
     end
 end
@@ -3356,7 +3356,7 @@ end
 	imgui.Separator()
 
 	-- Mode display
-	imgui.PushStyleColor(imgui.constant.Col.Text, passed_500ft and 0xFF00A5FF or 0xFF00FF00)
+	imgui.PushStyleColor(imgui.constant.Col.Text, 0xFFE6D8AD)
 	imgui.TextUnformatted(passed_500ft and "Mode: Arrival" or "Mode: Departure")
 	imgui.PopStyleColor()
 
