@@ -870,7 +870,12 @@ function start_embarkation()
     end
     cargo_time_per_unit = random_range(cargo_time_per_unit_min, cargo_time_per_unit_max)
 	local baseline = slm_initial_fuel_kg or sim_fuel_total_kg or 0
-	fuel_loaded = math.floor(baseline)
+	fuel_loaded        = math.floor(baseline)
+	fuel_done          = false
+	fuel_loading       = false
+	fuel_wait_finished = false
+	fuel_done_time     = nil
+	fuel_last_update_time = nil
 
 	if fuel_total > 0 and fuel_loaded > fuel_total then
 		slm_defuel_performed = true
