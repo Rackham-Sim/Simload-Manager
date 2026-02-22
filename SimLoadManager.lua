@@ -1789,7 +1789,7 @@ function check_if_all_done()
 
                 local pax_actual   = passengers_loaded or 0
                 local cargo_actual = cargo_loaded or 0
-                local fuel_actual  = fuel_loaded or 0
+                local fuel_actual  = sim_fuel_total_kg or 0
 
                 local pax_w = SB_pax_weight or 0
 
