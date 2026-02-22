@@ -2032,11 +2032,17 @@ function start_departure_sequence()
 end
 
 function start_turnaround()
-    slm_sequence_mode       = "turnaround"
+	slm_sequence_mode       = "turnaround"
     slm_last_sequence_mode  = "turnaround"
     slm_sequence_phase      = "arrival_ops"
     slm_auto_import_done    = false
     slm_auto_import_message = nil
+    crew_briefing_done      = false
+    crew_briefing_started   = false
+    catering_done           = false
+    catering_started        = false
+    cleaning_done           = false
+    cleaning_started        = false
     start_disembarkation()
 end
 
@@ -2044,6 +2050,11 @@ function start_night_stop()
     slm_sequence_mode      = "night_stop"
     slm_last_sequence_mode = "night_stop"
     slm_sequence_phase     = "arrival_ops"
+    cleaning_done          = false
+    cleaning_started       = false
+    crew_deplane_done      = false
+    crew_deplane_started   = false
+    crew_deplane_start_time = nil
     start_disembarkation()
 end
 
@@ -2073,6 +2084,19 @@ function manage_sequence()
                and crew_briefing_done and catering_done then
             slm_sequence_mode  = nil
             slm_sequence_phase = nil
+            sound_played = {
+                start_loading_cargo         = false,
+                start_boarding_passengers   = false,
+                finished_loading_cargo      = false,
+                finished_loading_pax        = false,
+                finished_loading_all        = false,
+                start_unloading_cargo       = false,
+                start_unboarding_passengers = false,
+                finished_unloading_cargo    = false,
+                finished_unboarding_passengers = false,
+                start_fuel_loading          = false,
+                finished_fuel_loading       = false,
+            }
             start_embarkation()
         end
 
@@ -2246,7 +2270,7 @@ function reset_loads()
 	crew_deplane_done       = false
 	crew_deplane_start_time = nil
 	crew_deplane_duration   = nil
-
+	
 	last_ofp_timestamp = nil
 	save_user_settings()
 
@@ -2275,16 +2299,18 @@ function reset_loads()
     end
 
     sound_played = {
-        start_loading_cargo = false,
-        start_boarding_passengers = false,
-        finished_loading_cargo = false,
-        finished_loading_pax = false,
-        finished_loading_all = false,
+        start_loading_cargo         = false,
+        start_boarding_passengers   = false,
+        finished_loading_cargo      = false,
+        finished_loading_pax        = false,
+        finished_loading_all        = false,
+        start_unloading_cargo       = false,
         start_unboarding_passengers = false,
-        finished_unboarding_all = false,
-		start_fuel_loading = false,
-		finished_fuel_loading = false
-		}
+        finished_unloading_cargo    = false,
+        finished_unboarding_passengers = false,
+        start_fuel_loading          = false,
+        finished_fuel_loading       = false,
+    }
 	
     if cargo_loop_playing then
         cargo_loop_playing = false
@@ -2545,7 +2571,7 @@ function detect_takeoff_and_landing()
         passed_500ft = false
     end
 
-    if not passed_500ft and onground == 0 and y_agl > 152 then
+    if not passed_500ft and onground == 0 and y_agl > 305 then
         passed_500ft = true
     end
 
