@@ -4,14 +4,19 @@ setlocal enabledelayedexpansion
 :: ============================================================
 :: SimLoadManager - Build & Deploy
 :: ============================================================
-:: CONFIGURATION - Modifier cette variable selon votre installation
+:: CONFIGURATION
 :: ============================================================
-set XPLANE_SCRIPTS=C:\X-Plane 12\Resources\plugins\FlyWithLua\Scripts
+set "XPLANE_SCRIPTS=D:\X-Plane\X-Plane 12\Resources\plugins\FlyWithLua\Scripts"
+set "LUAJIT_EXE=C:\Users\Etien\Documents\SITES-PLUGINS\plugins\LuaJIT-For-Windows\bin\luajit.exe"
+set "LUAJIT_LUA=C:\Users\Etien\Documents\SITES-PLUGINS\plugins\LuaJIT-For-Windows\lua"
 :: ============================================================
 
-set SRC=%~dp0src
-set DIST=%~dp0dist
-set ERRORS=0
+:: -- Ajouter le dossier lua au module path
+set "LUA_PATH=%LUAJIT_LUA%\?.lua;%LUAJIT_LUA%\?\init.lua;;"
+
+set "SRC=%~dp0src"
+set "DIST=%~dp0dist"
+set "ERRORS=0"
 
 echo.
 echo ====================================================
@@ -20,36 +25,40 @@ echo ====================================================
 echo  Source  : %SRC%
 echo  Output  : %DIST%
 echo  XPlane  : %XPLANE_SCRIPTS%
+echo  LuaJIT  : %LUAJIT_EXE%
 echo ====================================================
 echo.
 
-:: -- Verifier que luajit est disponible
-where luajit >nul 2>&1
-if errorlevel 1 (
-    echo [ERREUR] luajit introuvable dans le PATH.
-    echo          Installez LuaJIT et ajoutez-le au PATH Windows.
-    echo          Voir README_BUILD.md pour les instructions.
+:: -- Verifier luajit
+if not exist "%LUAJIT_EXE%" (
+    echo [ERREUR] luajit introuvable : %LUAJIT_EXE%
+    pause
     exit /b 1
 )
 
-:: -- Verifier que le dossier source existe
+:: -- Verifier src
 if not exist "%SRC%" (
     echo [ERREUR] Dossier src\ introuvable : %SRC%
+    pause
     exit /b 1
 )
 
-:: -- Creer dist/ si absent
+:: -- Creer dist si absent
 if not exist "%DIST%" mkdir "%DIST%"
 
-:: -- Compiler chaque fichier .lua de src/
+:: ============================================================
+:: Compilation
+:: ============================================================
+
 echo Compilation...
 echo.
+
 for %%f in ("%SRC%\*.lua") do (
-    set FNAME=%%~nxf
-    luajit -b "%%f" "%DIST%\!FNAME!" 2>&1
+    set "FNAME=%%~nxf"
+    "%LUAJIT_EXE%" -b "%%f" "%DIST%\!FNAME!" 2>&1
     if errorlevel 1 (
         echo [ECHEC]  !FNAME!
-        set ERRORS=1
+        set "ERRORS=1"
     ) else (
         echo [OK]     !FNAME! -^> dist\!FNAME!
     )
@@ -57,44 +66,48 @@ for %%f in ("%SRC%\*.lua") do (
 
 if !ERRORS! == 1 (
     echo.
-    echo [ERREUR] Compilation echouee. Correction requise avant le deploiement.
+    echo [ERREUR] Compilation echouee.
+    pause
     exit /b 1
 )
 
-:: -- Verifier que le dossier X-Plane est accessible
+:: ============================================================
+:: Deploiement
+:: ============================================================
+
 if not exist "%XPLANE_SCRIPTS%" (
     echo.
     echo [AVERT.] Dossier X-Plane introuvable : %XPLANE_SCRIPTS%
-    echo          Verifiez la variable XPLANE_SCRIPTS dans build.bat
     echo          Les fichiers compiles sont disponibles dans dist\
+    pause
     exit /b 0
 )
 
-:: -- Copier vers X-Plane
 echo.
 echo Deploiement vers X-Plane...
 echo.
+
 for %%f in ("%DIST%\*.lua") do (
-    set FNAME=%%~nxf
+    set "FNAME=%%~nxf"
     copy /y "%%f" "%XPLANE_SCRIPTS%\!FNAME!" >nul
     if errorlevel 1 (
-        echo [ECHEC]  Copie de !FNAME! vers X-Plane
-        set ERRORS=1
+        echo [ECHEC]  Copie de !FNAME!
+        set "ERRORS=1"
     ) else (
-        echo [OK]     !FNAME! -^> %XPLANE_SCRIPTS%\!FNAME!
+        echo [OK]     !FNAME! deploye
     )
 )
 
 echo.
 if !ERRORS! == 1 (
     echo [ERREUR] Deploiement incomplet.
-    exit /b 1
 ) else (
     echo ====================================================
     echo  Build et deploiement termines avec succes.
-    echo  Rechargez les scripts dans X-Plane :
     echo  Plugins -^> FlyWithLua -^> Reload all Lua scripts
     echo ====================================================
 )
+
 echo.
+pause
 exit /b 0
