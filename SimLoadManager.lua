@@ -973,9 +973,8 @@ function manage_embark()
         end
     end
 
-    -- Démarre le payload fill une seule fois au début du chargement cargo/pax
-    -- (même pattern que slm_rf_start dans manage_fuel_loading)
-    if not slm_rp_active and slm_rp_station_dr == nil then slm_rp_start() end
+    -- Démarre le payload fill une seule fois (même pattern que slm_rf_start)
+    if not slm_rp_active then slm_rp_start() end
 
     local now = os.clock()
     local elapsed = now - last_update_time
@@ -2161,7 +2160,8 @@ function slm_rp_update()
             local delta_units = (cargo_loaded or 0) - slm_rp_last_cargo_loaded
             if delta_units > 0 then
                 slm_rp_last_cargo_loaded = cargo_loaded
-                local per_station = delta_units / 2
+                local delta_kg = (unit_system == "lbs") and (delta_units * 0.453592) or delta_units
+                local per_station = delta_kg / 2
                 for i = 3, 4 do
                     dr[i] = (dr[i] or 0) + per_station
                 end
