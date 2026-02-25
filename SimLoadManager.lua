@@ -3771,6 +3771,7 @@ function build_embark_window(wnd, x, y)
 			save_user_settings()
 		end
 		-- Gordang : Case à cocher pour activer/désactiver l'écriture réelle dans les datarefs
+		if slm_rf_excluded or slm_rp_excluded then imgui.BeginDisabled() end
 		local chg_rf, new_rf = imgui.Checkbox("Real Fuel Fill (writes datarefs)", slm_rf_enabled)
 		if chg_rf then
 			slm_rf_enabled = new_rf
@@ -3781,6 +3782,7 @@ function build_embark_window(wnd, x, y)
 			slm_rp_enabled = new_rp
 			save_user_settings()
 		end
+		if slm_rf_excluded or slm_rp_excluded then imgui.EndDisabled() end
 		local chg_skip, new_skip = imgui.Checkbox("Skip Crew Briefing", skip_crew_briefing)
 		if chg_skip then
 			skip_crew_briefing = new_skip
