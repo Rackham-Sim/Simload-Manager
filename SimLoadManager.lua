@@ -2160,8 +2160,7 @@ function slm_rp_update()
             local delta_units = (cargo_loaded or 0) - slm_rp_last_cargo_loaded
             if delta_units > 0 then
                 slm_rp_last_cargo_loaded = cargo_loaded
-                local delta_kg = (unit_system == "lbs") and (delta_units * 0.453592) or delta_units
-                local per_station = delta_kg / 2
+                local per_station = delta_units / 2
                 for i = 3, 4 do
                     dr[i] = (dr[i] or 0) + per_station
                 end
