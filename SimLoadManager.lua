@@ -1693,6 +1693,10 @@ function manage_disembark()
                 if slm_rp_zibo_zone_dr[z] then slm_rp_zibo_zone_dr[z][0] = 0 end
             end
         end
+        -- ToLiss: validation finale à 0
+        if slm_aircraft_type == "toliss" and slm_rp_enabled and not slm_rp_excluded then
+            command_once("AirbusFBW/SetWeightAndCG")
+        end
         disembark_started = false
         disembark_done = true
 		show_BeltLoader = false
@@ -2415,17 +2419,10 @@ function slm_rp_unload_update()
             (passengers_total or 0) - (passengers_unloaded or 0))
 
         if (cargo_total or 0) > 0 then
-            if slm_rp_last_cargo_unloaded == nil then
-                slm_rp_last_cargo_unloaded = cargo_unloaded or 0
-            else
-                local delta_units = (cargo_unloaded or 0) - slm_rp_last_cargo_unloaded
-                if delta_units > 0 then
-                    slm_rp_last_cargo_unloaded = cargo_unloaded
-                    local half = delta_units / 2
-                    slm_rp_toliss_fwdcargo_dr[0] = math.max(0, (slm_rp_toliss_fwdcargo_dr[0] or 0) - half)
-                    slm_rp_toliss_aftcargo_dr[0] = math.max(0, (slm_rp_toliss_aftcargo_dr[0] or 0) - half)
-                end
-            end
+            local remaining_frac = math.max(0, 1.0 - (cargo_unloaded or 0) / cargo_total)
+            local half = (cargo_total / 2) * remaining_frac
+            slm_rp_toliss_fwdcargo_dr[0] = half
+            slm_rp_toliss_aftcargo_dr[0] = half
         end
 
         local now = os.clock()
