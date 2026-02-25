@@ -4053,7 +4053,7 @@ end
 	end
 	if slm_exclusion_message then
 		imgui.PushStyleColor(imgui.constant.Col.Text, 0xFF2255FF)
-		imgui.TextUnformatted("  ⚠  " .. slm_exclusion_message)
+		imgui.TextUnformatted("[!] " .. slm_exclusion_message)
 		imgui.PopStyleColor()
 	end
 
