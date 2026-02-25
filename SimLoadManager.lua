@@ -2020,7 +2020,7 @@ function slm_rf_update()
     local dr = slm_rf_get_dr()
     if not dr then return end
 
-    -- Premier appel : mémorise fuel_loaded pour ne réagir qu'aux incréments futurs
+    -- Premier appel : mémorise fuel_loaded pour ne réagir qu'aux changements futurs
     if slm_rf_last_fuel_loaded == nil then
         slm_rf_last_fuel_loaded = fuel_loaded or 0
         return
@@ -2029,15 +2029,45 @@ function slm_rf_update()
     -- Delta depuis la barre visuelle (même unité que fuel_loaded / unit_system)
     local current_fl  = fuel_loaded or 0
     local delta_units = current_fl - slm_rf_last_fuel_loaded
-    if delta_units <= 0 then return end          -- la barre n'a pas encore bougé
+    if delta_units == 0 then return end          -- la barre n'a pas bougé
     slm_rf_last_fuel_loaded = current_fl
 
     -- Conversion du delta en kg (les datarefs m_fuel sont toujours en kg)
-    local delta_kg = (unit_system == "lbs") and (delta_units * 0.453592) or delta_units
+    local delta_kg     = (unit_system == "lbs") and (delta_units * 0.453592) or delta_units
+    local is_defueling = (delta_kg < 0)
+    delta_kg = math.abs(delta_kg)
 
+    local total     = slm_rf_total_current()
+    local active_dr = (slm_aircraft_type == "toliss" and slm_rf_toliss_dr) or dr
+
+    -- ── DÉFUELING ──────────────────────────────────────────────────────────
+    if is_defueling then
+        local still_excess = total - slm_rf_target_kg
+        if still_excess <= 0.5 then
+            slm_rf_active = false
+            logMsg("[SLM-RF] Défueling terminé : réservoirs=" .. string.format("%.1f", total) ..
+                   " kg / cible=" .. string.format("%.0f", slm_rf_target_kg) .. " kg")
+            return
+        end
+        delta_kg = math.min(delta_kg, still_excess)
+
+        -- Drain proportionnel sur tous les tanks non vides
+        local filled = {}
+        for i = 0, 8 do
+            if (active_dr[i] or 0) > 0.5 then filled[#filled + 1] = i end
+        end
+        if #filled == 0 then slm_rf_active = false; return end
+
+        local per_tank = delta_kg / #filled
+        for _, ti in ipairs(filled) do
+            active_dr[ti] = math.max(0, (active_dr[ti] or 0) - per_tank)
+        end
+        return
+    end
+
+    -- ── REFUELING ──────────────────────────────────────────────────────────
     -- Condition d'arrêt : compare la somme RÉELLE des réservoirs à la cible.
     -- Gère automatiquement la consommation moteur pendant le remplissage.
-    local total       = slm_rf_total_current()
     local still_needed = slm_rf_target_kg - total
     if still_needed <= 0.5 then
         slm_rf_active = false
@@ -2082,8 +2112,6 @@ function slm_rf_update()
     -- Gordang : Sélectionne le dataref autoritaire.
     -- Pour ToLiss : leur FQMS lit fuelTankContent_kgs et écrase m_fuel à chaque frame,
     -- donc on lit ET écrit dans fuelTankContent_kgs. Pour les autres avions : m_fuel standard.
-    local active_dr = (slm_aircraft_type == "toliss" and slm_rf_toliss_dr) or dr
-
     for _, ti in ipairs(active_tanks) do
         local cur = active_dr[ti] or 0
 
