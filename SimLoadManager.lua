@@ -1954,7 +1954,7 @@ end
 
 -- Gordang : Démarre le remplissage réel : initialise la cible, les groupes et les compteurs
 function slm_rf_start()
-    if not slm_rf_enabled then return end  -- option désactivée par l'utilisateur
+    if not slm_rf_enabled or slm_rf_excluded then return end  -- option désactivée ou avion exclu
     -- Convertit la cible en kg si le plan SimBrief est en livres
     if unit_system == "lbs" then
         slm_rf_target_kg = (fuel_total or 0) * 0.453592
@@ -4019,6 +4019,7 @@ end
 
 	if imgui.Button("Load Simbrief data") then
 		fetch_simbrief_data(simbrief_id)
+		slm_detect_aircraft()
 	end
 	imgui.SameLine()
 	if imgui.Button("Dispatch") then
