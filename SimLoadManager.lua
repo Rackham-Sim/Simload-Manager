@@ -190,18 +190,35 @@ local slm_rf_prev      = {}      -- valeur lue AVANT la dernière écriture, par
 local slm_rf_tank_dr          = nil   -- handle dataref_table (initialisé à la première utilisation)
 local slm_rf_last_fuel_loaded = nil   -- dernière valeur de fuel_loaded connue, pour le calcul du delta
 local slm_rf_initial_real_kg  = 0    -- somme réelle des réservoirs au démarrage (log seulement)
-local slm_rf_toliss_dr        = nil   -- Gordang : handle dataref_table pour toliss_airbus/fuelTankContent_kgs
-local slm_rf_is_toliss        = false -- Gordang : true si l'avion courant est un ToLiss (FQMS propriétaire)
-local slm_rf_is_zibo          = false -- true si l'avion courant est un Zibo 737
+local slm_rf_toliss_dr        = nil   -- handle dataref_table pour toliss_airbus/fuelTankContent_kgs
 
--- Real Payload Fill (writes to sim/flightmodel/weight/m_stations[])
+-- Détection centralisée du type d'avion
+local slm_aircraft_type   = "default"  -- "default" | "zibo" | "toliss"
+local slm_exclusion_message = nil      -- message si ICAO exclu (session seulement)
+local slm_rf_excluded     = false      -- désactivé par exclusion ICAO (sans toucher la préf)
+local slm_rp_excluded     = false      -- désactivé par exclusion ICAO (sans toucher la préf)
+
+-- Real Payload Fill (writes to sim datarefs selon aircraft type)
 local slm_rp_enabled           = false -- option utilisateur : activer l'écriture réelle du payload
 local slm_rp_active            = false -- true = chargement payload en cours
-local slm_rp_target_pax_kg     = 0     -- cible pax en kg
-local slm_rp_target_cargo_kg   = 0     -- cible cargo en kg
-local slm_rp_last_pax_loaded   = nil   -- dernière valeur passengers_loaded connue (delta visuel)
-local slm_rp_last_cargo_loaded = nil   -- dernière valeur cargo_loaded connue (delta visuel)
-local slm_rp_station_dr        = nil   -- handle dataref_table pour sim/flightmodel/weight/m_stations
+local slm_rp_target_pax_kg     = 0     -- cible pax
+local slm_rp_target_cargo_kg   = 0     -- cible cargo
+local slm_rp_last_pax_loaded   = nil   -- dernière valeur passengers_loaded connue
+local slm_rp_last_cargo_loaded = nil   -- dernière valeur cargo_loaded connue
+local slm_rp_last_pax_unloaded   = nil -- suivi déchargement pax
+local slm_rp_last_cargo_unloaded = nil -- suivi déchargement cargo
+-- Laminar default
+local slm_rp_station_dr        = nil   -- handle m_stations
+-- ToLiss
+local slm_rp_toliss_nopax_dr       = nil
+local slm_rp_toliss_fwdcargo_dr    = nil
+local slm_rp_toliss_aftcargo_dr    = nil
+local slm_rp_toliss_last_setweight = 0
+-- Zibo
+local slm_rp_zibo_zone_dr   = {}   -- [1..5] handles zone_payload
+local slm_rp_zibo_cargo1_dr = nil
+local slm_rp_zibo_cargo2_dr = nil
+local slm_rp_zibo_paxwt_dr  = nil
 
 -- Détection beacon — bloque toute la séquence si la beacon est allumée
 local slm_beacon_on = false  -- true si la beacon est allumée (bloque la séquence)
@@ -1913,7 +1930,7 @@ end
 -- Gordang : Calcule la somme de tous les réservoirs non nuls (indices 0 à 8) en kg.
 -- Utilise le dataref ToLiss si disponible, sinon m_fuel (X-Plane standard).
 local function slm_rf_total_current()
-    local tdr = (slm_rf_is_toliss and slm_rf_toliss_dr) or slm_rf_get_dr()
+    local tdr = (slm_aircraft_type == "toliss" and slm_rf_toliss_dr) or slm_rf_get_dr()
     local t = 0
     for i = 0, 8 do
         local v = tdr[i] or 0
@@ -1935,28 +1952,18 @@ function slm_rf_start()
 
     slm_rf_get_dr()  -- initialise le handle dataref m_fuel maintenant
 
-    -- Gordang : Détection ToLiss en priorité — leur FQMS lit fuelTankContent_kgs et écrase
-    -- m_fuel chaque frame. On détecte AVANT de choisir les groupes car l'ordre des indices
-    -- est différent entre les deux datarefs.
-    if XPLMFindDataRef("toliss_airbus/fuelTankContent_kgs") then
+    -- Utilise slm_aircraft_type (défini par slm_detect_aircraft au clic sur Start)
+    if slm_aircraft_type == "toliss" then
         slm_rf_toliss_dr = dataref_table("toliss_airbus/fuelTankContent_kgs")
-        slm_rf_is_toliss = true
-        -- Utilise la table ToLiss-spécifique ; par défaut : ailes int+ext + centre (tous les ToLiss ont [3][4])
         slm_rf_groups = SLM_TANK_GROUPS_TOLISS[PLANE_ICAO or ""] or {{1,2},{3,4},{0}}
-        logMsg("[SLM-RF] ToLiss détecté (ICAO=" .. tostring(PLANE_ICAO) ..
+        logMsg("[SLM-RF] ToLiss (ICAO=" .. tostring(PLANE_ICAO) ..
                ") : écriture dans fuelTankContent_kgs, groupes=" .. #slm_rf_groups)
-    elseif XPLMFindDataRef("zibomod/b737_variant") then
+    elseif slm_aircraft_type == "zibo" then
         slm_rf_toliss_dr = nil
-        slm_rf_is_toliss = false
-        slm_rf_is_zibo   = true
-        -- Zibo 737 : aile gauche [0] + aile droite [2] en premier, puis centre [1]
         slm_rf_groups = {{0,2},{1}}
-        logMsg("[SLM-RF] Zibo détecté : groupes ailes=[0,2] puis centre=[1]")
+        logMsg("[SLM-RF] Zibo : groupes ailes=[0,2] puis centre=[1]")
     else
         slm_rf_toliss_dr = nil
-        slm_rf_is_toliss = false
-        slm_rf_is_zibo   = false
-        -- Utilise la table standard m_fuel ; par défaut : deux réservoirs aile
         slm_rf_groups = SLM_TANK_GROUPS[PLANE_ICAO or ""] or {{0,1}}
     end
 
@@ -1987,9 +1994,7 @@ function slm_rf_stop()
     slm_rf_prev               = {}
     slm_rf_last_fuel_loaded   = nil
     slm_rf_initial_real_kg    = 0
-    slm_rf_toliss_dr          = nil   -- Gordang : libère le handle ToLiss
-    slm_rf_is_toliss          = false
-    slm_rf_is_zibo            = false
+    slm_rf_toliss_dr          = nil   -- libère le handle ToLiss
 end
 
 -- Gordang : Fonction principale de remplissage réel, appelée chaque frame par do_every_frame.
@@ -2064,7 +2069,7 @@ function slm_rf_update()
     -- Gordang : Sélectionne le dataref autoritaire.
     -- Pour ToLiss : leur FQMS lit fuelTankContent_kgs et écrase m_fuel à chaque frame,
     -- donc on lit ET écrit dans fuelTankContent_kgs. Pour les autres avions : m_fuel standard.
-    local active_dr = (slm_rf_is_toliss and slm_rf_toliss_dr) or dr
+    local active_dr = (slm_aircraft_type == "toliss" and slm_rf_toliss_dr) or dr
 
     for _, ti in ipairs(active_tanks) do
         local cur = active_dr[ti] or 0
@@ -2091,94 +2096,334 @@ end
 
 
 --------------------------------------------------------------------------------
--- REAL PAYLOAD FILL (writes to sim/flightmodel/weight/m_stations[])
--- Écrit progressivement dans m_stations[0..4] en synchronisant sur les barres visuelles.
--- PAX  : répartition équitable sur les stations [0], [1], [2]
--- Cargo: répartition équitable sur les stations [3], [4]
+-- DÉTECTION CENTRALISÉE DU TYPE D'AVION
+--------------------------------------------------------------------------------
+
+local SLM_EXCLUDED_ICAO = {
+    ["D8CH"] = "Not supported — aircraft manages its own payload",
+}
+
+function slm_detect_aircraft()
+    slm_exclusion_message = nil
+    slm_rf_excluded       = false
+    slm_rp_excluded       = false
+
+    local icao = PLANE_ICAO or ""
+    if SLM_EXCLUDED_ICAO[icao] then
+        slm_exclusion_message = SLM_EXCLUDED_ICAO[icao]
+        slm_rf_excluded = true
+        slm_rp_excluded = true
+        slm_aircraft_type = "default"
+        logMsg("[SLM] Avion exclu (" .. icao .. ") : " .. slm_exclusion_message)
+        return
+    end
+
+    if XPLMFindDataRef("zibomod/b737_variant") then
+        slm_aircraft_type = "zibo"
+        logMsg("[SLM] Type avion : Zibo")
+    elseif XPLMFindDataRef("AirbusFBW/NoPax") then
+        slm_aircraft_type = "toliss"
+        logMsg("[SLM] Type avion : ToLiss")
+    else
+        slm_aircraft_type = "default"
+        logMsg("[SLM] Type avion : default (Laminar)")
+    end
+end
+
+--------------------------------------------------------------------------------
+-- REAL PAYLOAD FILL
 --------------------------------------------------------------------------------
 
 function slm_rp_start()
-    if not slm_rp_enabled then return end
+    if not slm_rp_enabled or slm_rp_excluded then return end
     if slm_beacon_on then return end
     if (passengers_total or 0) <= 0 and (cargo_total or 0) <= 0 then return end
 
-    -- Cibles dans l'unité SimBrief (pas de conversion — SimBrief fournit déjà la bonne unité)
     slm_rp_target_pax_kg   = (passengers_total or 0) * (SB_pax_weight or 0)
     slm_rp_target_cargo_kg = cargo_total or 0
-
-    slm_rp_station_dr        = dataref_table("sim/flightmodel/weight/m_stations")
     slm_rp_last_pax_loaded   = nil
     slm_rp_last_cargo_loaded = nil
     slm_rp_active            = true
 
-    logMsg(string.format("[SLM-RP] Payload fill démarré : pax=%.0f kg, cargo=%.0f kg",
-        slm_rp_target_pax_kg, slm_rp_target_cargo_kg))
+    if slm_aircraft_type == "default" then
+        slm_rp_station_dr = dataref_table("sim/flightmodel/weight/m_stations")
+        logMsg(string.format("[SLM-RP] Default: démarré pax=%.0f cargo=%.0f",
+            slm_rp_target_pax_kg, slm_rp_target_cargo_kg))
+
+    elseif slm_aircraft_type == "zibo" then
+        slm_rp_zibo_paxwt_dr = dataref_table("laminar/B738/std_pax_weight")
+        slm_rp_zibo_paxwt_dr[0] = SB_pax_weight or 0
+        for z = 1, 5 do
+            slm_rp_zibo_zone_dr[z] = dataref_table("laminar/B738/tab/zone" .. z .. "_payload")
+            slm_rp_zibo_zone_dr[z][0] = 0
+        end
+        slm_rp_zibo_cargo1_dr = dataref_table("laminar/B738/tab/zone_cargo1_payload")
+        slm_rp_zibo_cargo2_dr = dataref_table("laminar/B738/tab/zone_cargo2_payload")
+        slm_rp_zibo_cargo1_dr[0] = 0
+        slm_rp_zibo_cargo2_dr[0] = 0
+        logMsg(string.format("[SLM-RP] Zibo: démarré pax=%d (%.0f/pax) cargo=%.0f",
+            passengers_total or 0, SB_pax_weight or 0, slm_rp_target_cargo_kg))
+
+    elseif slm_aircraft_type == "toliss" then
+        slm_rp_toliss_nopax_dr    = dataref_table("AirbusFBW/NoPax")
+        slm_rp_toliss_fwdcargo_dr = dataref_table("AirbusFBW/FwdCargo")
+        slm_rp_toliss_aftcargo_dr = dataref_table("AirbusFBW/AftCargo")
+        slm_rp_toliss_nopax_dr[0]    = 0
+        slm_rp_toliss_fwdcargo_dr[0] = 0
+        slm_rp_toliss_aftcargo_dr[0] = 0
+        slm_rp_toliss_last_setweight = os.clock()
+        logMsg(string.format("[SLM-RP] ToLiss: démarré pax=%d cargo=%.0f",
+            passengers_total or 0, slm_rp_target_cargo_kg))
+    end
 end
 
 function slm_rp_stop()
-    if slm_rp_active then
-        logMsg("[SLM-RP] Payload fill arrêté")
-    end
+    if slm_rp_active then logMsg("[SLM-RP] Payload fill arrêté") end
     slm_rp_active            = false
     slm_rp_last_pax_loaded   = nil
     slm_rp_last_cargo_loaded = nil
     slm_rp_target_pax_kg     = 0
     slm_rp_target_cargo_kg   = 0
     slm_rp_station_dr        = nil
+    slm_rp_zibo_zone_dr      = {}
+    slm_rp_zibo_cargo1_dr    = nil
+    slm_rp_zibo_cargo2_dr    = nil
+    slm_rp_zibo_paxwt_dr     = nil
+    slm_rp_toliss_nopax_dr       = nil
+    slm_rp_toliss_fwdcargo_dr    = nil
+    slm_rp_toliss_aftcargo_dr    = nil
+    slm_rp_toliss_last_setweight = 0
 end
 
--- Fonction principale appelée chaque frame — synchronise les stations sur les barres visuelles pax/cargo.
+-- Chargement progressif — appelée chaque frame.
 function slm_rp_update()
     if not slm_rp_active then return end
     if slm_beacon_on then return end
-    if not slm_rp_station_dr then return end
 
-    local dr = slm_rp_station_dr
-
-    -- PAX : delta depuis la barre visuelle passengers_loaded
-    if (passengers_total or 0) > 0 and slm_rp_target_pax_kg > 0 then
-        if slm_rp_last_pax_loaded == nil then
-            slm_rp_last_pax_loaded = passengers_loaded or 0
-        else
-            local delta_pax = (passengers_loaded or 0) - slm_rp_last_pax_loaded
-            if delta_pax > 0 then
-                slm_rp_last_pax_loaded = passengers_loaded
-                local delta_kg = delta_pax * slm_rp_target_pax_kg / passengers_total
-                local per_station = delta_kg / 3
-                for i = 0, 2 do
-                    dr[i] = (dr[i] or 0) + per_station
-                end
-            end
-        end
-    end
-
-    -- CARGO : delta depuis la barre visuelle cargo_loaded
-    if (cargo_total or 0) > 0 and slm_rp_target_cargo_kg > 0 then
-        if slm_rp_last_cargo_loaded == nil then
-            slm_rp_last_cargo_loaded = cargo_loaded or 0
-        else
-            local delta_units = (cargo_loaded or 0) - slm_rp_last_cargo_loaded
-            if delta_units > 0 then
-                slm_rp_last_cargo_loaded = cargo_loaded
-                local per_station = delta_units / 2
-                for i = 3, 4 do
-                    dr[i] = (dr[i] or 0) + per_station
-                end
-            end
-        end
-    end
-
-    -- Condition d'arrêt : somme réelle des stations >= cibles
-    local sum_pax   = (dr[0] or 0) + (dr[1] or 0) + (dr[2] or 0)
-    local sum_cargo = (dr[3] or 0) + (dr[4] or 0)
     local pax_done_rp   = ((passengers_total or 0) <= 0) or (slm_rp_target_pax_kg <= 0)
-                          or (sum_pax >= slm_rp_target_pax_kg - 0.5)
     local cargo_done_rp = ((cargo_total or 0) <= 0) or (slm_rp_target_cargo_kg <= 0)
-                          or (sum_cargo >= slm_rp_target_cargo_kg - 0.5)
+
+    -- ── DEFAULT (Laminar m_stations) ───────────────────────────────────────
+    if slm_aircraft_type == "default" then
+        if not slm_rp_station_dr then return end
+        local dr = slm_rp_station_dr
+
+        if (passengers_total or 0) > 0 and slm_rp_target_pax_kg > 0 then
+            if slm_rp_last_pax_loaded == nil then
+                slm_rp_last_pax_loaded = passengers_loaded or 0
+            else
+                local delta_pax = (passengers_loaded or 0) - slm_rp_last_pax_loaded
+                if delta_pax > 0 then
+                    slm_rp_last_pax_loaded = passengers_loaded
+                    local per_station = delta_pax * slm_rp_target_pax_kg / passengers_total / 3
+                    for i = 0, 2 do dr[i] = (dr[i] or 0) + per_station end
+                end
+            end
+            local sum_pax = (dr[0] or 0) + (dr[1] or 0) + (dr[2] or 0)
+            pax_done_rp = sum_pax >= slm_rp_target_pax_kg - 0.5
+        end
+
+        if (cargo_total or 0) > 0 and slm_rp_target_cargo_kg > 0 then
+            if slm_rp_last_cargo_loaded == nil then
+                slm_rp_last_cargo_loaded = cargo_loaded or 0
+            else
+                local delta_units = (cargo_loaded or 0) - slm_rp_last_cargo_loaded
+                if delta_units > 0 then
+                    slm_rp_last_cargo_loaded = cargo_loaded
+                    local per_station = delta_units / 2
+                    for i = 3, 4 do dr[i] = (dr[i] or 0) + per_station end
+                end
+            end
+            local sum_cargo = (dr[3] or 0) + (dr[4] or 0)
+            cargo_done_rp = sum_cargo >= slm_rp_target_cargo_kg - 0.5
+        end
+
+    -- ── ZIBO ───────────────────────────────────────────────────────────────
+    elseif slm_aircraft_type == "zibo" then
+        if not slm_rp_zibo_zone_dr[1] then return end
+
+        if (passengers_total or 0) > 0 then
+            if slm_rp_last_pax_loaded == nil then
+                slm_rp_last_pax_loaded = passengers_loaded or 0
+            else
+                local cur = passengers_loaded or 0
+                if cur ~= slm_rp_last_pax_loaded then
+                    slm_rp_last_pax_loaded = cur
+                    local per_zone = math.floor(cur / 5)
+                    local rem = cur - per_zone * 5
+                    for z = 1, 5 do
+                        slm_rp_zibo_zone_dr[z][0] = per_zone + (z == 1 and rem or 0)
+                    end
+                end
+            end
+            pax_done_rp = (passengers_loaded or 0) >= (passengers_total or 0)
+        end
+
+        if (cargo_total or 0) > 0 and slm_rp_target_cargo_kg > 0 then
+            if slm_rp_last_cargo_loaded == nil then
+                slm_rp_last_cargo_loaded = cargo_loaded or 0
+            else
+                local delta_units = (cargo_loaded or 0) - slm_rp_last_cargo_loaded
+                if delta_units > 0 then
+                    slm_rp_last_cargo_loaded = cargo_loaded
+                    local half = delta_units / 2
+                    slm_rp_zibo_cargo1_dr[0] = (slm_rp_zibo_cargo1_dr[0] or 0) + half
+                    slm_rp_zibo_cargo2_dr[0] = (slm_rp_zibo_cargo2_dr[0] or 0) + half
+                end
+            end
+            cargo_done_rp = (cargo_loaded or 0) >= (cargo_total or 0)
+        end
+
+    -- ── TOLISS ─────────────────────────────────────────────────────────────
+    elseif slm_aircraft_type == "toliss" then
+        if not slm_rp_toliss_nopax_dr then return end
+
+        if (passengers_total or 0) > 0 then
+            slm_rp_toliss_nopax_dr[0] = passengers_loaded or 0
+            pax_done_rp = (passengers_loaded or 0) >= (passengers_total or 0)
+        end
+
+        if (cargo_total or 0) > 0 and slm_rp_target_cargo_kg > 0 then
+            if slm_rp_last_cargo_loaded == nil then
+                slm_rp_last_cargo_loaded = cargo_loaded or 0
+            else
+                local delta_units = (cargo_loaded or 0) - slm_rp_last_cargo_loaded
+                if delta_units > 0 then
+                    slm_rp_last_cargo_loaded = cargo_loaded
+                    local half = delta_units / 2
+                    slm_rp_toliss_fwdcargo_dr[0] = (slm_rp_toliss_fwdcargo_dr[0] or 0) + half
+                    slm_rp_toliss_aftcargo_dr[0] = (slm_rp_toliss_aftcargo_dr[0] or 0) + half
+                end
+            end
+            cargo_done_rp = (cargo_loaded or 0) >= (cargo_total or 0)
+        end
+
+        local now = os.clock()
+        if now - slm_rp_toliss_last_setweight >= 10 then
+            slm_rp_toliss_last_setweight = now
+            command_once("AirbusFBW/SetWeightAndCG")
+        end
+    end
+
     if pax_done_rp and cargo_done_rp then
         slm_rp_active = false
-        logMsg(string.format("[SLM-RP] Payload fill terminé : pax=%.0f kg, cargo=%.0f kg",
-            sum_pax, sum_cargo))
+        logMsg("[SLM-RP] Payload fill terminé (" .. slm_aircraft_type .. ")")
+    end
+end
+
+-- Déchargement progressif — appelée chaque frame pendant la disembarkation.
+function slm_rp_unload_update()
+    if not disembark_started then return end
+    if not slm_rp_enabled or slm_rp_excluded then return end
+    if slm_beacon_on then return end
+
+    -- ── DEFAULT (Laminar m_stations) ───────────────────────────────────────
+    if slm_aircraft_type == "default" then
+        if not slm_rp_station_dr then
+            if XPLMFindDataRef("sim/flightmodel/weight/m_stations") then
+                slm_rp_station_dr = dataref_table("sim/flightmodel/weight/m_stations")
+            else return end
+        end
+        local dr = slm_rp_station_dr
+
+        if (passengers_total or 0) > 0 and slm_rp_target_pax_kg > 0 then
+            if slm_rp_last_pax_unloaded == nil then
+                slm_rp_last_pax_unloaded = passengers_unloaded or 0
+            else
+                local delta_pax = (passengers_unloaded or 0) - slm_rp_last_pax_unloaded
+                if delta_pax > 0 then
+                    slm_rp_last_pax_unloaded = passengers_unloaded
+                    local per_station = delta_pax * slm_rp_target_pax_kg / passengers_total / 3
+                    for i = 0, 2 do dr[i] = math.max(0, (dr[i] or 0) - per_station) end
+                end
+            end
+        end
+
+        if (cargo_total or 0) > 0 then
+            if slm_rp_last_cargo_unloaded == nil then
+                slm_rp_last_cargo_unloaded = cargo_unloaded or 0
+            else
+                local delta_units = (cargo_unloaded or 0) - slm_rp_last_cargo_unloaded
+                if delta_units > 0 then
+                    slm_rp_last_cargo_unloaded = cargo_unloaded
+                    local per_station = delta_units / 2
+                    for i = 3, 4 do dr[i] = math.max(0, (dr[i] or 0) - per_station) end
+                end
+            end
+        end
+
+    -- ── ZIBO ───────────────────────────────────────────────────────────────
+    elseif slm_aircraft_type == "zibo" then
+        if not slm_rp_zibo_zone_dr[1] then
+            for z = 1, 5 do
+                slm_rp_zibo_zone_dr[z] = dataref_table("laminar/B738/tab/zone" .. z .. "_payload")
+            end
+            slm_rp_zibo_cargo1_dr = dataref_table("laminar/B738/tab/zone_cargo1_payload")
+            slm_rp_zibo_cargo2_dr = dataref_table("laminar/B738/tab/zone_cargo2_payload")
+        end
+
+        if (passengers_total or 0) > 0 then
+            if slm_rp_last_pax_unloaded == nil then
+                slm_rp_last_pax_unloaded = passengers_unloaded or 0
+            else
+                local cur_unloaded = passengers_unloaded or 0
+                if cur_unloaded ~= slm_rp_last_pax_unloaded then
+                    slm_rp_last_pax_unloaded = cur_unloaded
+                    local remaining = math.max(0, (passengers_total or 0) - cur_unloaded)
+                    local per_zone = math.floor(remaining / 5)
+                    local rem = remaining - per_zone * 5
+                    for z = 1, 5 do
+                        slm_rp_zibo_zone_dr[z][0] = per_zone + (z == 1 and rem or 0)
+                    end
+                end
+            end
+        end
+
+        if (cargo_total or 0) > 0 then
+            if slm_rp_last_cargo_unloaded == nil then
+                slm_rp_last_cargo_unloaded = cargo_unloaded or 0
+            else
+                local delta_units = (cargo_unloaded or 0) - slm_rp_last_cargo_unloaded
+                if delta_units > 0 then
+                    slm_rp_last_cargo_unloaded = cargo_unloaded
+                    local half = delta_units / 2
+                    slm_rp_zibo_cargo1_dr[0] = math.max(0, (slm_rp_zibo_cargo1_dr[0] or 0) - half)
+                    slm_rp_zibo_cargo2_dr[0] = math.max(0, (slm_rp_zibo_cargo2_dr[0] or 0) - half)
+                end
+            end
+        end
+
+    -- ── TOLISS ─────────────────────────────────────────────────────────────
+    elseif slm_aircraft_type == "toliss" then
+        if not slm_rp_toliss_nopax_dr then
+            slm_rp_toliss_nopax_dr    = dataref_table("AirbusFBW/NoPax")
+            slm_rp_toliss_fwdcargo_dr = dataref_table("AirbusFBW/FwdCargo")
+            slm_rp_toliss_aftcargo_dr = dataref_table("AirbusFBW/AftCargo")
+            slm_rp_toliss_last_setweight = os.clock()
+        end
+
+        slm_rp_toliss_nopax_dr[0] = math.max(0,
+            (passengers_total or 0) - (passengers_unloaded or 0))
+
+        if (cargo_total or 0) > 0 then
+            if slm_rp_last_cargo_unloaded == nil then
+                slm_rp_last_cargo_unloaded = cargo_unloaded or 0
+            else
+                local delta_units = (cargo_unloaded or 0) - slm_rp_last_cargo_unloaded
+                if delta_units > 0 then
+                    slm_rp_last_cargo_unloaded = cargo_unloaded
+                    local half = delta_units / 2
+                    slm_rp_toliss_fwdcargo_dr[0] = math.max(0, (slm_rp_toliss_fwdcargo_dr[0] or 0) - half)
+                    slm_rp_toliss_aftcargo_dr[0] = math.max(0, (slm_rp_toliss_aftcargo_dr[0] or 0) - half)
+                end
+            end
+        end
+
+        local now = os.clock()
+        if now - slm_rp_toliss_last_setweight >= 10 then
+            slm_rp_toliss_last_setweight = now
+            command_once("AirbusFBW/SetWeightAndCG")
+        end
     end
 end
 
@@ -2435,6 +2680,7 @@ end
 --------------------------------------------------------------------------------
 
 function start_departure_sequence()
+    slm_detect_aircraft()
     slm_initial_fuel_kg       = sim_fuel_total_kg  -- snapshot du fuel réel au clic sur Start Loading
     slm_initial_fuel_captured = true
     slm_sequence_mode      = "departure"
@@ -2451,6 +2697,7 @@ function start_departure_sequence()
 end
 
 function start_turnaround()
+    slm_detect_aircraft()
 	slm_sequence_mode       = "turnaround"
     slm_last_sequence_mode  = "turnaround"
     slm_sequence_phase      = "arrival_ops"
@@ -2467,6 +2714,7 @@ function start_turnaround()
 end
 
 function start_night_stop()
+    slm_detect_aircraft()
     slm_sequence_mode      = "night_stop"
     slm_last_sequence_mode = "night_stop"
     slm_sequence_phase     = "arrival_ops"
@@ -2547,8 +2795,11 @@ end
 -- RESET
 --------------------------------------------------------------------------------
 function reset_loads()
-    slm_rf_stop()  -- Gordang : stoppe et réinitialise le remplissage réel avant la remise à zéro
-    slm_rp_stop()  -- stoppe et réinitialise le payload fill
+    slm_rf_stop()
+    slm_rp_stop()
+    slm_rp_last_pax_unloaded     = nil
+    slm_rp_last_cargo_unloaded   = nil
+    slm_rp_toliss_last_setweight = 0
     cargo_loaded          = 0
     passengers_loaded     = 0
     cargo_unloaded        = 0
@@ -3755,6 +4006,11 @@ end
 		imgui.TextUnformatted("  Please load SimBrief data before starting")
 		imgui.PopStyleColor()
 	end
+	if slm_exclusion_message then
+		imgui.PushStyleColor(imgui.constant.Col.Text, 0xFF2255FF)
+		imgui.TextUnformatted("  ⚠  " .. slm_exclusion_message)
+		imgui.PopStyleColor()
+	end
 
 	local slm_actions_running = (embark_started or disembark_started
 		or crew_briefing_started or catering_started or cleaning_started
@@ -4102,8 +4358,31 @@ do_every_frame("manage_catering()")
 do_every_frame("manage_cleaning()")
 do_every_frame("manage_crew_deplane()")
 do_every_frame("slm_rf_update()")  -- Gordang : exécute slm_rf_update chaque frame pour le remplissage réel
-do_every_frame("slm_rp_update()")  -- exécute slm_rp_update chaque frame pour le payload réel
+do_every_frame("slm_rp_update()")         -- chargement payload réel
+do_every_frame("slm_rp_unload_update()")  -- déchargement payload réel
 do_every_frame("slm_update_beacon_state()")  -- détecte l'état de la beacon chaque frame
 
 
 load_user_settings()
+
+--------------------------------------------------------------------------------
+-- INITIALISATION AU DÉMARRAGE : remise à zéro des datarefs payload
+--------------------------------------------------------------------------------
+do
+    if XPLMFindDataRef("sim/flightmodel/weight/m_stations") then
+        local _st = dataref_table("sim/flightmodel/weight/m_stations")
+        for i = 0, 4 do _st[i] = 0 end
+    end
+    if XPLMFindDataRef("AirbusFBW/NoPax") then
+        dataref_table("AirbusFBW/NoPax")[0]    = 0
+        dataref_table("AirbusFBW/FwdCargo")[0] = 0
+        dataref_table("AirbusFBW/AftCargo")[0] = 0
+    end
+    if XPLMFindDataRef("laminar/B738/tab/zone1_payload") then
+        for z = 1, 5 do
+            dataref_table("laminar/B738/tab/zone" .. z .. "_payload")[0] = 0
+        end
+        dataref_table("laminar/B738/tab/zone_cargo1_payload")[0] = 0
+        dataref_table("laminar/B738/tab/zone_cargo2_payload")[0] = 0
+    end
+end
