@@ -903,6 +903,7 @@ end
 --------------------------------------------------------------------------------
 
 function start_embarkation()
+    slm_rp_stop()   -- réinitialise le payload fill pour ce nouvel embarquement
     walking_direction = "boarding"
     walking_direction_changed_armed = false
     embark_started = true
@@ -1684,8 +1685,14 @@ function manage_disembark()
     end
 	
     ----------------------------------------------------------------------------
-    if (cargo_total == 0 or cargo_unloaded >= cargo_total) and 
+    if (cargo_total == 0 or cargo_unloaded >= cargo_total) and
        (passengers_total == 0 or passengers_unloaded >= passengers_total) then
+        -- Zibo: force-zero des zones avant de clore le débarquement (même frame)
+        if slm_aircraft_type == "zibo" then
+            for z = 1, 5 do
+                if slm_rp_zibo_zone_dr[z] then slm_rp_zibo_zone_dr[z][0] = 0 end
+            end
+        end
         disembark_started = false
         disembark_done = true
 		show_BeltLoader = false
@@ -2381,10 +2388,6 @@ function slm_rp_unload_update()
                         if slm_rp_zibo_disembark_zone > 5 then slm_rp_zibo_disembark_zone = 1 end
                     end
                 end
-            end
-            -- Remise à zéro complète quand tout le monde est descendu
-            if (passengers_unloaded or 0) >= (passengers_total or 0) then
-                for z = 1, 5 do slm_rp_zibo_zone_dr[z][0] = 0 end
             end
         end
 
@@ -3471,27 +3474,35 @@ function slm_draw_sequence_steps()
             slm_draw_step("Cargo Unloading",      "done")
         elseif disembark_started then
 
-            local pax_cur = passengers_total - passengers_unloaded
-            local frac_pax = (passengers_total > 0) and math.min(1, pax_cur / passengers_total) or 0
-            imgui.TextUnformatted(">> Passenger Deboarding")
-            progress_bar_colored(frac_pax, 200, 20)
-            imgui.SameLine()
-            imgui.TextUnformatted(string.format("%d / %d PAX", pax_cur, passengers_total))
-            if estimated_time_pax and estimated_time_pax > 0 then
-                local mins = math.ceil(estimated_time_pax / 60)
-                imgui.TextUnformatted(string.format("   Estimated: %d minute%s", mins, mins > 1 and "s" or ""))
+            if passengers_total > 0 and passengers_unloaded >= passengers_total then
+                slm_draw_step("Passenger Deboarding", "done")
+            else
+                local pax_cur = passengers_total - passengers_unloaded
+                local frac_pax = (passengers_total > 0) and math.min(1, pax_cur / passengers_total) or 0
+                imgui.TextUnformatted(">> Passenger Deboarding")
+                progress_bar_colored(frac_pax, 200, 20)
+                imgui.SameLine()
+                imgui.TextUnformatted(string.format("%d / %d PAX", pax_cur, passengers_total))
+                if estimated_time_pax and estimated_time_pax > 0 then
+                    local mins = math.ceil(estimated_time_pax / 60)
+                    imgui.TextUnformatted(string.format("   Estimated: %d minute%s", mins, mins > 1 and "s" or ""))
+                end
             end
             imgui.NewLine()
 
-            local cargo_cur = cargo_total - cargo_unloaded
-            local frac_cargo = (cargo_total > 0) and math.min(1, cargo_cur / cargo_total) or 0
-            imgui.TextUnformatted(">> Cargo Unloading")
-            progress_bar_colored(frac_cargo, 200, 20)
-            imgui.SameLine()
-            imgui.TextUnformatted(string.format("%.0f / %.0f %s", cargo_cur, cargo_total, unit_system))
-            if estimated_time_cargo and estimated_time_cargo > 0 then
-                local mins = math.ceil(estimated_time_cargo / 60)
-                imgui.TextUnformatted(string.format("   Estimated: %d minute%s", mins, mins > 1 and "s" or ""))
+            if cargo_total > 0 and cargo_unloaded >= cargo_total then
+                slm_draw_step("Cargo Unloading", "done")
+            else
+                local cargo_cur = cargo_total - cargo_unloaded
+                local frac_cargo = (cargo_total > 0) and math.min(1, cargo_cur / cargo_total) or 0
+                imgui.TextUnformatted(">> Cargo Unloading")
+                progress_bar_colored(frac_cargo, 200, 20)
+                imgui.SameLine()
+                imgui.TextUnformatted(string.format("%.0f / %.0f %s", cargo_cur, cargo_total, unit_system))
+                if estimated_time_cargo and estimated_time_cargo > 0 then
+                    local mins = math.ceil(estimated_time_cargo / 60)
+                    imgui.TextUnformatted(string.format("   Estimated: %d minute%s", mins, mins > 1 and "s" or ""))
+                end
             end
         else
             slm_draw_step("Passenger Deboarding", "pending")
