@@ -192,10 +192,19 @@ local slm_rf_last_fuel_loaded = nil   -- dernière valeur de fuel_loaded connue,
 local slm_rf_initial_real_kg  = 0    -- somme réelle des réservoirs au démarrage (log seulement)
 local slm_rf_toliss_dr        = nil   -- Gordang : handle dataref_table pour toliss_airbus/fuelTankContent_kgs
 local slm_rf_is_toliss        = false -- Gordang : true si l'avion courant est un ToLiss (FQMS propriétaire)
+local slm_rf_is_zibo          = false -- true si l'avion courant est un Zibo 737
 
--- Gordang : Détection moteurs — bloque toute la séquence si un moteur tourne
-local slm_engine_dr       = nil    -- Gordang : handle dataref_table pour sim/flightmodel/engine/ENGN_running
-local slm_engines_blocked = false  -- Gordang : true si au moins un moteur est en marche (bloque la séquence)
+-- Real Payload Fill (writes to sim/flightmodel/weight/m_stations[])
+local slm_rp_enabled           = false -- option utilisateur : activer l'écriture réelle du payload
+local slm_rp_active            = false -- true = chargement payload en cours
+local slm_rp_target_pax_kg     = 0     -- cible pax en kg
+local slm_rp_target_cargo_kg   = 0     -- cible cargo en kg
+local slm_rp_last_pax_loaded   = nil   -- dernière valeur passengers_loaded connue (delta visuel)
+local slm_rp_last_cargo_loaded = nil   -- dernière valeur cargo_loaded connue (delta visuel)
+local slm_rp_station_dr        = nil   -- handle dataref_table pour sim/flightmodel/weight/m_stations
+
+-- Détection beacon — bloque toute la séquence si la beacon est allumée
+local slm_beacon_on = false  -- true si la beacon est allumée (bloque la séquence)
 
 
 local end_time = nil
@@ -548,6 +557,8 @@ function load_user_settings()
                 Volume = tonumber(value) or 1.0
             elseif key == "real_fuel_fill" then
                 slm_rf_enabled = (value == "true")  -- Gordang : restaure la préférence "remplissage réel"
+            elseif key == "real_payload_fill" then
+                slm_rp_enabled = (value == "true")
             end
         end
         file:close()
@@ -584,6 +595,7 @@ function save_user_settings()
         file:write("custom_crew_briefing_max=" .. tostring(custom_crew_briefing_max or 300) .. "\n")
         file:write("volume=" .. tostring(Volume) .. "\n")
         file:write("real_fuel_fill=" .. tostring(slm_rf_enabled) .. "\n")  -- Gordang : sauvegarde de l'option remplissage réel
+        file:write("real_payload_fill=" .. tostring(slm_rp_enabled) .. "\n")
 
         file:close()
     end
@@ -926,29 +938,20 @@ function start_embarkation()
         end
     end
     init_sounds()
+    slm_rp_start()  -- démarre le payload fill si l'option est activée
 end
 
 
--- Gordang : Met à jour slm_engines_blocked chaque frame.
--- Vérifie le dataref sim/flightmodel/engine/ENGN_running[0..7].
--- Si au moins un moteur est actif : bloque toute la séquence et affiche un avertissement.
-function slm_update_engine_state()
-    if slm_engine_dr == nil then
-        slm_engine_dr = dataref_table("sim/flightmodel/engine/ENGN_running")
-    end
-    slm_engines_blocked = false
-    for i = 0, 7 do
-        if (slm_engine_dr[i] or 0) > 0 then
-            slm_engines_blocked = true
-            return
-        end
-    end
+-- Met à jour slm_beacon_on chaque frame.
+-- Lit le dataref sim/cockpit/electrical/beacon_lights_on (déclaré en tête de fichier).
+function slm_update_beacon_state()
+    slm_beacon_on = (beacon == 1)
 end
 
 function manage_embark()
     if not embark_started then return end
-    -- Gordang : Bloque toute progression si au moins un moteur tourne (sécurité + réalisme)
-    if slm_engines_blocked then return end
+    -- Bloque toute progression si la beacon est allumée
+    if slm_beacon_on then return end
 
     if fuel_first and not fuel_done then
         if not fuel_loading then
@@ -1556,8 +1559,8 @@ end
 
 function manage_disembark()
     if not disembark_started then return end
-    -- Gordang : Bloque toute progression si au moins un moteur tourne
-    if slm_engines_blocked then return end
+    -- Bloque toute progression si la beacon est allumée
+    if slm_beacon_on then return end
 
     local now = os.clock()
     local elapsed = now - disembark_last_update_time
@@ -1940,9 +1943,17 @@ function slm_rf_start()
         slm_rf_groups = SLM_TANK_GROUPS_TOLISS[PLANE_ICAO or ""] or {{1,2},{3,4},{0}}
         logMsg("[SLM-RF] ToLiss détecté (ICAO=" .. tostring(PLANE_ICAO) ..
                ") : écriture dans fuelTankContent_kgs, groupes=" .. #slm_rf_groups)
+    elseif XPLMFindDataRef("zibomod/b737_variant") then
+        slm_rf_toliss_dr = nil
+        slm_rf_is_toliss = false
+        slm_rf_is_zibo   = true
+        -- Zibo 737 : aile gauche [0] + aile droite [2] en premier, puis centre [1]
+        slm_rf_groups = {{0,2},{1}}
+        logMsg("[SLM-RF] Zibo détecté : groupes ailes=[0,2] puis centre=[1]")
     else
         slm_rf_toliss_dr = nil
         slm_rf_is_toliss = false
+        slm_rf_is_zibo   = false
         -- Utilise la table standard m_fuel ; par défaut : deux réservoirs aile
         slm_rf_groups = SLM_TANK_GROUPS[PLANE_ICAO or ""] or {{0,1}}
     end
@@ -1976,6 +1987,7 @@ function slm_rf_stop()
     slm_rf_initial_real_kg    = 0
     slm_rf_toliss_dr          = nil   -- Gordang : libère le handle ToLiss
     slm_rf_is_toliss          = false
+    slm_rf_is_zibo            = false
 end
 
 -- Gordang : Fonction principale de remplissage réel, appelée chaque frame par do_every_frame.
@@ -1984,7 +1996,7 @@ end
 -- afin de compenser la consommation moteur pendant le remplissage.
 function slm_rf_update()
     if not slm_rf_active then return end
-    if slm_engines_blocked then return end  -- Gordang : suspendu si moteurs en marche
+    if slm_beacon_on then return end  -- suspendu si beacon allumée
     local dr = slm_rf_get_dr()
     if not dr then return end
 
@@ -2072,6 +2084,105 @@ function slm_rf_update()
             slm_rf_prev[ti] = cur               -- mémorise avant écriture pour détection stall
             active_dr[ti] = cur + per_tank       -- écrit dans le dataref autoritaire
         end
+    end
+end
+
+
+--------------------------------------------------------------------------------
+-- REAL PAYLOAD FILL (writes to sim/flightmodel/weight/m_stations[])
+-- Écrit progressivement dans m_stations[0..4] en synchronisant sur les barres visuelles.
+-- PAX  : répartition équitable sur les stations [0], [1], [2]
+-- Cargo: répartition équitable sur les stations [3], [4]
+--------------------------------------------------------------------------------
+
+function slm_rp_start()
+    if not slm_rp_enabled then return end
+    if slm_beacon_on then return end
+    if (passengers_total or 0) <= 0 and (cargo_total or 0) <= 0 then return end
+
+    -- Cibles en kg (conversion depuis lbs si nécessaire)
+    if unit_system == "lbs" then
+        slm_rp_target_pax_kg   = (SB_pax_mass_planned or 0) * 0.453592
+        slm_rp_target_cargo_kg = (cargo_total or 0) * 0.453592
+    else
+        slm_rp_target_pax_kg   = SB_pax_mass_planned or 0
+        slm_rp_target_cargo_kg = cargo_total or 0
+    end
+
+    slm_rp_station_dr        = dataref_table("sim/flightmodel/weight/m_stations")
+    slm_rp_last_pax_loaded   = nil
+    slm_rp_last_cargo_loaded = nil
+    slm_rp_active            = true
+
+    logMsg(string.format("[SLM-RP] Payload fill démarré : pax=%.0f kg, cargo=%.0f kg",
+        slm_rp_target_pax_kg, slm_rp_target_cargo_kg))
+end
+
+function slm_rp_stop()
+    if slm_rp_active then
+        logMsg("[SLM-RP] Payload fill arrêté")
+    end
+    slm_rp_active            = false
+    slm_rp_last_pax_loaded   = nil
+    slm_rp_last_cargo_loaded = nil
+    slm_rp_target_pax_kg     = 0
+    slm_rp_target_cargo_kg   = 0
+    slm_rp_station_dr        = nil
+end
+
+-- Fonction principale appelée chaque frame — synchronise les stations sur les barres visuelles pax/cargo.
+function slm_rp_update()
+    if not slm_rp_active then return end
+    if slm_beacon_on then return end
+    if not slm_rp_station_dr then return end
+
+    local dr = slm_rp_station_dr
+
+    -- PAX : delta depuis la barre visuelle passengers_loaded
+    if (passengers_total or 0) > 0 and slm_rp_target_pax_kg > 0 then
+        if slm_rp_last_pax_loaded == nil then
+            slm_rp_last_pax_loaded = passengers_loaded or 0
+        else
+            local delta_pax = (passengers_loaded or 0) - slm_rp_last_pax_loaded
+            if delta_pax > 0 then
+                slm_rp_last_pax_loaded = passengers_loaded
+                local delta_kg = delta_pax * slm_rp_target_pax_kg / passengers_total
+                local per_station = delta_kg / 3
+                for i = 0, 2 do
+                    dr[i] = (dr[i] or 0) + per_station
+                end
+            end
+        end
+    end
+
+    -- CARGO : delta depuis la barre visuelle cargo_loaded
+    if (cargo_total or 0) > 0 and slm_rp_target_cargo_kg > 0 then
+        if slm_rp_last_cargo_loaded == nil then
+            slm_rp_last_cargo_loaded = cargo_loaded or 0
+        else
+            local delta_units = (cargo_loaded or 0) - slm_rp_last_cargo_loaded
+            if delta_units > 0 then
+                slm_rp_last_cargo_loaded = cargo_loaded
+                local delta_kg = (unit_system == "lbs") and (delta_units * 0.453592) or delta_units
+                local per_station = delta_kg / 2
+                for i = 3, 4 do
+                    dr[i] = (dr[i] or 0) + per_station
+                end
+            end
+        end
+    end
+
+    -- Condition d'arrêt : somme réelle des stations >= cibles
+    local sum_pax   = (dr[0] or 0) + (dr[1] or 0) + (dr[2] or 0)
+    local sum_cargo = (dr[3] or 0) + (dr[4] or 0)
+    local pax_done_rp   = ((passengers_total or 0) <= 0) or (slm_rp_target_pax_kg <= 0)
+                          or (sum_pax >= slm_rp_target_pax_kg - 0.5)
+    local cargo_done_rp = ((cargo_total or 0) <= 0) or (slm_rp_target_cargo_kg <= 0)
+                          or (sum_cargo >= slm_rp_target_cargo_kg - 0.5)
+    if pax_done_rp and cargo_done_rp then
+        slm_rp_active = false
+        logMsg(string.format("[SLM-RP] Payload fill terminé : pax=%.0f kg, cargo=%.0f kg",
+            sum_pax, sum_cargo))
     end
 end
 
@@ -2328,6 +2439,8 @@ end
 --------------------------------------------------------------------------------
 
 function start_departure_sequence()
+    slm_initial_fuel_kg       = sim_fuel_total_kg  -- snapshot du fuel réel au clic sur Start Loading
+    slm_initial_fuel_captured = true
     slm_sequence_mode      = "departure"
     slm_last_sequence_mode = "departure"
     slm_sequence_phase     = "crew_and_catering"
@@ -2439,6 +2552,7 @@ end
 --------------------------------------------------------------------------------
 function reset_loads()
     slm_rf_stop()  -- Gordang : stoppe et réinitialise le remplissage réel avant la remise à zéro
+    slm_rp_stop()  -- stoppe et réinitialise le payload fill
     cargo_loaded          = 0
     passengers_loaded     = 0
     cargo_unloaded        = 0
@@ -3212,10 +3326,12 @@ function slm_draw_sequence_steps()
             if slm_defuel_performed then
                 local denom = slm_initial_fuel_kg or 1
                 fuel_fraction = (denom > 0) and (fuel_loaded / denom) or 0
-                imgui.PushStyleColor(COL.PlotHistogram, 0xFF0055FF)  -- blue: defueling
+                imgui.PushStyleColor(COL.PlotHistogram, 0xFF0080FF)  -- orange: defueling
                 fuel_color_pushed = true
             else
                 fuel_fraction = (fuel_total > 0) and (fuel_loaded / fuel_total) or 0
+                imgui.PushStyleColor(COL.PlotHistogram, 0xFF00FFFF)  -- yellow: refueling
+                fuel_color_pushed = true
             end
             fuel_fraction = math.max(0, math.min(1, fuel_fraction))
             imgui.ProgressBar(fuel_fraction, 200, 20, "")
@@ -3373,17 +3489,10 @@ function build_embark_window(wnd, x, y)
 			slm_rf_enabled = new_rf
 			save_user_settings()  -- persiste immédiatement
 		end
-		-- Gordang : Affiche l'état en temps réel (progression ou total final) à côté de la case
-		if slm_rf_enabled then
-			imgui.SameLine()
-			if slm_rf_active then
-				-- Remplissage en cours : affiche xx / cible kg
-				imgui.TextUnformatted(string.format(" [remplissage: %.0f / %.0f kg]",
-					slm_rf_total_current(), slm_rf_target_kg))
-			elseif fuel_done then
-				-- Remplissage terminé : affiche le total réel dans les réservoirs
-				imgui.TextUnformatted(string.format(" [terminé: %.0f kg]", slm_rf_total_current()))
-			end
+		local chg_rp, new_rp = imgui.Checkbox("Real Payload Fill (writes datarefs)", slm_rp_enabled)
+		if chg_rp then
+			slm_rp_enabled = new_rp
+			save_user_settings()
 		end
 		local chg_skip, new_skip = imgui.Checkbox("Skip Crew Briefing", skip_crew_briefing)
 		if chg_skip then
@@ -3624,6 +3733,17 @@ end
 	if imgui.Button("Load Simbrief data") then
 		fetch_simbrief_data(simbrief_id)
 	end
+	imgui.SameLine()
+	if imgui.Button("Dispatch") then
+		local sep = package.config:sub(1, 1)
+		if sep == "\\" then
+			os.execute("start https://dispatch.simbrief.com/options/new")
+		elseif SCRIPT_DIRECTORY:match("^/Users/") then
+			os.execute("open https://dispatch.simbrief.com/options/new")
+		else
+			os.execute("xdg-open https://dispatch.simbrief.com/options/new")
+		end
+	end
 
 	if embark_started or disembark_started then
 		imgui.EndDisabled()
@@ -3679,21 +3799,21 @@ end
 
 	local simbrief_ok = (SLM_Loadsheet_Data ~= nil)
 
-	-- Gordang : Avertissement moteurs en marche — message contextuel selon l'étape en cours
-	if slm_engines_blocked then
+	-- Avertissement beacon allumée — message contextuel selon l'étape en cours
+	if slm_beacon_on then
 		imgui.PushStyleColor(imgui.constant.Col.Text, 0xFF2222FF)  -- rouge vif
 		if embark_started then
-			imgui.TextUnformatted("⚠  Boarding paused — shut down engines to continue")
+			imgui.TextUnformatted("⚠  Boarding paused — turn off beacon to continue")
 		elseif disembark_started then
-			imgui.TextUnformatted("⚠  Deboarding paused — shut down engines to continue")
+			imgui.TextUnformatted("⚠  Deboarding paused — turn off beacon to continue")
 		else
-			imgui.TextUnformatted("⚠  Engines running — shut down before starting")
+			imgui.TextUnformatted("⚠  Beacon is on — turn off beacon before starting")
 		end
 		imgui.PopStyleColor()
 	end
 
-	-- Gordang : Désactive aussi les boutons Start si les moteurs tournent
-	if slm_actions_running or not simbrief_ok or slm_engines_blocked then imgui.BeginDisabled() end
+	-- Désactive les boutons Start si la beacon est allumée
+	if slm_actions_running or not simbrief_ok or slm_beacon_on then imgui.BeginDisabled() end
 
 	if not passed_500ft then
 		-- Departure mode: Start Loading only
@@ -3710,7 +3830,7 @@ end
 			start_night_stop()
 		end
 	end
-	if slm_actions_running or not simbrief_ok or slm_engines_blocked then imgui.EndDisabled() end
+	if slm_actions_running or not simbrief_ok or slm_beacon_on then imgui.EndDisabled() end
 
 	imgui.SameLine()
 	if imgui.Button("Reset") then
@@ -3884,7 +4004,6 @@ add_macro("Open SimLoad Manager",
 do_every_frame("manage_embark()")
 do_every_frame("manage_disembark()")
 do_every_frame("update_remaining_time()")
-do_sometimes("slm_capture_initial_fuel_once()")
 
 
 create_command("FlyWithLua/SimloadManager/SimloadManagerToggle",
@@ -3989,7 +4108,8 @@ do_every_frame("manage_catering()")
 do_every_frame("manage_cleaning()")
 do_every_frame("manage_crew_deplane()")
 do_every_frame("slm_rf_update()")  -- Gordang : exécute slm_rf_update chaque frame pour le remplissage réel
-do_every_frame("slm_update_engine_state()")  -- Gordang : détecte l'état des moteurs chaque frame
+do_every_frame("slm_rp_update()")  -- exécute slm_rp_update chaque frame pour le payload réel
+do_every_frame("slm_update_beacon_state()")  -- détecte l'état de la beacon chaque frame
 
 
 load_user_settings()
