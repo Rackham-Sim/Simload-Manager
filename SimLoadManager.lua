@@ -993,7 +993,7 @@ function manage_embark()
     end
 
     -- Démarre le payload fill une seule fois (même pattern que slm_rf_start)
-    if not slm_rp_active then slm_rp_start() end
+    if not slm_rp_active and slm_rp_last_pax_loaded == nil then slm_rp_start() end
 
     local now = os.clock()
     local elapsed = now - last_update_time
