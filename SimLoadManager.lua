@@ -788,6 +788,7 @@ function fetch_simbrief_data(id)
             catering_done      = false
             if skip_crew_briefing then
                 crew_briefing_done = true
+                slm_deploy_access()
             else
                 start_crew_briefing()
             end
@@ -2518,6 +2519,19 @@ end
 -- CREW BRIEFING
 --------------------------------------------------------------------------------
 
+-- Déploie escaliers ou jetway indépendamment du briefing (appelé aussi en mode skip)
+function slm_deploy_access()
+    if selected_location_group == "remote" or selected_location_group == "terminal" then
+        if not aircraft_has_own_stairs then
+            show_StairsXPJ            = true; StairsXPJ_chg         = true
+            show_StairsXPJ2           = true; StairsXPJ2_chg        = true
+            option_StairsXPJ_override = true
+        end
+    elseif selected_location_group == "jetway" then
+        command_once("sim/ground_ops/jetway")
+    end
+end
+
 function start_crew_briefing()
     crew_briefing_started    = true
     crew_briefing_done       = false
@@ -2527,17 +2541,7 @@ function start_crew_briefing()
     show_People2 = true;  People2_chg = true
     show_People3 = true;  People3_chg = true
     show_People4 = true;  People4_chg = true
-    if selected_location_group == "remote" or selected_location_group == "terminal" then
-        if not aircraft_has_own_stairs then
-            show_StairsXPJ        = true
-            StairsXPJ_chg         = true
-            show_StairsXPJ2       = true
-            StairsXPJ2_chg        = true
-            option_StairsXPJ_override = true
-        end
-    elseif selected_location_group == "jetway" then
-        command_once("sim/ground_ops/jetway")
-    end
+    slm_deploy_access()
     if sounds.briefing_loop.id and sounds.briefing_loop.id ~= 0 then
         briefing_loop_playing = true
         let_sound_loop(sounds.briefing_loop.id, true)
@@ -2698,6 +2702,7 @@ function slm_turnaround_check_simbrief()
         catering_done      = false
         if skip_crew_briefing then
             crew_briefing_done = true
+            slm_deploy_access()
         else
             start_crew_briefing()
         end
@@ -2724,6 +2729,7 @@ function start_departure_sequence()
     catering_done          = false
     if skip_crew_briefing then
         crew_briefing_done = true
+        slm_deploy_access()
     else
         start_crew_briefing()
     end
