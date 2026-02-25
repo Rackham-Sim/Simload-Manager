@@ -4414,6 +4414,7 @@ load_user_settings()
 -- INITIALISATION AU DÉMARRAGE : remise à zéro des datarefs payload
 --------------------------------------------------------------------------------
 do
+    slm_detect_aircraft()  -- affiche le message d'exclusion et grise les cases dès le démarrage
     if XPLMFindDataRef("sim/flightmodel/weight/m_stations") then
         local _st = dataref_table("sim/flightmodel/weight/m_stations")
         for i = 0, 4 do _st[i] = 0 end
