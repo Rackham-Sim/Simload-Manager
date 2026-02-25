@@ -2673,13 +2673,13 @@ end
 function slm_turnaround_check_simbrief()
     local ok_http, http = pcall(require, "socket.http")
     if not ok_http or not http then
-        slm_auto_import_message = "SimBrief unreachable — check your connection and try again"
+        slm_auto_import_message = "SimBrief unreachable - check your connection and try again"
         slm_sequence_phase = "waiting_for_new_plan"
         return
     end
     local body, code = http.request("https://www.simbrief.com/api/xml.fetcher.php?userid=" .. simbrief_id)
     if not body or code ~= 200 then
-        slm_auto_import_message = "SimBrief unreachable — check your connection and try again"
+        slm_auto_import_message = "SimBrief unreachable - check your connection and try again"
         slm_sequence_phase = "waiting_for_new_plan"
         return
     end
@@ -4098,11 +4098,11 @@ end
 	if slm_beacon_on then
 		imgui.PushStyleColor(imgui.constant.Col.Text, 0xFF2222FF)  -- rouge vif
 		if embark_started then
-			imgui.TextUnformatted("⚠  Boarding paused — turn off beacon to continue")
+			imgui.TextUnformatted("[!] Boarding paused - turn off beacon to continue")
 		elseif disembark_started then
-			imgui.TextUnformatted("⚠  Deboarding paused — turn off beacon to continue")
+			imgui.TextUnformatted("[!] Deboarding paused - turn off beacon to continue")
 		else
-			imgui.TextUnformatted("⚠  Beacon is on — turn off beacon before starting")
+			imgui.TextUnformatted("[!] Beacon is on - turn off beacon before starting")
 		end
 		imgui.PopStyleColor()
 	end
