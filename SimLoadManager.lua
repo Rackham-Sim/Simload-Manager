@@ -175,6 +175,28 @@ local fuel_wait_finished = false
 local fuel_done_time = nil
 local fuel_post_delay = 60
 
+-- Real fuel fill (writes to sim/flightmodel/weight/m_fuel[0..8])
+-- Gordang : Variables d'état pour le remplissage réel des réservoirs (sim/flightmodel/weight/m_fuel)
+local slm_rf_enabled   = false   -- option utilisateur : activer l'écriture réelle dans les datarefs
+local slm_rf_active    = false   -- true = remplissage réel en cours
+local slm_rf_target_kg = 0       -- quantité cible totale convertie en kg
+local slm_rf_last_t    = 0       -- horodatage du dernier tick (réservé, inutilisé)
+local slm_rf_interval  = 0.5     -- intervalle entre incréments en secondes (réservé)
+local slm_rf_step_kg   = 10.0    -- kg ajoutés par pas par réservoir actif (réservé)
+local slm_rf_group_idx = 1       -- indice du groupe de réservoirs en cours de remplissage (base 1)
+local slm_rf_groups    = {}      -- liste ordonnée de groupes : chaque groupe = liste d'indices de tanks
+local slm_rf_stall     = {}      -- compteur de stalls consécutifs par indice de réservoir
+local slm_rf_prev      = {}      -- valeur lue AVANT la dernière écriture, par indice de réservoir
+local slm_rf_tank_dr          = nil   -- handle dataref_table (initialisé à la première utilisation)
+local slm_rf_last_fuel_loaded = nil   -- dernière valeur de fuel_loaded connue, pour le calcul du delta
+local slm_rf_initial_real_kg  = 0    -- somme réelle des réservoirs au démarrage (log seulement)
+local slm_rf_toliss_dr        = nil   -- Gordang : handle dataref_table pour toliss_airbus/fuelTankContent_kgs
+local slm_rf_is_toliss        = false -- Gordang : true si l'avion courant est un ToLiss (FQMS propriétaire)
+
+-- Gordang : Détection moteurs — bloque toute la séquence si un moteur tourne
+local slm_engine_dr       = nil    -- Gordang : handle dataref_table pour sim/flightmodel/engine/ENGN_running
+local slm_engines_blocked = false  -- Gordang : true si au moins un moteur est en marche (bloque la séquence)
+
 
 local end_time = nil
 local FINISHED_ALL_DELAY = 5
@@ -524,6 +546,8 @@ function load_user_settings()
                 custom_crew_briefing_max = tonumber(value)
             elseif key == "volume" then
                 Volume = tonumber(value) or 1.0
+            elseif key == "real_fuel_fill" then
+                slm_rf_enabled = (value == "true")  -- Gordang : restaure la préférence "remplissage réel"
             end
         end
         file:close()
@@ -559,6 +583,7 @@ function save_user_settings()
         file:write("custom_crew_briefing_min=" .. tostring(custom_crew_briefing_min or 120) .. "\n")
         file:write("custom_crew_briefing_max=" .. tostring(custom_crew_briefing_max or 300) .. "\n")
         file:write("volume=" .. tostring(Volume) .. "\n")
+        file:write("real_fuel_fill=" .. tostring(slm_rf_enabled) .. "\n")  -- Gordang : sauvegarde de l'option remplissage réel
 
         file:close()
     end
@@ -904,8 +929,26 @@ function start_embarkation()
 end
 
 
+-- Gordang : Met à jour slm_engines_blocked chaque frame.
+-- Vérifie le dataref sim/flightmodel/engine/ENGN_running[0..7].
+-- Si au moins un moteur est actif : bloque toute la séquence et affiche un avertissement.
+function slm_update_engine_state()
+    if slm_engine_dr == nil then
+        slm_engine_dr = dataref_table("sim/flightmodel/engine/ENGN_running")
+    end
+    slm_engines_blocked = false
+    for i = 0, 7 do
+        if (slm_engine_dr[i] or 0) > 0 then
+            slm_engines_blocked = true
+            return
+        end
+    end
+end
+
 function manage_embark()
     if not embark_started then return end
+    -- Gordang : Bloque toute progression si au moins un moteur tourne (sécurité + réalisme)
+    if slm_engines_blocked then return end
 
     if fuel_first and not fuel_done then
         if not fuel_loading then
@@ -1513,6 +1556,8 @@ end
 
 function manage_disembark()
     if not disembark_started then return end
+    -- Gordang : Bloque toute progression si au moins un moteur tourne
+    if slm_engines_blocked then return end
 
     local now = os.clock()
     local elapsed = now - disembark_last_update_time
@@ -1699,7 +1744,10 @@ function manage_fuel_loading()
             end
         end
 
+        -- Gordang : Pendant l'attente du camion : rafraîchit fuel_loaded depuis la vraie valeur X-Plane
+        -- Evite un affichage figé sur la valeur SimBrief et démarre l'animation depuis le niveau réel
         if fuel_ready_time and os.clock() < fuel_ready_time then
+            fuel_loaded = math.floor(sim_fuel_total_kg or fuel_loaded or 0)
             return
         end
 
@@ -1713,6 +1761,10 @@ function manage_fuel_loading()
             let_sound_loop(sounds.fuel_loop.id, true)
             play_sound(sounds.fuel_loop.id)
         end
+
+        -- Gordang : Déclenche le remplissage réel une seule fois, après l'arrivée du camion
+        -- A ce stade fuel_time_per_unit est garanti initialisé (utilisé par slm_rf_start)
+        if not slm_rf_active then slm_rf_start() end
 
         local now = os.clock()
         if not fuel_last_update_time then fuel_last_update_time = now end
@@ -1771,6 +1823,254 @@ function manage_fuel_loading()
                 play_sound_by_key("finished_fuel_loading")
                 sound_played.finished_fuel_loading = true
             end
+        end
+    end
+end
+
+
+--------------------------------------------------------------------------------
+-- Gordang : REMPLISSAGE RÉEL DES RÉSERVOIRS (Real Fuel Fill)
+-- Écrit progressivement dans sim/flightmodel/weight/m_fuel[0..8] (kg, modifiable).
+-- Remplit par groupes : réservoirs aile (0+1) d'abord, puis centre (2), puis aux (3+4)...
+-- Quand tous les réservoirs d'un groupe n'acceptent plus de carburant (stall détecté),
+-- passe au groupe suivant.
+-- La cible est toujours en kg ; la conversion depuis lbs est faite au démarrage.
+-- La vitesse est calée sur la barre visuelle (delta de fuel_loaded chaque frame).
+--------------------------------------------------------------------------------
+
+-- Gordang : Table de configuration des groupes de réservoirs par code ICAO.
+-- Chaque entrée est une liste ordonnée de groupes ; chaque groupe = liste d'indices de tanks.
+-- Les avions non listés utilisent par défaut {{0,1}} (deux réservoirs aile).
+-- ATTENTION : ces indices correspondent à sim/flightmodel/weight/m_fuel (X-Plane standard).
+local SLM_TANK_GROUPS = {
+    -- 3 réservoirs : ailes + centre
+    ["A332"] = {{0,1},{2}},
+    ["A333"] = {{0,1},{2}},
+    ["A338"] = {{0,1},{2}},
+    ["A339"] = {{0,1},{2}},
+    ["A35K"] = {{0,1},{2}},
+    ["A359"] = {{0,1},{2}},
+    ["B752"] = {{0,1},{2}},
+    ["B753"] = {{0,1},{2}},
+    ["B762"] = {{0,1},{2}},
+    ["B763"] = {{0,1},{2}},
+    ["B764"] = {{0,1},{2}},
+    ["B788"] = {{0,1},{2}},
+    ["B789"] = {{0,1},{2}},
+    ["MD11"] = {{0,1},{2}},
+    ["C17"]  = {{0,1},{2}},
+    ["IL96"] = {{0,1},{2}},
+    ["E19L"] = {{0,1},{2}},  -- Embraer Lineage 1000 (ailes + centre)
+    -- 4+ réservoirs : ailes + centre + auxiliaires
+    ["A345"] = {{0,1},{2},{3,4}},
+    ["A346"] = {{0,1},{2},{3,4}},
+    ["A388"] = {{0,1},{2},{3,4}},
+    ["B742"] = {{0,1},{2},{3,4}},
+    ["B744"] = {{0,1},{2},{3,4}},
+    ["B748"] = {{0,1},{2},{3,4}},
+    ["B772"] = {{0,1},{2},{3,4}},
+    ["B77L"] = {{0,1},{2},{3,4}},
+    ["B77W"] = {{0,1},{2},{3,4}},
+    ["B773"] = {{0,1},{2},{3,4}},
+    ["B779"] = {{0,1},{2},{3,4}},
+}
+
+-- Gordang : Table de groupes SPÉCIFIQUE ToLiss (indices pour toliss_airbus/fuelTankContent_kgs).
+-- Layout ToLiss Airbus (confirmé par DataRef Editor sur A320) :
+--   [0] = réservoir centre
+--   [1] = aile gauche intérieure  (tank principal gauche, le plus grand)
+--   [2] = aile droite intérieure  (tank principal droit, le plus grand)
+--   [3] = aile gauche extérieure  (présent sur TOUS les modèles ToLiss)
+--   [4] = aile droite extérieure  (présent sur TOUS les modèles ToLiss)
+-- Procédure de chargement Airbus : ailes intérieures → extérieures → centre.
+-- Défaut pour tout ToLiss non listé : {{1,2},{3,4},{0}}
+local SLM_TANK_GROUPS_TOLISS = {
+    -- Famille A320 ToLiss : ailes intérieures + extérieures + centre
+    ["A319"] = {{1,2},{3,4},{0}},
+    ["A320"] = {{1,2},{3,4},{0}},
+    ["A20N"] = {{1,2},{3,4},{0}},   -- A320neo
+    ["A321"] = {{1,2},{3,4},{0}},
+    ["A21N"] = {{1,2},{3,4},{0}},   -- A321neo
+    -- A330neo ToLiss
+    ["A339"] = {{1,2},{3,4},{0}},
+    -- A340 ToLiss
+    ["A346"] = {{1,2},{3,4},{0}},
+}
+
+-- Gordang : Retourne (et initialise si besoin) le handle dataref_table des réservoirs
+local function slm_rf_get_dr()
+    if slm_rf_tank_dr == nil then
+        slm_rf_tank_dr = dataref_table("sim/flightmodel/weight/m_fuel")
+    end
+    return slm_rf_tank_dr
+end
+
+-- Gordang : Calcule la somme de tous les réservoirs non nuls (indices 0 à 8) en kg.
+-- Utilise le dataref ToLiss si disponible, sinon m_fuel (X-Plane standard).
+local function slm_rf_total_current()
+    local tdr = (slm_rf_is_toliss and slm_rf_toliss_dr) or slm_rf_get_dr()
+    local t = 0
+    for i = 0, 8 do
+        local v = tdr[i] or 0
+        if v > 0 then t = t + v end
+    end
+    return t
+end
+
+-- Gordang : Démarre le remplissage réel : initialise la cible, les groupes et les compteurs
+function slm_rf_start()
+    if not slm_rf_enabled then return end  -- option désactivée par l'utilisateur
+    -- Convertit la cible en kg si le plan SimBrief est en livres
+    if unit_system == "lbs" then
+        slm_rf_target_kg = (fuel_total or 0) * 0.453592
+    else
+        slm_rf_target_kg = fuel_total or 0
+    end
+    if slm_rf_target_kg <= 0 then return end  -- rien à faire
+
+    slm_rf_get_dr()  -- initialise le handle dataref m_fuel maintenant
+
+    -- Gordang : Détection ToLiss en priorité — leur FQMS lit fuelTankContent_kgs et écrase
+    -- m_fuel chaque frame. On détecte AVANT de choisir les groupes car l'ordre des indices
+    -- est différent entre les deux datarefs.
+    if XPLMFindDataRef("toliss_airbus/fuelTankContent_kgs") then
+        slm_rf_toliss_dr = dataref_table("toliss_airbus/fuelTankContent_kgs")
+        slm_rf_is_toliss = true
+        -- Utilise la table ToLiss-spécifique ; par défaut : ailes int+ext + centre (tous les ToLiss ont [3][4])
+        slm_rf_groups = SLM_TANK_GROUPS_TOLISS[PLANE_ICAO or ""] or {{1,2},{3,4},{0}}
+        logMsg("[SLM-RF] ToLiss détecté (ICAO=" .. tostring(PLANE_ICAO) ..
+               ") : écriture dans fuelTankContent_kgs, groupes=" .. #slm_rf_groups)
+    else
+        slm_rf_toliss_dr = nil
+        slm_rf_is_toliss = false
+        -- Utilise la table standard m_fuel ; par défaut : deux réservoirs aile
+        slm_rf_groups = SLM_TANK_GROUPS[PLANE_ICAO or ""] or {{0,1}}
+    end
+
+    slm_rf_initial_real_kg = slm_rf_total_current()   -- snapshot pour le log
+
+    slm_rf_active             = true
+    slm_rf_group_idx          = 1
+    slm_rf_stall              = {}  -- réinitialise les compteurs de stall
+    slm_rf_prev               = {}  -- réinitialise les valeurs précédentes
+    slm_rf_last_fuel_loaded   = nil   -- sera initialisé au premier appel de slm_rf_update
+
+    logMsg("[SLM-RF] Remplissage réel démarré : cible=" ..
+           string.format("%.0f", slm_rf_target_kg) ..
+           " kg, réservoirs actuels=" .. string.format("%.0f", slm_rf_initial_real_kg) ..
+           " kg, ICAO=" .. tostring(PLANE_ICAO) ..
+           ", groupes=" .. #slm_rf_groups)
+end
+
+-- Gordang : Arrête et réinitialise le remplissage réel (appelé par reset_loads)
+function slm_rf_stop()
+    if slm_rf_active then
+        logMsg("[SLM-RF] Remplissage réel arrêté à " ..
+               string.format("%.0f", slm_rf_total_current()) .. " kg")
+    end
+    slm_rf_active             = false
+    slm_rf_group_idx          = 1
+    slm_rf_stall              = {}
+    slm_rf_prev               = {}
+    slm_rf_last_fuel_loaded   = nil
+    slm_rf_initial_real_kg    = 0
+    slm_rf_toliss_dr          = nil   -- Gordang : libère le handle ToLiss
+    slm_rf_is_toliss          = false
+end
+
+-- Gordang : Fonction principale de remplissage réel, appelée chaque frame par do_every_frame.
+-- Calcule le delta de fuel_loaded (barre visuelle) pour synchroniser la vitesse d'écriture
+-- dans les datarefs. La cible est vérifiée contre la somme réelle des réservoirs X-Plane
+-- afin de compenser la consommation moteur pendant le remplissage.
+function slm_rf_update()
+    if not slm_rf_active then return end
+    if slm_engines_blocked then return end  -- Gordang : suspendu si moteurs en marche
+    local dr = slm_rf_get_dr()
+    if not dr then return end
+
+    -- Premier appel : mémorise fuel_loaded pour ne réagir qu'aux incréments futurs
+    if slm_rf_last_fuel_loaded == nil then
+        slm_rf_last_fuel_loaded = fuel_loaded or 0
+        return
+    end
+
+    -- Delta depuis la barre visuelle (même unité que fuel_loaded / unit_system)
+    local current_fl  = fuel_loaded or 0
+    local delta_units = current_fl - slm_rf_last_fuel_loaded
+    if delta_units <= 0 then return end          -- la barre n'a pas encore bougé
+    slm_rf_last_fuel_loaded = current_fl
+
+    -- Conversion du delta en kg (les datarefs m_fuel sont toujours en kg)
+    local delta_kg = (unit_system == "lbs") and (delta_units * 0.453592) or delta_units
+
+    -- Condition d'arrêt : compare la somme RÉELLE des réservoirs à la cible.
+    -- Gère automatiquement la consommation moteur pendant le remplissage.
+    local total       = slm_rf_total_current()
+    local still_needed = slm_rf_target_kg - total
+    if still_needed <= 0.5 then
+        slm_rf_active = false
+        logMsg("[SLM-RF] Terminé : réservoirs=" .. string.format("%.1f", total) ..
+               " kg / cible=" .. string.format("%.0f", slm_rf_target_kg) .. " kg")
+        return
+    end
+    -- Bride le delta pour ne pas dépasser la cible sur le dernier tick
+    delta_kg = math.min(delta_kg, still_needed)
+
+    -- Tous les groupes épuisés (capacité des réservoirs < cible SimBrief)
+    if slm_rf_group_idx > #slm_rf_groups then
+        slm_rf_active = false
+        logMsg("[SLM-RF] Tous les groupes épuisés à " ..
+               string.format("%.0f / %.0f kg", total, slm_rf_target_kg))
+        return
+    end
+
+    -- Collecte les réservoirs non saturés dans le groupe courant
+    local group        = slm_rf_groups[slm_rf_group_idx]
+    local active_tanks = {}
+    for _, ti in ipairs(group) do
+        if (slm_rf_stall[ti] or 0) < 3 then
+            active_tanks[#active_tanks + 1] = ti
+        end
+    end
+
+    -- Tout le groupe est saturé → passe au groupe suivant, applique le delta au prochain tick
+    if #active_tanks == 0 then
+        logMsg("[SLM-RF] Groupe " .. slm_rf_group_idx ..
+               " saturé (réservoirs=" .. string.format("%.0f", total) ..
+               " kg), passage au suivant")
+        slm_rf_group_idx = slm_rf_group_idx + 1
+        slm_rf_stall = {}
+        slm_rf_prev  = {}
+        return
+    end
+
+    -- Répartit le delta équitablement entre les réservoirs actifs du groupe
+    local per_tank = delta_kg / #active_tanks
+
+    -- Gordang : Sélectionne le dataref autoritaire.
+    -- Pour ToLiss : leur FQMS lit fuelTankContent_kgs et écrase m_fuel à chaque frame,
+    -- donc on lit ET écrit dans fuelTankContent_kgs. Pour les autres avions : m_fuel standard.
+    local active_dr = (slm_rf_is_toliss and slm_rf_toliss_dr) or dr
+
+    for _, ti in ipairs(active_tanks) do
+        local cur = active_dr[ti] or 0
+
+        -- Détection de stall : notre écriture précédente a-t-elle été acceptée par X-Plane ?
+        -- Si la valeur n'a pas augmenté d'au moins 0.1 kg, on incrémente le compteur de stall.
+        if slm_rf_prev[ti] ~= nil then
+            if (cur - slm_rf_prev[ti]) < 0.1 then
+                slm_rf_stall[ti] = (slm_rf_stall[ti] or 0) + 1
+            else
+                slm_rf_stall[ti] = 0  -- progression normale, réinitialise le stall
+            end
+        else
+            slm_rf_stall[ti] = 0
+        end
+
+        -- N'écrit que si le réservoir n'est pas encore considéré comme plein (< 3 stalls)
+        if (slm_rf_stall[ti] or 0) < 3 then
+            slm_rf_prev[ti] = cur               -- mémorise avant écriture pour détection stall
+            active_dr[ti] = cur + per_tank       -- écrit dans le dataref autoritaire
         end
     end
 end
@@ -2138,6 +2438,7 @@ end
 -- RESET
 --------------------------------------------------------------------------------
 function reset_loads()
+    slm_rf_stop()  -- Gordang : stoppe et réinitialise le remplissage réel avant la remise à zéro
     cargo_loaded          = 0
     passengers_loaded     = 0
     cargo_unloaded        = 0
@@ -3066,6 +3367,24 @@ function build_embark_window(wnd, x, y)
 			fuel_first = new_fuel_first
 			save_user_settings()
 		end
+		-- Gordang : Case à cocher pour activer/désactiver l'écriture réelle dans les datarefs
+		local chg_rf, new_rf = imgui.Checkbox("Real Fuel Fill (writes datarefs)", slm_rf_enabled)
+		if chg_rf then
+			slm_rf_enabled = new_rf
+			save_user_settings()  -- persiste immédiatement
+		end
+		-- Gordang : Affiche l'état en temps réel (progression ou total final) à côté de la case
+		if slm_rf_enabled then
+			imgui.SameLine()
+			if slm_rf_active then
+				-- Remplissage en cours : affiche xx / cible kg
+				imgui.TextUnformatted(string.format(" [remplissage: %.0f / %.0f kg]",
+					slm_rf_total_current(), slm_rf_target_kg))
+			elseif fuel_done then
+				-- Remplissage terminé : affiche le total réel dans les réservoirs
+				imgui.TextUnformatted(string.format(" [terminé: %.0f kg]", slm_rf_total_current()))
+			end
+		end
 		local chg_skip, new_skip = imgui.Checkbox("Skip Crew Briefing", skip_crew_briefing)
 		if chg_skip then
 			skip_crew_briefing = new_skip
@@ -3359,7 +3678,22 @@ end
 	imgui.PopStyleColor()
 
 	local simbrief_ok = (SLM_Loadsheet_Data ~= nil)
-	if slm_actions_running or not simbrief_ok then imgui.BeginDisabled() end
+
+	-- Gordang : Avertissement moteurs en marche — message contextuel selon l'étape en cours
+	if slm_engines_blocked then
+		imgui.PushStyleColor(imgui.constant.Col.Text, 0xFF2222FF)  -- rouge vif
+		if embark_started then
+			imgui.TextUnformatted("⚠  Boarding paused — shut down engines to continue")
+		elseif disembark_started then
+			imgui.TextUnformatted("⚠  Deboarding paused — shut down engines to continue")
+		else
+			imgui.TextUnformatted("⚠  Engines running — shut down before starting")
+		end
+		imgui.PopStyleColor()
+	end
+
+	-- Gordang : Désactive aussi les boutons Start si les moteurs tournent
+	if slm_actions_running or not simbrief_ok or slm_engines_blocked then imgui.BeginDisabled() end
 
 	if not passed_500ft then
 		-- Departure mode: Start Loading only
@@ -3376,7 +3710,7 @@ end
 			start_night_stop()
 		end
 	end
-	if slm_actions_running or not simbrief_ok then imgui.EndDisabled() end
+	if slm_actions_running or not simbrief_ok or slm_engines_blocked then imgui.EndDisabled() end
 
 	imgui.SameLine()
 	if imgui.Button("Reset") then
@@ -3654,6 +3988,8 @@ do_every_frame("manage_crew_briefing()")
 do_every_frame("manage_catering()")
 do_every_frame("manage_cleaning()")
 do_every_frame("manage_crew_deplane()")
+do_every_frame("slm_rf_update()")  -- Gordang : exécute slm_rf_update chaque frame pour le remplissage réel
+do_every_frame("slm_update_engine_state()")  -- Gordang : détecte l'état des moteurs chaque frame
 
 
 load_user_settings()
