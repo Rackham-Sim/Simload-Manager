@@ -215,10 +215,12 @@ local slm_rp_toliss_fwdcargo_dr    = nil
 local slm_rp_toliss_aftcargo_dr    = nil
 local slm_rp_toliss_last_setweight = 0
 -- Zibo
-local slm_rp_zibo_zone_dr   = {}   -- [1..5] handles zone_payload
-local slm_rp_zibo_cargo1_dr = nil
-local slm_rp_zibo_cargo2_dr = nil
-local slm_rp_zibo_paxwt_dr  = nil
+local slm_rp_zibo_zone_dr        = {}   -- [1..5] handles zone_payload
+local slm_rp_zibo_cargo1_dr      = nil
+local slm_rp_zibo_cargo2_dr      = nil
+local slm_rp_zibo_paxwt_dr       = nil
+local slm_rp_zibo_embark_zone    = 5    -- zone courante embarquement  (5→4→3→2→1→5)
+local slm_rp_zibo_disembark_zone = 1    -- zone courante débarquement (1→2→3→4→5→1)
 
 -- Détection beacon — bloque toute la séquence si la beacon est allumée
 local slm_beacon_on = false  -- true si la beacon est allumée (bloque la séquence)
@@ -2100,7 +2102,7 @@ end
 --------------------------------------------------------------------------------
 
 local SLM_EXCLUDED_ICAO = {
-    ["D8CH"] = "Not supported — aircraft manages its own payload",
+    ["D8CH"] = "This aircraft manages its own payload and fuel.\nPlease use the onboard tablet to edit loading data",
 }
 
 function slm_detect_aircraft()
@@ -2153,6 +2155,7 @@ function slm_rp_start()
     elseif slm_aircraft_type == "zibo" then
         slm_rp_zibo_paxwt_dr = dataref_table("laminar/B738/std_pax_weight")
         slm_rp_zibo_paxwt_dr[0] = SB_pax_weight or 0
+        slm_rp_zibo_embark_zone = 5
         for z = 1, 5 do
             slm_rp_zibo_zone_dr[z] = dataref_table("laminar/B738/tab/zone" .. z .. "_payload")
             slm_rp_zibo_zone_dr[z][0] = 0
@@ -2246,13 +2249,14 @@ function slm_rp_update()
             if slm_rp_last_pax_loaded == nil then
                 slm_rp_last_pax_loaded = passengers_loaded or 0
             else
-                local cur = passengers_loaded or 0
-                if cur ~= slm_rp_last_pax_loaded then
-                    slm_rp_last_pax_loaded = cur
-                    local per_zone = math.floor(cur / 5)
-                    local rem = cur - per_zone * 5
-                    for z = 1, 5 do
-                        slm_rp_zibo_zone_dr[z][0] = per_zone + (z == 1 and rem or 0)
+                local delta_pax = (passengers_loaded or 0) - slm_rp_last_pax_loaded
+                if delta_pax > 0 then
+                    slm_rp_last_pax_loaded = passengers_loaded
+                    for _ = 1, delta_pax do
+                        slm_rp_zibo_zone_dr[slm_rp_zibo_embark_zone][0] =
+                            (slm_rp_zibo_zone_dr[slm_rp_zibo_embark_zone][0] or 0) + 1
+                        slm_rp_zibo_embark_zone = slm_rp_zibo_embark_zone - 1
+                        if slm_rp_zibo_embark_zone < 1 then slm_rp_zibo_embark_zone = 5 end
                     end
                 end
             end
@@ -2299,7 +2303,7 @@ function slm_rp_update()
         end
 
         local now = os.clock()
-        if now - slm_rp_toliss_last_setweight >= 10 then
+        if now - slm_rp_toliss_last_setweight >= 5 then
             slm_rp_toliss_last_setweight = now
             command_once("AirbusFBW/SetWeightAndCG")
         end
@@ -2365,17 +2369,22 @@ function slm_rp_unload_update()
         if (passengers_total or 0) > 0 then
             if slm_rp_last_pax_unloaded == nil then
                 slm_rp_last_pax_unloaded = passengers_unloaded or 0
+                slm_rp_zibo_disembark_zone = 1
             else
-                local cur_unloaded = passengers_unloaded or 0
-                if cur_unloaded ~= slm_rp_last_pax_unloaded then
-                    slm_rp_last_pax_unloaded = cur_unloaded
-                    local remaining = math.max(0, (passengers_total or 0) - cur_unloaded)
-                    local per_zone = math.floor(remaining / 5)
-                    local rem = remaining - per_zone * 5
-                    for z = 1, 5 do
-                        slm_rp_zibo_zone_dr[z][0] = per_zone + (z == 1 and rem or 0)
+                local delta_pax = (passengers_unloaded or 0) - slm_rp_last_pax_unloaded
+                if delta_pax > 0 then
+                    slm_rp_last_pax_unloaded = passengers_unloaded
+                    for _ = 1, delta_pax do
+                        slm_rp_zibo_zone_dr[slm_rp_zibo_disembark_zone][0] =
+                            math.max(0, (slm_rp_zibo_zone_dr[slm_rp_zibo_disembark_zone][0] or 0) - 1)
+                        slm_rp_zibo_disembark_zone = slm_rp_zibo_disembark_zone + 1
+                        if slm_rp_zibo_disembark_zone > 5 then slm_rp_zibo_disembark_zone = 1 end
                     end
                 end
+            end
+            -- Remise à zéro complète quand tout le monde est descendu
+            if (passengers_unloaded or 0) >= (passengers_total or 0) then
+                for z = 1, 5 do slm_rp_zibo_zone_dr[z][0] = 0 end
             end
         end
 
@@ -2420,7 +2429,7 @@ function slm_rp_unload_update()
         end
 
         local now = os.clock()
-        if now - slm_rp_toliss_last_setweight >= 10 then
+        if now - slm_rp_toliss_last_setweight >= 5 then
             slm_rp_toliss_last_setweight = now
             command_once("AirbusFBW/SetWeightAndCG")
         end
@@ -4377,6 +4386,7 @@ do
         dataref_table("AirbusFBW/NoPax")[0]    = 0
         dataref_table("AirbusFBW/FwdCargo")[0] = 0
         dataref_table("AirbusFBW/AftCargo")[0] = 0
+        command_once("AirbusFBW/SetWeightAndCG")
     end
     if XPLMFindDataRef("laminar/B738/tab/zone1_payload") then
         for z = 1, 5 do
