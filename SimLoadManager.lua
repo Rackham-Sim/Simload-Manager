@@ -938,7 +938,6 @@ function start_embarkation()
         end
     end
     init_sounds()
-    slm_rp_start()  -- démarre le payload fill si l'option est activée
 end
 
 
@@ -973,6 +972,10 @@ function manage_embark()
 			cargo_start_reference_time = os.clock()
         end
     end
+
+    -- Démarre le payload fill une seule fois au début du chargement cargo/pax
+    -- (même pattern que slm_rf_start dans manage_fuel_loading)
+    if not slm_rp_active and slm_rp_station_dr == nil then slm_rp_start() end
 
     local now = os.clock()
     local elapsed = now - last_update_time
@@ -2100,14 +2103,9 @@ function slm_rp_start()
     if slm_beacon_on then return end
     if (passengers_total or 0) <= 0 and (cargo_total or 0) <= 0 then return end
 
-    -- Cibles en kg (conversion depuis lbs si nécessaire)
-    if unit_system == "lbs" then
-        slm_rp_target_pax_kg   = (SB_pax_mass_planned or 0) * 0.453592
-        slm_rp_target_cargo_kg = (cargo_total or 0) * 0.453592
-    else
-        slm_rp_target_pax_kg   = SB_pax_mass_planned or 0
-        slm_rp_target_cargo_kg = cargo_total or 0
-    end
+    -- Cibles dans l'unité SimBrief (pas de conversion — SimBrief fournit déjà la bonne unité)
+    slm_rp_target_pax_kg   = (passengers_total or 0) * (SB_pax_weight or 0)
+    slm_rp_target_cargo_kg = cargo_total or 0
 
     slm_rp_station_dr        = dataref_table("sim/flightmodel/weight/m_stations")
     slm_rp_last_pax_loaded   = nil
@@ -2163,8 +2161,7 @@ function slm_rp_update()
             local delta_units = (cargo_loaded or 0) - slm_rp_last_cargo_loaded
             if delta_units > 0 then
                 slm_rp_last_cargo_loaded = cargo_loaded
-                local delta_kg = (unit_system == "lbs") and (delta_units * 0.453592) or delta_units
-                local per_station = delta_kg / 2
+                local per_station = delta_units / 2
                 for i = 3, 4 do
                     dr[i] = (dr[i] or 0) + per_station
                 end
@@ -3330,8 +3327,6 @@ function slm_draw_sequence_steps()
                 fuel_color_pushed = true
             else
                 fuel_fraction = (fuel_total > 0) and (fuel_loaded / fuel_total) or 0
-                imgui.PushStyleColor(COL.PlotHistogram, 0xFF00FFFF)  -- yellow: refueling
-                fuel_color_pushed = true
             end
             fuel_fraction = math.max(0, math.min(1, fuel_fraction))
             imgui.ProgressBar(fuel_fraction, 200, 20, "")
