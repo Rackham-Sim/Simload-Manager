@@ -2102,7 +2102,7 @@ end
 --------------------------------------------------------------------------------
 
 local SLM_EXCLUDED_ICAO = {
-    ["D8CH"] = "This aircraft manages its own payload and fuel.\nPlease use the onboard tablet to edit loading data",
+    ["DH8D"] = "This aircraft manages its own payload and fuel.\nPlease use the onboard tablet to edit loading data",
 }
 
 function slm_detect_aircraft()
