@@ -2291,21 +2291,15 @@ function slm_rp_update()
 
         if (passengers_total or 0) > 0 then
             slm_rp_toliss_nopax_dr[0] = passengers_loaded or 0
+            slm_rp_last_pax_loaded    = passengers_loaded   -- garde manage_embark()
             pax_done_rp = (passengers_loaded or 0) >= (passengers_total or 0)
         end
 
         if (cargo_total or 0) > 0 and slm_rp_target_cargo_kg > 0 then
-            if slm_rp_last_cargo_loaded == nil then
-                slm_rp_last_cargo_loaded = cargo_loaded or 0
-            else
-                local delta_units = (cargo_loaded or 0) - slm_rp_last_cargo_loaded
-                if delta_units > 0 then
-                    slm_rp_last_cargo_loaded = cargo_loaded
-                    local half = delta_units / 2
-                    slm_rp_toliss_fwdcargo_dr[0] = (slm_rp_toliss_fwdcargo_dr[0] or 0) + half
-                    slm_rp_toliss_aftcargo_dr[0] = (slm_rp_toliss_aftcargo_dr[0] or 0) + half
-                end
-            end
+            local frac = math.min(1.0, (cargo_loaded or 0) / cargo_total)
+            local half  = (slm_rp_target_cargo_kg / 2) * frac
+            slm_rp_toliss_fwdcargo_dr[0] = half
+            slm_rp_toliss_aftcargo_dr[0] = half
             cargo_done_rp = (cargo_loaded or 0) >= (cargo_total or 0)
         end
 
@@ -2317,6 +2311,9 @@ function slm_rp_update()
     end
 
     if pax_done_rp and cargo_done_rp then
+        if slm_aircraft_type == "toliss" then
+            command_once("AirbusFBW/SetWeightAndCG")  -- validation finale
+        end
         slm_rp_active = false
         logMsg("[SLM-RP] Payload fill terminé (" .. slm_aircraft_type .. ")")
     end
