@@ -186,7 +186,7 @@ local slm_rf_step_kg   = 10.0    -- kg ajoutés par pas par réservoir actif (r�
 local slm_rf_group_idx = 1       -- indice du groupe de réservoirs en cours de remplissage (base 1)
 local slm_rf_groups    = {}      -- liste ordonnée de groupes : chaque groupe = liste d'indices de tanks
 local SLM_RF_SAT_WINDOW    = 10   -- nombre de ticks dans l'historique glissant par tank
-local SLM_RF_SAT_THRESHOLD = 0.5  -- variation nette min (kg) pour qu'un tank soit considéré comme progressant
+local SLM_RF_SAT_THRESHOLD = 0.5  -- progression min (kg) du plancher entre moitié ancienne et moitié récente
 local slm_rf_history   = {}      -- historique glissant par tank : table de N valeurs lues consécutives
 local slm_rf_tank_dr          = nil   -- handle dataref_table (initialisé à la première utilisation)
 local slm_rf_last_fuel_loaded = nil   -- dernière valeur de fuel_loaded connue, pour le calcul du delta
@@ -2031,6 +2031,23 @@ function slm_rf_stop()
     slm_rf_group_dr_override  = {}
 end
 
+-- Gordang : Détecte si un tank est saturé à sa capacité physique max.
+-- Compare le minimum de la moitié ancienne vs la moitié récente de la fenêtre glissante.
+-- Un tank oscillant (6490↔6500) maintient le même plancher dans les deux moitiés → saturé.
+-- Un tank en cours de remplissage voit son plancher monter → non saturé.
+local function slm_rf_is_sat(h)
+    if not h or #h < SLM_RF_SAT_WINDOW then return false end
+    local half = math.floor(SLM_RF_SAT_WINDOW / 2)
+    local mn_old, mn_new = math.huge, math.huge
+    for i = 1, half do
+        if h[i] < mn_old then mn_old = h[i] end
+    end
+    for i = half + 1, SLM_RF_SAT_WINDOW do
+        if h[i] < mn_new then mn_new = h[i] end
+    end
+    return (mn_new - mn_old) < SLM_RF_SAT_THRESHOLD
+end
+
 -- Gordang : Fonction principale de remplissage réel, appelée chaque frame par do_every_frame.
 -- Calcule le delta de fuel_loaded (barre visuelle) pour synchroniser la vitesse d'écriture
 -- dans les datarefs. La cible est vérifiée contre la somme réelle des réservoirs X-Plane
@@ -2114,10 +2131,7 @@ function slm_rf_update()
     local group_weights = group.weights            -- nil → répartition égale
     local active_tanks  = {}
     for _, ti in ipairs(group_indices) do
-        local h = slm_rf_history[ti]
-        local saturated = h and (#h >= SLM_RF_SAT_WINDOW) and
-                          (math.abs(h[#h] - h[1]) < SLM_RF_SAT_THRESHOLD)
-        if not saturated then
+        if not slm_rf_is_sat(slm_rf_history[ti]) then
             active_tanks[#active_tanks + 1] = ti
         end
     end
@@ -2165,10 +2179,7 @@ function slm_rf_update()
     for _, ti in ipairs(active_tanks) do
         local cur = fill_dr[ti] or 0
 
-        -- Détection de saturation par historique glissant (chemin m_fuel uniquement).
-        -- On maintient une fenêtre de SLM_RF_SAT_WINDOW valeurs lues consécutives.
-        -- Le tank est saturé si la variation nette (newest - oldest) < SLM_RF_SAT_THRESHOLD kg :
-        -- les oscillations X-Plane s'annulent, contrairement à un vrai remplissage progressif.
+        -- Mise à jour de l'historique glissant, puis détection de saturation via slm_rf_is_sat.
         local h = slm_rf_history[ti]
         if not h then h = {}; slm_rf_history[ti] = h end
         if #h < SLM_RF_SAT_WINDOW then
@@ -2178,9 +2189,7 @@ function slm_rf_update()
             h[SLM_RF_SAT_WINDOW] = cur
         end
 
-        local saturated = (#h >= SLM_RF_SAT_WINDOW) and
-                          (math.abs(h[SLM_RF_SAT_WINDOW] - h[1]) < SLM_RF_SAT_THRESHOLD)
-        if not saturated then
+        if not slm_rf_is_sat(h) then
             fill_dr[ti] = cur + tank_amounts[ti]   -- écrit dans le dataref autoritaire
         end
     end
