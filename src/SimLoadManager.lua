@@ -1897,7 +1897,8 @@ local SLM_TANK_GROUPS = {
     ["MD11"] = {{0,1},{2}},
     ["C17"]  = {{0,1},{2}},
     ["IL96"] = {{0,1},{2}},
-    ["E19L"] = {{0,1},{2}},  -- Embraer Lineage 1000 (ailes + centre)
+    ["E19L"] = {{0,1},{indices={2,3},weights={0.6,0.4}}},  -- Embraer Lineage 1000 (ailes → centre+aux pondéré)
+    ["E35L"] = {{0,1},{3,4},{4,6},{0}},                  -- Embraer Legacy 650
     -- 4+ réservoirs : ailes + centre + auxiliaires
     ["A345"] = {{0,1},{2},{3,4}},
     ["A346"] = {{0,1},{2},{3,4}},
@@ -2108,9 +2109,12 @@ function slm_rf_update()
     end
 
     -- Collecte les réservoirs non saturés dans le groupe courant
-    local group        = slm_rf_groups[slm_rf_group_idx]
-    local active_tanks = {}
-    for _, ti in ipairs(group) do
+    -- Support deux formats : array simple {0,1} ou pondéré {indices={2,3}, weights={0.6,0.4}}
+    local group         = slm_rf_groups[slm_rf_group_idx]
+    local group_indices = group.indices or group   -- liste des indices de tanks
+    local group_weights = group.weights            -- nil → répartition égale
+    local active_tanks  = {}
+    for _, ti in ipairs(group_indices) do
         if (slm_rf_stall[ti] or 0) < 3 then
             active_tanks[#active_tanks + 1] = ti
         end
@@ -2127,8 +2131,30 @@ function slm_rf_update()
         return
     end
 
-    -- Répartit le delta équitablement entre les réservoirs actifs du groupe
-    local per_tank = delta_kg / #active_tanks
+    -- Calcule la quantité à ajouter par réservoir actif (pondérée ou égale)
+    local tank_amounts = {}
+    if group_weights then
+        -- Répartition pondérée : renormalise sur les tanks encore actifs
+        local w_sum = 0
+        local active_w = {}
+        for _, ti in ipairs(active_tanks) do
+            local w = 1.0
+            for j, idx in ipairs(group_indices) do
+                if idx == ti then w = group_weights[j] or 1.0; break end
+            end
+            active_w[ti] = w
+            w_sum = w_sum + w
+        end
+        for _, ti in ipairs(active_tanks) do
+            tank_amounts[ti] = delta_kg * (active_w[ti] / w_sum)
+        end
+    else
+        -- Répartition égale (comportement existant)
+        local per_tank = delta_kg / #active_tanks
+        for _, ti in ipairs(active_tanks) do
+            tank_amounts[ti] = per_tank
+        end
+    end
 
     -- Gordang : Sélectionne le dataref autoritaire.
     -- Pour ToLiss : leur FQMS lit fuelTankContent_kgs et écrase m_fuel à chaque frame,
@@ -2152,8 +2178,8 @@ function slm_rf_update()
 
         -- N'écrit que si le réservoir n'est pas encore considéré comme plein (< 3 stalls)
         if (slm_rf_stall[ti] or 0) < 3 then
-            slm_rf_prev[ti] = cur               -- mémorise avant écriture pour détection stall
-            fill_dr[ti] = cur + per_tank         -- écrit dans le dataref autoritaire
+            slm_rf_prev[ti] = cur                      -- mémorise avant écriture pour détection stall
+            fill_dr[ti] = cur + tank_amounts[ti]        -- écrit dans le dataref autoritaire
         end
     end
 end
