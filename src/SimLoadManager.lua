@@ -191,6 +191,7 @@ local slm_rf_tank_dr          = nil   -- handle dataref_table (initialisé à la
 local slm_rf_last_fuel_loaded = nil   -- dernière valeur de fuel_loaded connue, pour le calcul du delta
 local slm_rf_initial_real_kg  = 0    -- somme réelle des réservoirs au démarrage (log seulement)
 local slm_rf_toliss_dr        = nil   -- handle dataref_table pour toliss_airbus/fuelTankContent_kgs
+local slm_rf_group_dr_override = {}  -- surcharge de dataref par index de groupe (ex: tanks ACT ToLiss → m_fuel)
 
 -- Détection centralisée du type d'avion
 local slm_aircraft_type   = "default"  -- "default" | "zibo" | "toliss"
@@ -1967,9 +1968,27 @@ function slm_rf_start()
     slm_rf_get_dr()  -- initialise le handle dataref m_fuel maintenant
 
     -- Utilise slm_aircraft_type (défini par slm_detect_aircraft au clic sur Start)
+    slm_rf_group_dr_override = {}
     if slm_aircraft_type == "toliss" then
         slm_rf_toliss_dr = dataref_table("toliss_airbus/fuelTankContent_kgs")
-        slm_rf_groups = SLM_TANK_GROUPS_TOLISS[PLANE_ICAO or ""] or {{1,2},{3,4},{0}}
+        -- Copie les groupes de base (évite de modifier la table partagée si on ajoute des groupes extra)
+        local base_groups = SLM_TANK_GROUPS_TOLISS[PLANE_ICAO or ""] or {{1,2},{3,4},{0}}
+        slm_rf_groups = {}
+        for i, g in ipairs(base_groups) do slm_rf_groups[i] = g end
+        -- Réservoirs extra ToLiss ACT (Additional Center Tanks)
+        local extra_ref = XPLMFindDataRef("AirbusFBW/FuelNumExtraTanks")
+        if extra_ref then
+            local num_extra = XPLMGetDatai(extra_ref)
+            if num_extra == 1 then
+                slm_rf_groups[#slm_rf_groups + 1] = {3}
+                slm_rf_group_dr_override[#slm_rf_groups] = slm_rf_get_dr()  -- écrit dans m_fuel, pas fuelTankContent_kgs
+                logMsg("[SLM-RF] ToLiss ACT : 1 extra tank → m_fuel[3]")
+            elseif num_extra >= 2 then
+                slm_rf_groups[#slm_rf_groups + 1] = {3, 4}
+                slm_rf_group_dr_override[#slm_rf_groups] = slm_rf_get_dr()  -- écrit dans m_fuel, pas fuelTankContent_kgs
+                logMsg("[SLM-RF] ToLiss ACT : 2 extra tanks → m_fuel[3+4] simultanément")
+            end
+        end
         logMsg("[SLM-RF] ToLiss (ICAO=" .. tostring(PLANE_ICAO) ..
                ") : écriture dans fuelTankContent_kgs, groupes=" .. #slm_rf_groups)
     elseif slm_aircraft_type == "zibo" then
@@ -2009,6 +2028,7 @@ function slm_rf_stop()
     slm_rf_last_fuel_loaded   = nil
     slm_rf_initial_real_kg    = 0
     slm_rf_toliss_dr          = nil   -- libère le handle ToLiss
+    slm_rf_group_dr_override  = {}
 end
 
 -- Gordang : Fonction principale de remplissage réel, appelée chaque frame par do_every_frame.
@@ -2113,8 +2133,10 @@ function slm_rf_update()
     -- Gordang : Sélectionne le dataref autoritaire.
     -- Pour ToLiss : leur FQMS lit fuelTankContent_kgs et écrase m_fuel à chaque frame,
     -- donc on lit ET écrit dans fuelTankContent_kgs. Pour les autres avions : m_fuel standard.
+    -- Exception : réservoirs extra ACT ToLiss → toujours m_fuel (défini dans slm_rf_group_dr_override).
+    local fill_dr = slm_rf_group_dr_override[slm_rf_group_idx] or active_dr
     for _, ti in ipairs(active_tanks) do
-        local cur = active_dr[ti] or 0
+        local cur = fill_dr[ti] or 0
 
         -- Détection de stall : notre écriture précédente a-t-elle été acceptée par X-Plane ?
         -- Si la valeur n'a pas augmenté d'au moins 0.1 kg, on incrémente le compteur de stall.
@@ -2131,7 +2153,7 @@ function slm_rf_update()
         -- N'écrit que si le réservoir n'est pas encore considéré comme plein (< 3 stalls)
         if (slm_rf_stall[ti] or 0) < 3 then
             slm_rf_prev[ti] = cur               -- mémorise avant écriture pour détection stall
-            active_dr[ti] = cur + per_tank       -- écrit dans le dataref autoritaire
+            fill_dr[ti] = cur + per_tank         -- écrit dans le dataref autoritaire
         end
     end
 end
