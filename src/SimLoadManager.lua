@@ -186,10 +186,8 @@ local slm_rf_step_kg   = 10.0    -- kg ajoutés par pas par réservoir actif (r�
 local slm_rf_group_idx = 1       -- indice du groupe de réservoirs en cours de remplissage (base 1)
 local slm_rf_groups    = {}      -- liste ordonnée de groupes : chaque groupe = liste d'indices de tanks
 local SLM_RF_SAT_WINDOW    = 10   -- nombre de ticks dans l'historique glissant par tank
-local SLM_RF_SAT_FRACTION  = 0.5  -- seuil relatif : saturé si progression réelle < 50 % de ce qu'on a écrit
-                                   -- invariant au framerate et au preset (s'adapte à tank_amounts[ti])
+local SLM_RF_SAT_THRESHOLD = 0.5  -- progression min (kg) du plancher entre moitié ancienne et moitié récente
 local slm_rf_history   = {}      -- historique glissant par tank : table de N valeurs lues consécutives
-local slm_rf_saturated = {}      -- cache de l'état de saturation par tank (mis à jour dans la boucle d'écriture)
 local slm_rf_tank_dr          = nil   -- handle dataref_table (initialisé à la première utilisation)
 local slm_rf_last_fuel_loaded = nil   -- dernière valeur de fuel_loaded connue, pour le calcul du delta
 local slm_rf_initial_real_kg  = 0    -- somme réelle des réservoirs au démarrage (log seulement)
@@ -1885,6 +1883,7 @@ end
 local SLM_TANK_GROUPS = {
     -- 3 réservoirs : ailes + centre
     ["A332"] = {{0,1},{2}},
+    ["A333"] = {{0,1},{2}},
     ["A338"] = {{0,1},{2}},
     ["A339"] = {{0,1},{2}},
     ["A35K"] = {{0,1},{2}},
@@ -1914,6 +1913,15 @@ local SLM_TANK_GROUPS = {
     ["B77W"] = {{0,1},{2},{3,4}},
     ["B773"] = {{0,1},{2},{3,4}},
     ["B779"] = {{0,1},{2},{3,4}},
+}
+
+-- Gordang : Phases de remplissage spécifiques à l'A333 Laminar (chemin m_fuel).
+-- Phase 1 : ailes (0 gauche / 2 droite) 92 % du step + aux (3 gauche / 4 droite) 8 %, simultané.
+-- Phase 2 : centre (1) + trim (5), 50/50, démarré quand 0/2/3/4 sont saturés.
+-- Tanks 6/7/8 jamais touchés. slm_rf_group_idx sert d'indicateur de phase (1 ou 2).
+local SLM_RF_A333_PHASES = {
+    [1] = {{ti=0, share=0.46}, {ti=2, share=0.46}, {ti=3, share=0.04}, {ti=4, share=0.04}},
+    [2] = {{ti=1, share=0.5 }, {ti=5, share=0.5 }},
 }
 
 -- Gordang : Table de groupes SPÉCIFIQUE ToLiss (indices pour toliss_airbus/fuelTankContent_kgs).
@@ -2009,7 +2017,6 @@ function slm_rf_start()
     slm_rf_active             = true
     slm_rf_group_idx          = 1
     slm_rf_history            = {}  -- réinitialise l'historique de saturation
-    slm_rf_saturated          = {}  -- réinitialise le cache de saturation
     slm_rf_last_fuel_loaded   = nil   -- sera initialisé au premier appel de slm_rf_update
 
     logMsg("[SLM-RF] Remplissage réel démarré : cible=" ..
@@ -2028,7 +2035,6 @@ function slm_rf_stop()
     slm_rf_active             = false
     slm_rf_group_idx          = 1
     slm_rf_history            = {}
-    slm_rf_saturated          = {}
     slm_rf_last_fuel_loaded   = nil
     slm_rf_initial_real_kg    = 0
     slm_rf_toliss_dr          = nil   -- libère le handle ToLiss
@@ -2038,11 +2044,9 @@ end
 -- Gordang : Détecte si un tank est saturé à sa capacité physique max.
 -- Compare le minimum de la moitié ancienne vs la moitié récente de la fenêtre glissante.
 -- Un tank oscillant (6490↔6500) maintient le même plancher dans les deux moitiés → saturé.
--- Un tank en cours de remplissage voit son plancher monter d'environ (expected) kg → non saturé.
--- expected = tank_amounts[ti] × (N/2) : progression attendue si toutes les écritures sont acceptées.
-local function slm_rf_is_sat(h, expected)
+-- Un tank en cours de remplissage voit son plancher monter → non saturé.
+local function slm_rf_is_sat(h)
     if not h or #h < SLM_RF_SAT_WINDOW then return false end
-    if not expected or expected <= 0 then return false end
     local half = math.floor(SLM_RF_SAT_WINDOW / 2)
     local mn_old, mn_new = math.huge, math.huge
     for i = 1, half do
@@ -2051,7 +2055,7 @@ local function slm_rf_is_sat(h, expected)
     for i = half + 1, SLM_RF_SAT_WINDOW do
         if h[i] < mn_new then mn_new = h[i] end
     end
-    return (mn_new - mn_old) < expected * SLM_RF_SAT_FRACTION
+    return (mn_new - mn_old) < SLM_RF_SAT_THRESHOLD
 end
 
 -- Gordang : Fonction principale de remplissage réel, appelée chaque frame par do_every_frame.
@@ -2137,7 +2141,7 @@ function slm_rf_update()
     local group_weights = group.weights            -- nil → répartition égale
     local active_tanks  = {}
     for _, ti in ipairs(group_indices) do
-        if not slm_rf_saturated[ti] then
+        if not slm_rf_is_sat(slm_rf_history[ti]) then
             active_tanks[#active_tanks + 1] = ti
         end
     end
@@ -2148,8 +2152,7 @@ function slm_rf_update()
                " saturé (réservoirs=" .. string.format("%.0f", total) ..
                " kg), passage au suivant")
         slm_rf_group_idx = slm_rf_group_idx + 1
-        slm_rf_history   = {}
-        slm_rf_saturated = {}
+        slm_rf_history = {}
         return
     end
 
@@ -2187,7 +2190,6 @@ function slm_rf_update()
         local cur = fill_dr[ti] or 0
 
         -- Mise à jour de l'historique glissant, puis détection de saturation via slm_rf_is_sat.
-        -- expected = progression attendue sur la demi-fenêtre si toutes les écritures sont acceptées.
         local h = slm_rf_history[ti]
         if not h then h = {}; slm_rf_history[ti] = h end
         if #h < SLM_RF_SAT_WINDOW then
@@ -2197,13 +2199,7 @@ function slm_rf_update()
             h[SLM_RF_SAT_WINDOW] = cur
         end
 
-        -- Saturation uniquement sur le chemin m_fuel (avions generiques).
-        -- ToLiss : le FQMS ajuste fuelTankContent_kgs chaque frame → faux positifs si on détecte ici.
-        if slm_aircraft_type ~= "toliss" then
-            local expected = tank_amounts[ti] * math.floor(SLM_RF_SAT_WINDOW / 2)
-            slm_rf_saturated[ti] = slm_rf_is_sat(h, expected)
-        end
-        if not slm_rf_saturated[ti] then
+        if not slm_rf_is_sat(h) then
             fill_dr[ti] = cur + tank_amounts[ti]   -- écrit dans le dataref autoritaire
         end
     end
