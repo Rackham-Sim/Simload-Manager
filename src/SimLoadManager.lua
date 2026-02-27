@@ -1897,8 +1897,8 @@ local SLM_TANK_GROUPS = {
     ["MD11"] = {{0,1},{2}},
     ["C17"]  = {{0,1},{2}},
     ["IL96"] = {{0,1},{2}},
-    ["E19L"] = {{0,1},{indices={2,3},weights={0.6,0.4}}},  -- Embraer Lineage 1000 (ailes → centre+aux pondéré)
-    ["E35L"] = {{0,1},{3,4},{4,6},{0}},                  -- Embraer Legacy 650
+    ["E19L"] = {{0,1},{2,3},
+    ["E35L"] = {{0,1},{3,4},{4,6},{0}},
     -- 4+ réservoirs : ailes + centre + auxiliaires
     ["A345"] = {{0,1},{2},{3,4}},
     ["A346"] = {{0,1},{2},{3,4}},
