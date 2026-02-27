@@ -505,7 +505,7 @@ function update_loop_volumes()
             set_sound_gain(sounds.briefing.id, (view_is_external == 1 and 0.0001 or 0.9) * vol)
         end
         if catering_loop_playing and sounds.catering_loop.id and sounds.catering_loop.id ~= 0 then
-            set_sound_gain(sounds.catering_loop.id, (view_is_external == 1 and 0.0001 or 0.64) * vol)  -- -3dB vs other loops
+            set_sound_gain(sounds.catering_loop.id, (view_is_external == 1 and 0.0001 or 0.4) * vol)  -- -3dB vs other loops
         end
         if cleaning_loop_playing and sounds.cleaning_loop.id and sounds.cleaning_loop.id ~= 0 then
             set_sound_gain(sounds.cleaning_loop.id, (view_is_external == 1 and 0.0001 or 0.9) * vol)
