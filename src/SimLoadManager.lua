@@ -185,8 +185,9 @@ local slm_rf_interval  = 0.5     -- intervalle entre incréments en secondes (r�
 local slm_rf_step_kg   = 10.0    -- kg ajoutés par pas par réservoir actif (réservé)
 local slm_rf_group_idx = 1       -- indice du groupe de réservoirs en cours de remplissage (base 1)
 local slm_rf_groups    = {}      -- liste ordonnée de groupes : chaque groupe = liste d'indices de tanks
-local slm_rf_stall     = {}      -- compteur de stalls consécutifs par indice de réservoir
-local slm_rf_prev      = {}      -- valeur lue AVANT la dernière écriture, par indice de réservoir
+local SLM_RF_SAT_WINDOW    = 10   -- nombre de ticks dans l'historique glissant par tank
+local SLM_RF_SAT_THRESHOLD = 0.5  -- variation nette min (kg) pour qu'un tank soit considéré comme progressant
+local slm_rf_history   = {}      -- historique glissant par tank : table de N valeurs lues consécutives
 local slm_rf_tank_dr          = nil   -- handle dataref_table (initialisé à la première utilisation)
 local slm_rf_last_fuel_loaded = nil   -- dernière valeur de fuel_loaded connue, pour le calcul du delta
 local slm_rf_initial_real_kg  = 0    -- somme réelle des réservoirs au démarrage (log seulement)
@@ -2005,8 +2006,7 @@ function slm_rf_start()
 
     slm_rf_active             = true
     slm_rf_group_idx          = 1
-    slm_rf_stall              = {}  -- réinitialise les compteurs de stall
-    slm_rf_prev               = {}  -- réinitialise les valeurs précédentes
+    slm_rf_history            = {}  -- réinitialise l'historique de saturation
     slm_rf_last_fuel_loaded   = nil   -- sera initialisé au premier appel de slm_rf_update
 
     logMsg("[SLM-RF] Remplissage réel démarré : cible=" ..
@@ -2024,8 +2024,7 @@ function slm_rf_stop()
     end
     slm_rf_active             = false
     slm_rf_group_idx          = 1
-    slm_rf_stall              = {}
-    slm_rf_prev               = {}
+    slm_rf_history            = {}
     slm_rf_last_fuel_loaded   = nil
     slm_rf_initial_real_kg    = 0
     slm_rf_toliss_dr          = nil   -- libère le handle ToLiss
@@ -2115,7 +2114,10 @@ function slm_rf_update()
     local group_weights = group.weights            -- nil → répartition égale
     local active_tanks  = {}
     for _, ti in ipairs(group_indices) do
-        if (slm_rf_stall[ti] or 0) < 3 then
+        local h = slm_rf_history[ti]
+        local saturated = h and (#h >= SLM_RF_SAT_WINDOW) and
+                          (math.abs(h[#h] - h[1]) < SLM_RF_SAT_THRESHOLD)
+        if not saturated then
             active_tanks[#active_tanks + 1] = ti
         end
     end
@@ -2126,8 +2128,7 @@ function slm_rf_update()
                " saturé (réservoirs=" .. string.format("%.0f", total) ..
                " kg), passage au suivant")
         slm_rf_group_idx = slm_rf_group_idx + 1
-        slm_rf_stall = {}
-        slm_rf_prev  = {}
+        slm_rf_history = {}
         return
     end
 
@@ -2164,22 +2165,23 @@ function slm_rf_update()
     for _, ti in ipairs(active_tanks) do
         local cur = fill_dr[ti] or 0
 
-        -- Détection de stall : notre écriture précédente a-t-elle été acceptée par X-Plane ?
-        -- Si la valeur n'a pas augmenté d'au moins 0.1 kg, on incrémente le compteur de stall.
-        if slm_rf_prev[ti] ~= nil then
-            if cur <= slm_rf_prev[ti] then
-                slm_rf_stall[ti] = (slm_rf_stall[ti] or 0) + 1
-            else
-                slm_rf_stall[ti] = 0
-            end
+        -- Détection de saturation par historique glissant (chemin m_fuel uniquement).
+        -- On maintient une fenêtre de SLM_RF_SAT_WINDOW valeurs lues consécutives.
+        -- Le tank est saturé si la variation nette (newest - oldest) < SLM_RF_SAT_THRESHOLD kg :
+        -- les oscillations X-Plane s'annulent, contrairement à un vrai remplissage progressif.
+        local h = slm_rf_history[ti]
+        if not h then h = {}; slm_rf_history[ti] = h end
+        if #h < SLM_RF_SAT_WINDOW then
+            h[#h + 1] = cur
         else
-            slm_rf_stall[ti] = 0
+            table.remove(h, 1)
+            h[SLM_RF_SAT_WINDOW] = cur
         end
 
-        -- N'écrit que si le réservoir n'est pas encore considéré comme plein (< 3 stalls)
-        if (slm_rf_stall[ti] or 0) < 3 then
-            slm_rf_prev[ti] = cur                      -- mémorise avant écriture pour détection stall
-            fill_dr[ti] = cur + tank_amounts[ti]        -- écrit dans le dataref autoritaire
+        local saturated = (#h >= SLM_RF_SAT_WINDOW) and
+                          (math.abs(h[SLM_RF_SAT_WINDOW] - h[1]) < SLM_RF_SAT_THRESHOLD)
+        if not saturated then
+            fill_dr[ti] = cur + tank_amounts[ti]   -- écrit dans le dataref autoritaire
         end
     end
 end
