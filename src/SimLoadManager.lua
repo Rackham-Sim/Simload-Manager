@@ -186,8 +186,9 @@ local slm_rf_step_kg   = 10.0    -- kg ajoutés par pas par réservoir actif (r�
 local slm_rf_group_idx = 1       -- indice du groupe de réservoirs en cours de remplissage (base 1)
 local slm_rf_groups    = {}      -- liste ordonnée de groupes : chaque groupe = liste d'indices de tanks
 local SLM_RF_SAT_WINDOW    = 10   -- nombre de ticks dans l'historique glissant par tank
-local SLM_RF_SAT_THRESHOLD = 0.1  -- progression min (kg) du plancher entre moitié ancienne et moitié récente
-                                   -- doit rester < (poids_min × delta_kg_min × N/2) = 0.04 × 1 × 5 = 0.20 kg
+local SLM_RF_SAT_THRESHOLD = 0.01 -- progression min (kg) du plancher entre moitié ancienne et moitié récente
+                                   -- un tank saturé donne toujours min_new - min_old = 0 → tout threshold > 0 suffit
+                                   -- 0.01 couvre les tanks à 4 % même en mode Realistic à 144 fps
 local slm_rf_history   = {}      -- historique glissant par tank : table de N valeurs lues consécutives
 local slm_rf_tank_dr          = nil   -- handle dataref_table (initialisé à la première utilisation)
 local slm_rf_last_fuel_loaded = nil   -- dernière valeur de fuel_loaded connue, pour le calcul du delta
