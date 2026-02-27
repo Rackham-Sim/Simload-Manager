@@ -1898,6 +1898,7 @@ local SLM_TANK_GROUPS = {
     ["MD11"] = {{0,1},{2}},
     ["C17"]  = {{0,1},{2}},
     ["IL96"] = {{0,1},{2}},
+    -- A333 : chemin dédié dans slm_rf_update() (bi-phasé, voir SLM_RF_A333_PHASES)
     ["E19L"] = {{0,1},{2,3}},
     ["E35L"] = {{0,1},{3,4},{4,6},{0}},
     -- 4+ réservoirs : ailes + centre + auxiliaires
@@ -1912,6 +1913,15 @@ local SLM_TANK_GROUPS = {
     ["B77W"] = {{0,1},{2},{3,4}},
     ["B773"] = {{0,1},{2},{3,4}},
     ["B779"] = {{0,1},{2},{3,4}},
+}
+
+-- Gordang : Phases de remplissage spécifiques à l'A333 Laminar (chemin m_fuel).
+-- Phase 1 : ailes (0 gauche / 2 droite) 92 % du step + aux (3 gauche / 4 droite) 8 %, simultané.
+-- Phase 2 : centre (1) + trim (5), 50/50, démarré quand 0/2/3/4 sont saturés.
+-- Tanks 6/7/8 jamais touchés. slm_rf_group_idx sert d'indicateur de phase (1 ou 2).
+local SLM_RF_A333_PHASES = {
+    [1] = {{ti=0, share=0.46}, {ti=2, share=0.46}, {ti=3, share=0.04}, {ti=4, share=0.04}},
+    [2] = {{ti=1, share=0.5 }, {ti=5, share=0.5 }},
 }
 
 -- Gordang : Table de groupes SPÉCIFIQUE ToLiss (indices pour toliss_airbus/fuelTankContent_kgs).
@@ -2115,6 +2125,49 @@ function slm_rf_update()
     end
     -- Bride le delta pour ne pas dépasser la cible sur le dernier tick
     delta_kg = math.min(delta_kg, still_needed)
+
+    -- ── A333 (Laminar/default) : remplissage bi-phasé ──────────────────────────────────────────
+    if slm_aircraft_type == "default" and PLANE_ICAO == "A333" then
+        local phase = SLM_RF_A333_PHASES[slm_rf_group_idx]
+        if not phase then
+            -- Toutes les phases épuisées (capacité physique < cible SimBrief)
+            logMsg("[SLM-RF] A333 : toutes les phases épuisées à " ..
+                   string.format("%.0f / %.0f kg", total, slm_rf_target_kg))
+            slm_rf_active = false
+            return
+        end
+
+        -- Vérifie si TOUS les tanks de la phase courante sont saturés (état de la frame précédente)
+        local all_sat = true
+        for _, t in ipairs(phase) do
+            if not slm_rf_is_sat(slm_rf_history[t.ti]) then all_sat = false; break end
+        end
+        if all_sat then
+            logMsg("[SLM-RF] A333 phase " .. slm_rf_group_idx ..
+                   " terminée (réservoirs=" .. string.format("%.0f", total) ..
+                   " kg), passage à la phase suivante")
+            slm_rf_group_idx = slm_rf_group_idx + 1
+            slm_rf_history = {}
+            return
+        end
+
+        -- Distribue le delta selon les parts fixes ; met à jour l'historique de saturation
+        for _, t in ipairs(phase) do
+            local h = slm_rf_history[t.ti]
+            if not h then h = {}; slm_rf_history[t.ti] = h end
+            local cur = dr[t.ti] or 0
+            if #h < SLM_RF_SAT_WINDOW then
+                h[#h + 1] = cur
+            else
+                table.remove(h, 1)
+                h[SLM_RF_SAT_WINDOW] = cur
+            end
+            if not slm_rf_is_sat(h) then
+                dr[t.ti] = cur + delta_kg * t.share
+            end
+        end
+        return
+    end
 
     -- Tous les groupes épuisés (capacité des réservoirs < cible SimBrief)
     if slm_rf_group_idx > #slm_rf_groups then
