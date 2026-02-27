@@ -1920,18 +1920,19 @@ local SLM_TANK_GROUPS = {
 --   [3] = aile gauche extérieure  (présent sur TOUS les modèles ToLiss)
 --   [4] = aile droite extérieure  (présent sur TOUS les modèles ToLiss)
 -- Procédure de chargement Airbus : ailes intérieures → extérieures → centre.
--- Défaut pour tout ToLiss non listé : {{1,2},{3,4},{0}}
+-- Défaut pour tout ToLiss non listé : {{1,2},{0}}
+-- Les tanks 3 et 4 (ACT) sont ajoutés dynamiquement selon AirbusFBW/FuelNumExtraTanks.
 local SLM_TANK_GROUPS_TOLISS = {
-    -- Famille A320 ToLiss : ailes intérieures + extérieures + centre
-    ["A319"] = {{1,2},{3,4},{0}},
-    ["A320"] = {{1,2},{3,4},{0}},
-    ["A20N"] = {{1,2},{3,4},{0}},   -- A320neo
-    ["A321"] = {{1,2},{3,4},{0}},
-    ["A21N"] = {{1,2},{3,4},{0}},   -- A321neo
+    -- Famille A320 ToLiss : ailes intérieures → centre (ACT ajoutés dynamiquement)
+    ["A319"] = {{1,2},{0}},
+    ["A320"] = {{1,2},{0}},
+    ["A20N"] = {{1,2},{0}},   -- A320neo
+    ["A321"] = {{1,2},{0}},
+    ["A21N"] = {{1,2},{0}},   -- A321neo
     -- A330neo ToLiss
-    ["A339"] = {{1,2},{3,4},{0}},
+    ["A339"] = {{1,2},{0}},
     -- A340 ToLiss
-    ["A346"] = {{1,2},{3,4},{0}},
+    ["A346"] = {{1,2},{0}},
 }
 
 -- Gordang : Retourne (et initialise si besoin) le handle dataref_table des réservoirs
@@ -1975,18 +1976,17 @@ function slm_rf_start()
         local base_groups = SLM_TANK_GROUPS_TOLISS[PLANE_ICAO or ""] or {{1,2},{3,4},{0}}
         slm_rf_groups = {}
         for i, g in ipairs(base_groups) do slm_rf_groups[i] = g end
-        -- Réservoirs extra ToLiss ACT (Additional Center Tanks)
+        -- Réservoirs extra ToLiss ACT (Additional Center Tanks) → fuelTankContent_kgs[3] puis [4]
         local extra_ref = XPLMFindDataRef("AirbusFBW/FuelNumExtraTanks")
         if extra_ref then
             local num_extra = XPLMGetDatai(extra_ref)
-            if num_extra == 1 then
+            if num_extra >= 1 then
                 slm_rf_groups[#slm_rf_groups + 1] = {3}
-                slm_rf_group_dr_override[#slm_rf_groups] = slm_rf_get_dr()  -- écrit dans m_fuel, pas fuelTankContent_kgs
-                logMsg("[SLM-RF] ToLiss ACT : 1 extra tank → m_fuel[3]")
-            elseif num_extra >= 2 then
-                slm_rf_groups[#slm_rf_groups + 1] = {3, 4}
-                slm_rf_group_dr_override[#slm_rf_groups] = slm_rf_get_dr()  -- écrit dans m_fuel, pas fuelTankContent_kgs
-                logMsg("[SLM-RF] ToLiss ACT : 2 extra tanks → m_fuel[3+4] simultanément")
+                logMsg("[SLM-RF] ToLiss ACT : extra tank 1 → fuelTankContent_kgs[3]")
+            end
+            if num_extra >= 2 then
+                slm_rf_groups[#slm_rf_groups + 1] = {4}
+                logMsg("[SLM-RF] ToLiss ACT : extra tank 2 → fuelTankContent_kgs[4] (après [3])")
             end
         end
         logMsg("[SLM-RF] ToLiss (ICAO=" .. tostring(PLANE_ICAO) ..
