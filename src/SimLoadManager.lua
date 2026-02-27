@@ -2197,8 +2197,12 @@ function slm_rf_update()
             h[SLM_RF_SAT_WINDOW] = cur
         end
 
-        local expected = tank_amounts[ti] * math.floor(SLM_RF_SAT_WINDOW / 2)
-        slm_rf_saturated[ti] = slm_rf_is_sat(h, expected)
+        -- Saturation uniquement sur le chemin m_fuel (avions generiques).
+        -- ToLiss : le FQMS ajuste fuelTankContent_kgs chaque frame → faux positifs si on détecte ici.
+        if slm_aircraft_type ~= "toliss" then
+            local expected = tank_amounts[ti] * math.floor(SLM_RF_SAT_WINDOW / 2)
+            slm_rf_saturated[ti] = slm_rf_is_sat(h, expected)
+        end
         if not slm_rf_saturated[ti] then
             fill_dr[ti] = cur + tank_amounts[ti]   -- écrit dans le dataref autoritaire
         end
