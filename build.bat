@@ -74,7 +74,6 @@ if !ERRORS! == 1 (
 :: ============================================================
 :: Deploiement
 :: ============================================================
-
 if not exist "%XPLANE_SCRIPTS%" (
     echo.
     echo [AVERT.] Dossier X-Plane introuvable : %XPLANE_SCRIPTS%
@@ -82,11 +81,11 @@ if not exist "%XPLANE_SCRIPTS%" (
     pause
     exit /b 0
 )
-
 echo.
 echo Deploiement vers X-Plane...
 echo.
 
+:: -- Copie des scripts .lua
 for %%f in ("%DIST%\*.lua") do (
     set "FNAME=%%~nxf"
     copy /y "%%f" "%XPLANE_SCRIPTS%\!FNAME!" >nul
@@ -96,6 +95,21 @@ for %%f in ("%DIST%\*.lua") do (
     ) else (
         echo [OK]     !FNAME! deploye
     )
+)
+
+:: -- Copie du dossier audio
+set "SOUNDS_SRC=%DIST%\SimLoad-Manager-Sounds"
+set "SOUNDS_DST=%XPLANE_SCRIPTS%\SimLoad-Manager-Sounds"
+if exist "%SOUNDS_SRC%" (
+    xcopy /e /i /y "%SOUNDS_SRC%" "%SOUNDS_DST%" >nul
+    if errorlevel 1 (
+        echo [ECHEC]  Copie du dossier audio
+        set "ERRORS=1"
+    ) else (
+        echo [OK]     SimLoad-Manager-Sounds deploye
+    )
+) else (
+    echo [AVERT.] Dossier audio introuvable dans dist\, ignore.
 )
 
 echo.
