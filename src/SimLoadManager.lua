@@ -2167,10 +2167,10 @@ function slm_rf_update()
         -- Détection de stall : notre écriture précédente a-t-elle été acceptée par X-Plane ?
         -- Si la valeur n'a pas augmenté d'au moins 0.1 kg, on incrémente le compteur de stall.
         if slm_rf_prev[ti] ~= nil then
-            if (cur - slm_rf_prev[ti]) < 0.1 then
+            if cur <= slm_rf_prev[ti] then
                 slm_rf_stall[ti] = (slm_rf_stall[ti] or 0) + 1
             else
-                slm_rf_stall[ti] = 0  -- progression normale, réinitialise le stall
+                slm_rf_stall[ti] = 0
             end
         else
             slm_rf_stall[ti] = 0
