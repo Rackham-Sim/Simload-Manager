@@ -1914,14 +1914,6 @@ local SLM_TANK_GROUPS = {
     ["B779"] = {{0,1},{2},{3,4}},
 }
 
--- Gordang : Phases de remplissage spécifiques à l'A333 Laminar (chemin m_fuel).
--- Phase 1 : ailes (0 gauche / 2 droite) 92 % du step + aux (3 gauche / 4 droite) 8 %, simultané.
--- Phase 2 : centre (1) + trim (5), 50/50, démarré quand 0/2/3/4 sont saturés.
--- Tanks 6/7/8 jamais touchés. slm_rf_group_idx sert d'indicateur de phase (1 ou 2).
-local SLM_RF_A333_PHASES = {
-    [1] = {{ti=0, share=0.46}, {ti=2, share=0.46}, {ti=3, share=0.04}, {ti=4, share=0.04}},
-    [2] = {{ti=1, share=0.5 }, {ti=5, share=0.5 }},
-}
 
 -- Gordang : Table de groupes SPÉCIFIQUE ToLiss (indices pour toliss_airbus/fuelTankContent_kgs).
 -- Layout ToLiss Airbus (confirmé par DataRef Editor sur A320) :
