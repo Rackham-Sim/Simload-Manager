@@ -154,7 +154,7 @@ local cargo_start_reference_time = nil
 local cargo_loop_playing     = false
 local pax_loop_playing       = false
 local fuel_loop_playing      = false
-local briefing_loop_playing  = false
+local briefing_playing       = false
 local catering_loop_playing  = false
 local cleaning_loop_playing  = false
 local is_muted = false
@@ -440,7 +440,7 @@ sounds = {
     passengers_loop                = { path = sound_dir .. "Cabin-Pax.wav", id = nil },
 	start_fuel_loading			   = { path = sound_dir .. "Start-fuel.wav", id = nil },
 	fuel_loop 					   = { path = sound_dir .. "fuel-Loop.wav", id = nil },
-    briefing_loop                  = { path = sound_dir .. "Briefing-Loop.wav", id = nil },
+    briefing                       = { path = sound_dir .. "Briefing.wav", id = nil },
     catering_loop                  = { path = sound_dir .. "Catering-Loop.wav", id = nil },
     cleaning_loop                  = { path = sound_dir .. "Cleaning-Loop.wav", id = nil }
 }
@@ -482,8 +482,8 @@ function update_loop_volumes()
         set_sound_gain(sounds.cargo_loop.id, 0.0001)
         set_sound_gain(sounds.fuel_loop.id, 0.0001)
         set_sound_gain(sounds.passengers_loop.id, 0.0001)
-        if sounds.briefing_loop.id and sounds.briefing_loop.id ~= 0 then
-            set_sound_gain(sounds.briefing_loop.id, 0.0001)
+        if sounds.briefing.id and sounds.briefing.id ~= 0 then
+            set_sound_gain(sounds.briefing.id, 0.0001)
         end
         if sounds.catering_loop.id and sounds.catering_loop.id ~= 0 then
             set_sound_gain(sounds.catering_loop.id, 0.0001)
@@ -501,8 +501,8 @@ function update_loop_volumes()
         if pax_loop_playing then
             set_sound_gain(sounds.passengers_loop.id, (view_is_external == 1 and 0.0001 or 0.9) * vol)
         end
-        if briefing_loop_playing and sounds.briefing_loop.id and sounds.briefing_loop.id ~= 0 then
-            set_sound_gain(sounds.briefing_loop.id, (view_is_external == 1 and 0.0001 or 0.9) * vol)
+        if briefing_playing and sounds.briefing.id and sounds.briefing.id ~= 0 then
+            set_sound_gain(sounds.briefing.id, (view_is_external == 1 and 0.0001 or 0.9) * vol)
         end
         if catering_loop_playing and sounds.catering_loop.id and sounds.catering_loop.id ~= 0 then
             set_sound_gain(sounds.catering_loop.id, (view_is_external == 1 and 0.0001 or 0.9) * vol)
@@ -2542,10 +2542,9 @@ function start_crew_briefing()
     show_People3 = true;  People3_chg = true
     show_People4 = true;  People4_chg = true
     slm_deploy_access()
-    if sounds.briefing_loop.id and sounds.briefing_loop.id ~= 0 then
-        briefing_loop_playing = true
-        let_sound_loop(sounds.briefing_loop.id, true)
-        play_sound(sounds.briefing_loop.id)
+    if sounds.briefing.id and sounds.briefing.id ~= 0 then
+        briefing_playing = true
+        play_sound(sounds.briefing.id)
         update_loop_volumes()
     end
 end
@@ -2557,10 +2556,9 @@ function manage_crew_briefing()
         crew_briefing_started = false
         crew_briefing_done    = true
         estimated_time_crew   = nil
-        if briefing_loop_playing then
-            briefing_loop_playing = false
-            let_sound_loop(sounds.briefing_loop.id, false)
-            stop_sound(sounds.briefing_loop.id)
+        if briefing_playing then
+            briefing_playing = false
+            stop_sound(sounds.briefing.id)
         end
     else
         estimated_time_crew = crew_briefing_duration - elapsed
@@ -2990,11 +2988,10 @@ function reset_loads()
 
 	update_slm_datarefs()
 
-    if briefing_loop_playing then
-        briefing_loop_playing = false
-        if sounds.briefing_loop.id and sounds.briefing_loop.id ~= 0 then
-            let_sound_loop(sounds.briefing_loop.id, false)
-            stop_sound(sounds.briefing_loop.id)
+    if briefing_playing then
+        briefing_playing = false
+        if sounds.briefing.id and sounds.briefing.id ~= 0 then
+            stop_sound(sounds.briefing.id)
         end
     end
     if catering_loop_playing then
