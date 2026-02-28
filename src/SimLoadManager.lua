@@ -1867,13 +1867,7 @@ end
 
 
 --------------------------------------------------------------------------------
--- Gordang : REMPLISSAGE RÉEL DES RÉSERVOIRS (Real Fuel Fill)
--- Écrit progressivement dans sim/flightmodel/weight/m_fuel[0..8] (kg, modifiable).
--- Remplit par groupes : réservoirs aile (0+1) d'abord, puis centre (2), puis aux (3+4)...
--- Quand tous les réservoirs d'un groupe n'acceptent plus de carburant (stall détecté),
--- passe au groupe suivant.
--- La cible est toujours en kg ; la conversion depuis lbs est faite au démarrage.
--- La vitesse est calée sur la barre visuelle (delta de fuel_loaded chaque frame).
+-- Fuel Tanks List
 --------------------------------------------------------------------------------
 
 local SLM_TANK_MAX = {
@@ -1883,12 +1877,8 @@ local SLM_TANK_MAX = {
     ["A333"] = {[0]=32960, [1]=32040, [2]=32960, [3]=2830, [4]=2830, [5]=4940},
 }
 
--- Gordang : Table de configuration des groupes de réservoirs par code ICAO.
--- Chaque entrée est une liste ordonnée de groupes ; chaque groupe = liste d'indices de tanks.
--- Les avions non listés utilisent par défaut {{0,1}} (deux réservoirs aile).
 -- ATTENTION : ces indices correspondent à sim/flightmodel/weight/m_fuel (X-Plane standard).
 local SLM_TANK_GROUPS = {
-    -- 3 réservoirs : ailes + centre
     ["A332"] = {{0,1},{2}},
     ["A338"] = {{0,1},{2}},
     ["A339"] = {{0,1},{2}},
@@ -1922,30 +1912,17 @@ local SLM_TANK_GROUPS = {
 }
 
 
--- Gordang : Table de groupes SPÉCIFIQUE ToLiss (indices pour toliss_airbus/fuelTankContent_kgs).
--- Layout ToLiss Airbus (confirmé par DataRef Editor sur A320) :
---   [0] = réservoir centre
---   [1] = aile gauche intérieure  (tank principal gauche, le plus grand)
---   [2] = aile droite intérieure  (tank principal droit, le plus grand)
---   [3] = aile gauche extérieure  (présent sur TOUS les modèles ToLiss)
---   [4] = aile droite extérieure  (présent sur TOUS les modèles ToLiss)
--- Procédure de chargement Airbus : ailes intérieures → extérieures → centre.
--- Défaut pour tout ToLiss non listé : {{1,2},{0}}
--- Les tanks 3 et 4 (ACT) sont ajoutés dynamiquement selon AirbusFBW/FuelNumExtraTanks.
 local SLM_TANK_GROUPS_TOLISS = {
-    -- Famille A320 ToLiss : ailes intérieures → centre (ACT ajoutés dynamiquement)
+    -- Famille A320 ToLiss
     ["A319"] = {{1,2},{0}},
     ["A320"] = {{1,2},{0}},
-    ["A20N"] = {{1,2},{0}},   -- A320neo
+    ["A20N"] = {{1,2},{0}},
     ["A321"] = {{1,2},{0}},
-    ["A21N"] = {{1,2},{0}},   -- A321neo
-    -- A330neo ToLiss
+    ["A21N"] = {{1,2},{0}},
     ["A339"] = {{1,2},{0}},
-    -- A340 ToLiss
     ["A346"] = {{1,2},{0}},
 }
 
--- Gordang : Retourne (et initialise si besoin) le handle dataref_table des réservoirs
 local function slm_rf_get_dr()
     if slm_rf_tank_dr == nil then
         slm_rf_tank_dr = dataref_table("sim/flightmodel/weight/m_fuel")
@@ -1953,8 +1930,6 @@ local function slm_rf_get_dr()
     return slm_rf_tank_dr
 end
 
--- Gordang : Calcule la somme de tous les réservoirs non nuls (indices 0 à 8) en kg.
--- Utilise le dataref ToLiss si disponible, sinon m_fuel (X-Plane standard).
 local function slm_rf_total_current()
     local tdr = (slm_aircraft_type == "toliss" and slm_rf_toliss_dr) or slm_rf_get_dr()
     local t = 0
@@ -1965,28 +1940,26 @@ local function slm_rf_total_current()
     return t
 end
 
--- Gordang : Démarre le remplissage réel : initialise la cible, les groupes et les compteurs
+
 function slm_rf_start()
-    if not slm_rf_enabled or slm_rf_excluded then return end  -- option désactivée ou avion exclu
-    -- Convertit la cible en kg si le plan SimBrief est en livres
+    if not slm_rf_enabled or slm_rf_excluded then return end
     if unit_system == "lbs" then
         slm_rf_target_kg = (fuel_total or 0) * 0.453592
     else
         slm_rf_target_kg = fuel_total or 0
     end
-    if slm_rf_target_kg <= 0 then return end  -- rien à faire
+    if slm_rf_target_kg <= 0 then return end
 
-    slm_rf_get_dr()  -- initialise le handle dataref m_fuel maintenant
+    slm_rf_get_dr()
 
-    -- Utilise slm_aircraft_type (défini par slm_detect_aircraft au clic sur Start)
+
     slm_rf_group_dr_override = {}
     if slm_aircraft_type == "toliss" then
         slm_rf_toliss_dr = dataref_table("toliss_airbus/fuelTankContent_kgs")
-        -- Copie les groupes de base (évite de modifier la table partagée si on ajoute des groupes extra)
+
         local base_groups = SLM_TANK_GROUPS_TOLISS[PLANE_ICAO or ""] or {{1,2},{3,4},{0}}
         slm_rf_groups = {}
         for i, g in ipairs(base_groups) do slm_rf_groups[i] = g end
-        -- Réservoirs extra ToLiss ACT (Additional Center Tanks) → fuelTankContent_kgs[3] puis [4]
         local extra_ref = XPLMFindDataRef("AirbusFBW/FuelNumExtraTanks")
         if extra_ref then
             local num_extra = XPLMGetDatai(extra_ref)
@@ -2061,28 +2034,22 @@ end
 local function slm_rf_is_sat_for_tank(ti, h, cur)
     local tank_max = SLM_TANK_MAX[PLANE_ICAO or ""]
     if tank_max and tank_max[ti] then
-        return cur >= tank_max[ti] - 10  -- mode précis : comparaison au max physique connu
+        return cur >= tank_max[ti]
     end
-    return slm_rf_is_sat(h)              -- fallback : historique glissant existant
+    return slm_rf_is_sat(h)
 end
 
--- Gordang : Fonction principale de remplissage réel, appelée chaque frame par do_every_frame.
--- Calcule le delta de fuel_loaded (barre visuelle) pour synchroniser la vitesse d'écriture
--- dans les datarefs. La cible est vérifiée contre la somme réelle des réservoirs X-Plane
--- afin de compenser la consommation moteur pendant le remplissage.
 function slm_rf_update()
     if not slm_rf_active then return end
-    if slm_beacon_on then return end  -- suspendu si beacon allumée
+    if slm_beacon_on then return end
     local dr = slm_rf_get_dr()
     if not dr then return end
 
-    -- Premier appel : mémorise fuel_loaded pour ne réagir qu'aux changements futurs
     if slm_rf_last_fuel_loaded == nil then
         slm_rf_last_fuel_loaded = fuel_loaded or 0
         return
     end
 
-    -- Delta depuis la barre visuelle (même unité que fuel_loaded / unit_system)
     local current_fl  = fuel_loaded or 0
     local delta_units = current_fl - slm_rf_last_fuel_loaded
     if delta_units == 0 then return end          -- la barre n'a pas bougé
