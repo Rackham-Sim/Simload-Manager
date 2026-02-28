@@ -1876,6 +1876,13 @@ end
 -- La vitesse est calée sur la barre visuelle (delta de fuel_loaded chaque frame).
 --------------------------------------------------------------------------------
 
+local SLM_TANK_MAX = {
+    -- B737-800 Laminar
+    ["B738"] = {[0]=3909, [1]=13080, [2]=3900},
+    -- A330-300 Laminar
+    ["A333"] = {[0]=32960, [1]=32040, [2]=32960, [3]=2830, [4]=2830, [5]=4940},
+}
+
 -- Gordang : Table de configuration des groupes de réservoirs par code ICAO.
 -- Chaque entrée est une liste ordonnée de groupes ; chaque groupe = liste d'indices de tanks.
 -- Les avions non listés utilisent par défaut {{0,1}} (deux réservoirs aile).
@@ -2010,6 +2017,8 @@ function slm_rf_start()
     slm_rf_history            = {}  -- réinitialise l'historique de saturation
     slm_rf_last_fuel_loaded   = nil   -- sera initialisé au premier appel de slm_rf_update
 
+    local tank_max = SLM_TANK_MAX[PLANE_ICAO or ""]
+    logMsg("[SLM-RF] Mode saturation : " .. (tank_max and "précis (max définis)" or "historique glissant (fallback)"))
     logMsg("[SLM-RF] Remplissage réel démarré : cible=" ..
            string.format("%.0f", slm_rf_target_kg) ..
            " kg, réservoirs actuels=" .. string.format("%.0f", slm_rf_initial_real_kg) ..
@@ -2047,6 +2056,14 @@ local function slm_rf_is_sat(h)
         if h[i] < mn_new then mn_new = h[i] end
     end
     return (mn_new - mn_old) < SLM_RF_SAT_THRESHOLD
+end
+
+local function slm_rf_is_sat_for_tank(ti, h, cur)
+    local tank_max = SLM_TANK_MAX[PLANE_ICAO or ""]
+    if tank_max and tank_max[ti] then
+        return cur >= tank_max[ti] - 10  -- mode précis : comparaison au max physique connu
+    end
+    return slm_rf_is_sat(h)              -- fallback : historique glissant existant
 end
 
 -- Gordang : Fonction principale de remplissage réel, appelée chaque frame par do_every_frame.
@@ -2130,9 +2147,10 @@ function slm_rf_update()
     local group         = slm_rf_groups[slm_rf_group_idx]
     local group_indices = group.indices or group   -- liste des indices de tanks
     local group_weights = group.weights            -- nil → répartition égale
+    local fill_dr = slm_rf_group_dr_override[slm_rf_group_idx] or active_dr
     local active_tanks  = {}
     for _, ti in ipairs(group_indices) do
-        if not slm_rf_is_sat(slm_rf_history[ti]) then
+        if not slm_rf_is_sat_for_tank(ti, slm_rf_history[ti], fill_dr[ti] or 0) then
             active_tanks[#active_tanks + 1] = ti
         end
     end
@@ -2176,7 +2194,6 @@ function slm_rf_update()
     -- Pour ToLiss : leur FQMS lit fuelTankContent_kgs et écrase m_fuel à chaque frame,
     -- donc on lit ET écrit dans fuelTankContent_kgs. Pour les autres avions : m_fuel standard.
     -- Exception : réservoirs extra ACT ToLiss → toujours m_fuel (défini dans slm_rf_group_dr_override).
-    local fill_dr = slm_rf_group_dr_override[slm_rf_group_idx] or active_dr
     for _, ti in ipairs(active_tanks) do
         local cur = fill_dr[ti] or 0
 
@@ -2190,7 +2207,7 @@ function slm_rf_update()
             h[SLM_RF_SAT_WINDOW] = cur
         end
 
-        if not slm_rf_is_sat(h) then
+        if not slm_rf_is_sat_for_tank(ti, h, cur) then
             fill_dr[ti] = cur + tank_amounts[ti]   -- écrit dans le dataref autoritaire
         end
     end
