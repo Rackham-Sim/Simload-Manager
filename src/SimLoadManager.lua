@@ -14,7 +14,7 @@ end
 --------------------------------------------------------------------------------
 SLM_VERSION = "3.0"
 
-local slm_dev_mode = true   -- set to true to show [DEV] button in UI
+local slm_dev_mode = false   -- set to true to show [DEV] button in UI
 
 local SLM_UPDATE_URL =
     "http://raw.githack.com/Rackham-Sim/Simload-Manager/main/version.txt"
@@ -1877,7 +1877,6 @@ local SLM_TANK_MAX = {
     ["E19L"] = {[0]=6494, [1]=6494, [2]=4570, [3]=4329}, --X-Craft
 }
 
--- ATTENTION : ces indices correspondent à sim/flightmodel/weight/m_fuel (X-Plane standard).
 local SLM_TANK_GROUPS = {
     ["A332"] = {{0,1},{2}},
     ["A338"] = {{0,1},{2}},
@@ -2015,10 +2014,6 @@ function slm_rf_stop()
     slm_rf_group_dr_override  = {}
 end
 
--- Gordang : Détecte si un tank est saturé à sa capacité physique max.
--- Compare le minimum de la moitié ancienne vs la moitié récente de la fenêtre glissante.
--- Un tank oscillant (6490↔6500) maintient le même plancher dans les deux moitiés → saturé.
--- Un tank en cours de remplissage voit son plancher monter → non saturé.
 local function slm_rf_is_sat(h)
     if not h or #h < SLM_RF_SAT_WINDOW then return false end
     local half = math.floor(SLM_RF_SAT_WINDOW / 2)
@@ -2053,10 +2048,9 @@ function slm_rf_update()
 
     local current_fl  = fuel_loaded or 0
     local delta_units = current_fl - slm_rf_last_fuel_loaded
-    if delta_units == 0 then return end          -- la barre n'a pas bougé
+    if delta_units == 0 then return end
     slm_rf_last_fuel_loaded = current_fl
 
-    -- Conversion du delta en kg (les datarefs m_fuel sont toujours en kg)
     local delta_kg     = (unit_system == "lbs") and (delta_units * 0.453592) or delta_units
     local is_defueling = (delta_kg < 0)
     delta_kg = math.abs(delta_kg)
@@ -2075,7 +2069,6 @@ function slm_rf_update()
         end
         delta_kg = math.min(delta_kg, still_excess)
 
-        -- Drain proportionnel sur tous les tanks non vides
         local filled = {}
         for i = 0, 8 do
             if (active_dr[i] or 0) > 0.5 then filled[#filled + 1] = i end
@@ -2090,8 +2083,6 @@ function slm_rf_update()
     end
 
     -- ── REFUELING ──────────────────────────────────────────────────────────
-    -- Condition d'arrêt : compare la somme RÉELLE des réservoirs à la cible.
-    -- Gère automatiquement la consommation moteur pendant le remplissage.
     local still_needed = slm_rf_target_kg - total
     if still_needed <= 0.5 then
         slm_rf_active = false
@@ -2099,10 +2090,8 @@ function slm_rf_update()
                " kg / cible=" .. string.format("%.0f", slm_rf_target_kg) .. " kg")
         return
     end
-    -- Bride le delta pour ne pas dépasser la cible sur le dernier tick
     delta_kg = math.min(delta_kg, still_needed)
 
-    -- Tous les groupes épuisés (capacité des réservoirs < cible SimBrief)
     if slm_rf_group_idx > #slm_rf_groups then
         slm_rf_active = false
         logMsg("[SLM-RF] Tous les groupes épuisés à " ..
@@ -2110,11 +2099,9 @@ function slm_rf_update()
         return
     end
 
-    -- Collecte les réservoirs non saturés dans le groupe courant
-    -- Support deux formats : array simple {0,1} ou pondéré {indices={2,3}, weights={0.6,0.4}}
     local group         = slm_rf_groups[slm_rf_group_idx]
-    local group_indices = group.indices or group   -- liste des indices de tanks
-    local group_weights = group.weights            -- nil → répartition égale
+    local group_indices = group.indices or group
+    local group_weights = group.weights
     local fill_dr = slm_rf_group_dr_override[slm_rf_group_idx] or active_dr
     local active_tanks  = {}
     for _, ti in ipairs(group_indices) do
@@ -2123,7 +2110,6 @@ function slm_rf_update()
         end
     end
 
-    -- Tout le groupe est saturé → passe au groupe suivant, applique le delta au prochain tick
     if #active_tanks == 0 then
         logMsg("[SLM-RF] Groupe " .. slm_rf_group_idx ..
                " saturé (réservoirs=" .. string.format("%.0f", total) ..
@@ -2133,10 +2119,8 @@ function slm_rf_update()
         return
     end
 
-    -- Calcule la quantité à ajouter par réservoir actif (pondérée ou égale)
     local tank_amounts = {}
     if group_weights then
-        -- Répartition pondérée : renormalise sur les tanks encore actifs
         local w_sum = 0
         local active_w = {}
         for _, ti in ipairs(active_tanks) do
@@ -2151,21 +2135,14 @@ function slm_rf_update()
             tank_amounts[ti] = delta_kg * (active_w[ti] / w_sum)
         end
     else
-        -- Répartition égale (comportement existant)
         local per_tank = delta_kg / #active_tanks
         for _, ti in ipairs(active_tanks) do
             tank_amounts[ti] = per_tank
         end
     end
 
-    -- Gordang : Sélectionne le dataref autoritaire.
-    -- Pour ToLiss : leur FQMS lit fuelTankContent_kgs et écrase m_fuel à chaque frame,
-    -- donc on lit ET écrit dans fuelTankContent_kgs. Pour les autres avions : m_fuel standard.
-    -- Exception : réservoirs extra ACT ToLiss → toujours m_fuel (défini dans slm_rf_group_dr_override).
     for _, ti in ipairs(active_tanks) do
         local cur = fill_dr[ti] or 0
-
-        -- Mise à jour de l'historique glissant, puis détection de saturation via slm_rf_is_sat.
         local h = slm_rf_history[ti]
         if not h then h = {}; slm_rf_history[ti] = h end
         if #h < SLM_RF_SAT_WINDOW then
@@ -2176,7 +2153,7 @@ function slm_rf_update()
         end
 
         if not slm_rf_is_sat_for_tank(ti, h, cur) then
-            fill_dr[ti] = cur + tank_amounts[ti]   -- écrit dans le dataref autoritaire
+            fill_dr[ti] = cur + tank_amounts[ti]
         end
     end
 end
