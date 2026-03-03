@@ -507,7 +507,7 @@ function update_loop_volumes()
             set_sound_gain(sounds.briefing.id, (view_is_external == 1 and 0.0001 or 0.9) * vol)
         end
         if catering_loop_playing and sounds.catering_loop.id and sounds.catering_loop.id ~= 0 then
-            set_sound_gain(sounds.catering_loop.id, (view_is_external == 1 and 0.0001 or 0.4) * vol)  -- -3dB vs other loops
+            set_sound_gain(sounds.catering_loop.id, (view_is_external == 1 and 0.0001 or 0.6) * vol)
         end
         if cleaning_loop_playing and sounds.cleaning_loop.id and sounds.cleaning_loop.id ~= 0 then
             set_sound_gain(sounds.cleaning_loop.id, (view_is_external == 1 and 0.0001 or 0.9) * vol)
@@ -1765,8 +1765,6 @@ function start_fuel_loading()
 				StairsXPJ2_chg  = true
 				option_StairsXPJ_override = false
 			end
-        elseif selected_location_group == "jetway" then
-            command_once("sim/ground_ops/jetway")
         end
     end
 end
@@ -1875,6 +1873,7 @@ local SLM_TANK_MAX = {
     ["A333"] = {[0]=32960, [1]=32040, [2]=32960, [3]=2830, [4]=2830, [5]=4940}, --Laminar
     ["MD82"] = {[0]=9330, [1]=4204, [2]=4204}, --Laminar
     ["E19L"] = {[0]=6494, [1]=6494, [2]=4570, [3]=4329}, --X-Craft
+    ["E35L"] = {[0]=2703, [1]=2703, [2]=824, [3]=932, [4]=932, [5]=606, [6]=606, [7]=0, [8]=0},
 }
 
 local SLM_TANK_GROUPS = {
@@ -2038,6 +2037,7 @@ end
 function slm_rf_update()
     if not slm_rf_active then return end
     if slm_beacon_on then return end
+    if slm_aircraft_type == "toliss" and not slm_rf_toliss_dr then return end
     local dr = slm_rf_get_dr()
     if not dr then return end
 
