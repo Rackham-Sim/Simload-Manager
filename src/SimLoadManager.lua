@@ -4458,12 +4458,6 @@ load_user_settings()
 --------------------------------------------------------------------------------
 do
     slm_detect_aircraft()  -- affiche le message d'exclusion et grise les cases dès le démarrage
-    if XPLMFindDataRef("AirbusFBW/NoPax") then
-        dataref_table("AirbusFBW/NoPax")[0]    = 0
-        dataref_table("AirbusFBW/FwdCargo")[0] = 0
-        dataref_table("AirbusFBW/AftCargo")[0] = 0
-        command_once("AirbusFBW/SetWeightAndCG")
-    end
     if XPLMFindDataRef("laminar/B738/tab/zone1_payload") then
         for z = 1, 5 do
             dataref_table("laminar/B738/tab/zone" .. z .. "_payload")[0] = 0
