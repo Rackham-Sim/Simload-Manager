@@ -2185,6 +2185,17 @@ end
 
 local SLM_EXCLUDED_ICAO = {
     ["DH8D"] = "This aircraft manages its own payload and fuel.\nPlease use the onboard tablet to edit loading data",
+    -- XCraft Embraer family - temporarily excluded pending proper station mapping implementation
+    ["E135"] = "Real Fuel & Payload Fill temporarily disabled for XCraft Embraer family.\nProper dataref mapping coming in a future update.",
+    ["E140"] = "Real Fuel & Payload Fill temporarily disabled for XCraft Embraer family.\nProper dataref mapping coming in a future update.",
+    ["E145"] = "Real Fuel & Payload Fill temporarily disabled for XCraft Embraer family.\nProper dataref mapping coming in a future update.",
+    ["E45X"] = "Real Fuel & Payload Fill temporarily disabled for XCraft Embraer family.\nProper dataref mapping coming in a future update.",
+    ["E170"] = "Real Fuel & Payload Fill temporarily disabled for XCraft Embraer family.\nProper dataref mapping coming in a future update.",
+    ["E175"] = "Real Fuel & Payload Fill temporarily disabled for XCraft Embraer family.\nProper dataref mapping coming in a future update.",
+    ["E190"] = "Real Fuel & Payload Fill temporarily disabled for XCraft Embraer family.\nProper dataref mapping coming in a future update.",
+    ["E195"] = "Real Fuel & Payload Fill temporarily disabled for XCraft Embraer family.\nProper dataref mapping coming in a future update.",
+    ["E35L"] = "Real Fuel & Payload Fill temporarily disabled for XCraft Embraer family.\nProper dataref mapping coming in a future update.",
+    ["E19L"] = "Real Fuel & Payload Fill temporarily disabled for XCraft Embraer family.\nProper dataref mapping coming in a future update.",
 }
 
 function slm_detect_aircraft()
@@ -2231,7 +2242,7 @@ function slm_rp_start()
 
     if slm_aircraft_type == "default" then
         slm_rp_station_dr = dataref_table("sim/flightmodel/weight/m_stations")
-        for i = 0, 4 do slm_rp_station_dr[i] = 0 end
+        for i = 0, 8 do slm_rp_station_dr[i] = 0 end
         logMsg(string.format("[SLM-RP] Default: démarré pax=%.0f cargo=%.0f",
             slm_rp_target_pax_kg, slm_rp_target_cargo_kg))
 
