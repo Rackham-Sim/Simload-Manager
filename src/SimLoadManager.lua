@@ -507,7 +507,7 @@ function update_loop_volumes()
             set_sound_gain(sounds.briefing.id, (view_is_external == 1 and 0.0001 or 0.9) * vol)
         end
         if catering_loop_playing and sounds.catering_loop.id and sounds.catering_loop.id ~= 0 then
-            set_sound_gain(sounds.catering_loop.id, (view_is_external == 1 and 0.0001 or 0.6) * vol)
+            set_sound_gain(sounds.catering_loop.id, (view_is_external == 1 and 0.0001 or 0.5) * vol)
         end
         if cleaning_loop_playing and sounds.cleaning_loop.id and sounds.cleaning_loop.id ~= 0 then
             set_sound_gain(sounds.cleaning_loop.id, (view_is_external == 1 and 0.0001 or 0.9) * vol)
@@ -1006,7 +1006,11 @@ function manage_embark()
     ----------------------------------------------------------------------------
 if cargo_total == 0 and passengers_total == 0 then
     if not fuel_loading and not fuel_done then
-        start_fuel_loading()
+        if (fuel_total or 0) - (fuel_loaded or 0) == 0 then
+            fuel_done = true
+        else
+            start_fuel_loading()
+        end
     end
     manage_fuel_loading()
 	check_if_all_done()
@@ -1201,7 +1205,11 @@ end
         end
 
         if not fuel_loading and not fuel_done then
-            start_fuel_loading()
+            if (fuel_total or 0) - (fuel_loaded or 0) == 0 then
+                fuel_done = true
+            else
+                start_fuel_loading()
+            end
         end
     end
     manage_fuel_loading()
