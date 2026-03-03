@@ -1088,7 +1088,13 @@ if fuel_first and not fuel_done then return end
                and not fuel_loading
                and not fuel_done
             then
-                start_fuel_loading()
+                if (fuel_total or 0) - (fuel_loaded or 0) == 0 then
+                    fuel_done = true
+                    show_FUEL = false
+                    FUEL_chg = true
+                else
+                    start_fuel_loading()
+                end
             end
 			
             if not pax_loop_playing then
@@ -1219,7 +1225,13 @@ end
 
 
 if fuel_first and not fuel_done then
-    start_fuel_loading()
+    if (fuel_total or 0) - (fuel_loaded or 0) == 0 then
+        fuel_done = true
+        show_FUEL = false
+        FUEL_chg = true
+    else
+        start_fuel_loading()
+    end
     manage_fuel_loading()
     return
 end
@@ -1390,7 +1402,13 @@ local est_pax   = estimated_time_pax or 0
 		   and not fuel_loading
 		   and not fuel_done
 		then
-			start_fuel_loading()
+			if (fuel_total or 0) - (fuel_loaded or 0) == 0 then
+				fuel_done = true
+				show_FUEL = false
+				FUEL_chg = true
+			else
+				start_fuel_loading()
+			end
 		end
 	manage_fuel_loading()
 	check_if_all_done()
@@ -3607,7 +3625,7 @@ function slm_draw_sequence_steps()
         local frac = (crew_briefing_duration and crew_briefing_duration > 0) and
             math.min(1.0, (os.clock() - crew_briefing_start_time) / crew_briefing_duration) or 0
         slm_draw_step("Crew Briefing", "active", frac, estimated_time_crew,
-            "Crew is arriving and conducting briefing.\nTime to review your flight plan and set weights!")
+            "Crew is arriving and conducting briefing.\nTime to review your flight plan.")
     else
         slm_draw_step("Crew Briefing", "pending")
     end
