@@ -2231,6 +2231,7 @@ function slm_rp_start()
 
     if slm_aircraft_type == "default" then
         slm_rp_station_dr = dataref_table("sim/flightmodel/weight/m_stations")
+        for i = 0, 4 do slm_rp_station_dr[i] = 0 end
         logMsg(string.format("[SLM-RP] Default: démarré pax=%.0f cargo=%.0f",
             slm_rp_target_pax_kg, slm_rp_target_cargo_kg))
 
