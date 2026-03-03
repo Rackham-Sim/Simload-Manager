@@ -3650,7 +3650,8 @@ function slm_draw_sequence_steps()
 
 
     local function draw_embark_fuel()
-        local fuel_done_now = embark_done or (embark_started and fuel_done)
+        local fuel_already_at_target = (fuel_total or 0) > 0 and ((fuel_total or 0) - (fuel_loaded or 0) == 0) and not fuel_loading
+        local fuel_done_now = embark_done or (embark_started and (fuel_done or fuel_already_at_target))
         if fuel_done_now then
             slm_draw_step(string.format("Fuel Loading (%.0f %s)", fuel_total, unit_system), "done")
         elseif embark_started then
