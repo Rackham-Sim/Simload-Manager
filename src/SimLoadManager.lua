@@ -1787,6 +1787,15 @@ function manage_fuel_loading()
             return
         end
 
+        local diff = (fuel_total or 0) - (fuel_loaded or 0)
+        if diff == 0 then
+            show_FUEL = false
+            FUEL_chg = true
+            fuel_loading = false
+            fuel_done = true
+            return
+        end
+
         if not sound_played.start_fuel_loading then
             play_sound_by_key("start_fuel_loading")
             sound_played.start_fuel_loading = true
@@ -1805,27 +1814,6 @@ function manage_fuel_loading()
         local now = os.clock()
         if not fuel_last_update_time then fuel_last_update_time = now end
         local elapsed = now - fuel_last_update_time
-
-        local diff = (fuel_total or 0) - (fuel_loaded or 0)
-        if diff == 0 then
-            show_FUEL = false
-            FUEL_chg = true
-
-            if fuel_loop_playing then
-                fuel_loop_playing = false
-                let_sound_loop(sounds.fuel_loop.id, false)
-                stop_sound(sounds.fuel_loop.id)
-            end
-
-            fuel_loading = false
-            fuel_done = true
-
-            if not sound_played.finished_fuel_loading then
-                play_sound_by_key("finished_fuel_loading")
-                sound_played.finished_fuel_loading = true
-            end
-            return
-        end
 
         local direction = (diff > 0) and 1 or -1
         local increment = math.floor(elapsed / fuel_time_per_unit)
