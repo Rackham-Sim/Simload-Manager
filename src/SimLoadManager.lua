@@ -977,7 +977,13 @@ function manage_embark()
 
     if fuel_first and not fuel_done then
         if not fuel_loading then
-            start_fuel_loading()
+            if (fuel_total or 0) - (fuel_loaded or 0) == 0 then
+                fuel_done = true
+                show_FUEL = false
+                FUEL_chg = true
+            else
+                start_fuel_loading()
+            end
         end
         manage_fuel_loading()
         return
