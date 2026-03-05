@@ -199,6 +199,7 @@ function draw_loadsheet_window(wnd, x, y)
 	imgui.TableSetColumnIndex(2); imgui.TextUnformatted("Actual")
 	imgui.TableSetColumnIndex(3); imgui.TextUnformatted("Diff")
 
+	if d.slm_source ~= "manual" then
 	imgui.TableNextRow()
 	imgui.TableSetColumnIndex(0); imgui.TextUnformatted("Baggage")
 	imgui.TableSetColumnIndex(1); imgui.TextUnformatted(string.format("%.0f %s", bag_planned, unit))
@@ -207,10 +208,12 @@ function draw_loadsheet_window(wnd, x, y)
 	imgui.PushStyleColor(imgui.constant.Col.Text, diff_color(bag_pct))
 	imgui.TextUnformatted(string.format("%+.0f %s (%.1f%%)", bag_diff, unit, bag_pct))
 	imgui.PopStyleColor()
+	end -- slm_source ~= "manual"
 
+	local freight_planned_display = (d.slm_source == "manual") and cargo_total_planned or freight_planned
 	imgui.TableNextRow()
 	imgui.TableSetColumnIndex(0); imgui.TextUnformatted("Freight")
-	imgui.TableSetColumnIndex(1); imgui.TextUnformatted(string.format("%.0f %s", freight_planned, unit))
+	imgui.TableSetColumnIndex(1); imgui.TextUnformatted(string.format("%.0f %s", freight_planned_display, unit))
 	imgui.TableSetColumnIndex(2); imgui.TextUnformatted(string.format("%.0f %s", freight_actual, unit))
 	imgui.TableSetColumnIndex(3)
 	imgui.PushStyleColor(imgui.constant.Col.Text, diff_color(frt_pct))
@@ -358,7 +361,6 @@ if d.slm_source ~= "manual" then
 	imgui.EndTable()
 end -- slm_source ~= "manual"
 
-	imgui.NewLine()
 	imgui.Separator()
 
 
@@ -411,7 +413,11 @@ end -- slm_source ~= "manual"
     imgui.TextUnformatted(string.format("Approved by: %s", d.captain or "?"))
     imgui.NewLine()
     imgui.PushStyleColor(imgui.constant.Col.Text, c_title)
-    imgui.TextUnformatted(string.format("The %s team wishes you a pleasant flight.", d.orig or "airport"))
+    if d.slm_source == "manual" then
+        imgui.TextUnformatted("The airport team wishes you a pleasant flight.")
+    else
+        imgui.TextUnformatted(string.format("The %s team wishes you a pleasant flight.", d.orig or "airport"))
+    end
     imgui.PopStyleColor()
     imgui.PopStyleColor()
 	imgui.NewLine()
