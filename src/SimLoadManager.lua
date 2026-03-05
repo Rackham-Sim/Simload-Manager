@@ -119,6 +119,7 @@ end
 embark_wnd = nil
 unit_system = "kg"
 simbrief_id = "REPLACE_WITH_YOUR_SIMBRIEF_ID"
+slm_captain_name = ""
 settings_file = "Resources/plugins/FlyWithLua/Modules/simload_settings.txt"
 local simbrief_data_loaded = false
 
@@ -389,6 +390,7 @@ SLM_crew_briefing_fraction = create_dataref_table("FlyWithLua/SimLoadManager/cre
 SLM_catering_fraction      = create_dataref_table("FlyWithLua/SimLoadManager/catering_fraction", "Float")
 SLM_cleaning_fraction      = create_dataref_table("FlyWithLua/SimLoadManager/cleaning_fraction", "Float")
 
+define_shared_DataRef("FlyWithLua/SimLoadManager/captain_name", "String")
 
 --------------------------------------------------------------------------------
 -- DEFAULT TIMING
@@ -579,6 +581,8 @@ function load_user_settings()
                 slm_rf_enabled = (value == "true")  -- Gordang : restaure la préférence "remplissage réel"
             elseif key == "real_payload_fill" then
                 slm_rp_enabled = (value == "true")
+            elseif key == "captain_name" then
+                slm_captain_name = value
             end
         end
         file:close()
@@ -594,6 +598,7 @@ function save_user_settings()
     local file = io.open(settings_file, "w")
     if file then
         file:write("simbrief_id=" .. simbrief_id .. "\n")
+        file:write("captain_name=" .. slm_captain_name .. "\n")
         file:write("unit_system=" .. unit_system .. "\n")
         file:write("timing_preset=" .. timing_preset .. "\n")
         file:write("fuel_first=" .. tostring(fuel_first) .. "\n")
@@ -707,7 +712,6 @@ function fetch_simbrief_data(id)
     local ac_name    = nonempty(nv("aircraft",   "name"),       val("aircraft_name"))
     local ac_reg     = nonempty(nv("aircraft",   "reg"),        nonempty(val("reg"), val("registration")))
 
-    local captain    = nonempty(nv("crew", "cpt"), nonempty(val("cpt"), val("pilot_name")))
     local dispatcher = nonempty(nv("crew", "dx"),  nonempty(val("dx"),  val("dispatcher")))
 
     local fuel_taxi  = fnum("taxi")
@@ -739,7 +743,7 @@ function fetch_simbrief_data(id)
         altn = nonempty(altn, "?"),
 
         dispatcher = nonempty(dispatcher, "N/A"),
-        captain    = nonempty(captain,    "N/A"),
+        captain    = (slm_captain_name ~= "" and slm_captain_name) or "N/A",
 
         pax_total   = passengers_total or 0,
         cargo_total = cargo_total or 0,
@@ -3795,6 +3799,12 @@ function build_embark_window(wnd, x, y)
         local changed, new_id = imgui.InputText("SimBrief ID", simbrief_id or "", 100)
         if changed then
             simbrief_id = new_id
+            save_user_settings()
+        end
+
+        local changed, new_name = imgui.InputText("Captain", slm_captain_name or "", 100)
+        if changed then
+            slm_captain_name = new_name
             save_user_settings()
         end
 
