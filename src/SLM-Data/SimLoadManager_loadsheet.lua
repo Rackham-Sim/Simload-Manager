@@ -73,10 +73,10 @@ function draw_loadsheet_window(wnd, x, y)
     imgui.PushStyleColor(imgui.constant.Col.Text, c_text)
     imgui.TextUnformatted(string.format("%s%s   %s", d.airline or "", d.fltnum or "", d.date or ""))
     imgui.TextUnformatted(string.format("Aircraft: %s (%s)  Reg: %s", d.aircraft_name or "?", d.aircraft_icao or "?", d.reg or "?"))
-    if d.slm_source ~= "manual" then
+    if d.slm_source ~= "manual" and d.slm_source ~= "fsd" then
         imgui.TextUnformatted(string.format("Route: %s -> %s (ALT: %s)", d.orig or "?", d.dest or "?", d.altn or "?"))
     end
-    if d.slm_source == "manual" then
+    if d.slm_source == "manual" or d.slm_source == "fsd" then
         imgui.TextUnformatted("Dispatcher: ")
         imgui.SameLine(nil, 0)
         imgui.TextUnformatted(d.dispatcher or "?")
@@ -213,7 +213,7 @@ function draw_loadsheet_window(wnd, x, y)
 	imgui.TableSetColumnIndex(2); imgui.TextUnformatted("Actual")
 	imgui.TableSetColumnIndex(3); imgui.TextUnformatted("Diff")
 
-	if d.slm_source ~= "manual" then
+	if d.slm_source ~= "manual" and d.slm_source ~= "fsd" then
 	imgui.TableNextRow()
 	imgui.TableSetColumnIndex(0); imgui.TextUnformatted("Baggage")
 	imgui.TableSetColumnIndex(1); imgui.TextUnformatted(string.format("%.0f %s", bag_planned, unit))
@@ -224,7 +224,7 @@ function draw_loadsheet_window(wnd, x, y)
 	imgui.PopStyleColor()
 	end -- slm_source ~= "manual"
 
-	local freight_planned_display = (d.slm_source == "manual") and cargo_total_planned or freight_planned
+	local freight_planned_display = (d.slm_source == "manual" or d.slm_source == "fsd") and cargo_total_planned or freight_planned
 	imgui.TableNextRow()
 	imgui.TableSetColumnIndex(0); imgui.TextUnformatted("Freight")
 	imgui.TableSetColumnIndex(1); imgui.TextUnformatted(string.format("%.0f %s", freight_planned_display, unit))
@@ -307,7 +307,7 @@ function draw_loadsheet_window(wnd, x, y)
 		return 0xFF00FF00
 	end
 
-if d.slm_source ~= "manual" then
+if d.slm_source ~= "manual" and d.slm_source ~= "fsd" then
 	imgui.Separator()
 	--------------------------------------------------------
 	-- WEIGHTS
@@ -427,7 +427,7 @@ end -- slm_source ~= "manual"
     imgui.TextUnformatted(string.format("Approved by: %s", d.captain or "?"))
     imgui.NewLine()
     imgui.PushStyleColor(imgui.constant.Col.Text, c_title)
-    if d.slm_source == "manual" then
+    if d.slm_source == "manual" or d.slm_source == "fsd" then
         imgui.TextUnformatted("The airport team wishes you a pleasant flight.")
     else
         imgui.TextUnformatted(string.format("The %s team wishes you a pleasant flight.", d.orig or "airport"))

@@ -120,7 +120,8 @@ embark_wnd = nil
 unit_system = "kg"
 simbrief_id = "REPLACE_WITH_YOUR_SIMBRIEF_ID"
 slm_captain_name = ""
-slm_data_source = "simbrief"  -- "simbrief" | "manual"
+slm_data_source = "simbrief"  -- "simbrief" | "manual" | "fsd"
+local slm_fsd_available = false
 settings_file = "Resources/plugins/FlyWithLua/Modules/simload_settings.txt"
 
 load_controllers = {
@@ -253,6 +254,10 @@ local simbrief_data_loaded = false
 local slm_manual_pax   = 0
 local slm_manual_cargo = 0.0
 local slm_manual_fuel  = 0.0
+
+local slm_fsd_pax_dr     = nil
+local slm_fsd_baggage_dr = nil
+local slm_fsd_fuel_dr    = nil
 
 local passengers_total = 0
 local cargo_total = 0
@@ -714,7 +719,7 @@ function load_user_settings()
             elseif key == "captain_name" then
                 slm_captain_name = value
             elseif key == "data_source" then
-                if value == "simbrief" or value == "manual" then
+                if value == "simbrief" or value == "manual" or value == "fsd" then
                     slm_data_source = value
                 end
             end
@@ -2327,7 +2332,7 @@ function slm_rp_start()
 
     elseif slm_aircraft_type == "zibo" then
         slm_rp_zibo_paxwt_dr = dataref_table("laminar/B738/std_pax_weight")
-        slm_rp_zibo_paxwt_dr[0] = (slm_data_source == "manual") and 70 or (SB_pax_weight or 0)
+        slm_rp_zibo_paxwt_dr[0] = (slm_data_source == "manual" or slm_data_source == "fsd") and 70 or (SB_pax_weight or 0)
         slm_rp_zibo_embark_zone = 5
         for z = 1, 5 do
             slm_rp_zibo_zone_dr[z] = dataref_table("laminar/B738/tab/zone" .. z .. "_payload")
@@ -2927,6 +2932,7 @@ function manage_sequence()
             if slm_data_source == "simbrief" then
                 slm_sequence_phase = "simbrief_check"
             else
+                -- manual and fsd: go straight to crew_and_catering
                 slm_sequence_phase = "crew_and_catering"
                 crew_briefing_done = false
                 if skip_crew_briefing then
@@ -3940,6 +3946,33 @@ function slm_load_manual_data()
 end
 
 --------------------------------------------------------------------------------
+-- FLIGHT SIM DECK INTEGRATION
+--------------------------------------------------------------------------------
+local function slm_detect_fsd()
+    slm_fsd_available = (XPLMFindDataRef("FlightSimDeck/Boarding/Pax") ~= nil)
+    if slm_fsd_available then
+        logMsg("[SLM] Flight Sim Deck detected")
+    end
+end
+
+function slm_load_fsd_data()
+    if not slm_fsd_available then return end
+    slm_fsd_pax_dr     = slm_fsd_pax_dr     or dataref_table("FlightSimDeck/Boarding/Pax")
+    slm_fsd_baggage_dr = slm_fsd_baggage_dr  or dataref_table("FlightSimDeck/Boarding/Baggage")
+    slm_fsd_fuel_dr    = slm_fsd_fuel_dr     or dataref_table("FlightSimDeck/Boarding/Fuel")
+
+    slm_manual_pax   = math.floor(slm_fsd_pax_dr[0] or 0)
+    slm_manual_cargo = slm_fsd_baggage_dr[0] or 0.0
+    slm_manual_fuel  = slm_fsd_fuel_dr[0]    or 0.0
+
+    slm_load_manual_data()
+    -- Override slm_source to "fsd" so loadsheet knows the source
+    SLM_Loadsheet_Data.slm_source = "fsd"
+    logMsg(string.format("[SLM] FSD data loaded: pax=%d cargo=%.0f fuel=%.0f",
+        slm_manual_pax, slm_manual_cargo, slm_manual_fuel))
+end
+
+--------------------------------------------------------------------------------
 -- INTERFACE IMGUI
 --------------------------------------------------------------------------------
 function build_embark_window(wnd, x, y)
@@ -3966,15 +3999,22 @@ function build_embark_window(wnd, x, y)
             slm_data_source = "manual"
             save_user_settings()
         end
+        if slm_fsd_available then
+            imgui.SameLine()
+            if imgui.RadioButton("Flight Sim Deck##src", slm_data_source == "fsd") then
+                slm_data_source = "fsd"
+                save_user_settings()
+            end
+        end
 
-        -- SimBrief ID (greyed out in manual mode)
-        if slm_data_source == "manual" then imgui.BeginDisabled() end
+        -- SimBrief ID (greyed out in manual/fsd mode)
+        if slm_data_source == "manual" or slm_data_source == "fsd" then imgui.BeginDisabled() end
         local changed, new_id = imgui.InputText("SimBrief ID", simbrief_id or "", 100)
         if changed then
             simbrief_id = new_id
             save_user_settings()
         end
-        if slm_data_source == "manual" then imgui.EndDisabled() end
+        if slm_data_source == "manual" or slm_data_source == "fsd" then imgui.EndDisabled() end
 
         imgui.Spacing()
         local busy = embark_started or disembark_started
@@ -4267,7 +4307,7 @@ end
 				os.execute("xdg-open https://dispatch.simbrief.com/options/new")
 			end
 		end
-	else
+	elseif slm_data_source == "manual" then
 		local chg_pax, new_pax = imgui.InputInt("Pax##manual", slm_manual_pax)
 		if chg_pax then slm_manual_pax = math.max(0, new_pax) end
 
@@ -4280,6 +4320,18 @@ end
 		if not (embark_started or disembark_started) then
 			if imgui.Button("Load manual data") then
 				slm_load_manual_data()
+			end
+		end
+	elseif slm_data_source == "fsd" then
+		-- Show read-only FSD values if available
+		if slm_fsd_available then
+			imgui.PushStyleColor(imgui.constant.Col.Text, 0xFFAAAAAA)
+			imgui.TextUnformatted("Source: Flight Sim Deck")
+			imgui.PopStyleColor()
+		end
+		if not (embark_started or disembark_started) then
+			if imgui.Button("Load FSD data") then
+				slm_load_fsd_data()
 			end
 		end
 	end
@@ -4665,6 +4717,7 @@ slm_load_aircraft_data()
 --------------------------------------------------------------------------------
 do
     slm_detect_aircraft()  -- affiche le message d'exclusion et grise les cases dès le démarrage
+    slm_detect_fsd()
     if XPLMFindDataRef("laminar/B738/tab/zone1_payload") then
         for z = 1, 5 do
             dataref_table("laminar/B738/tab/zone" .. z .. "_payload")[0] = 0
