@@ -73,8 +73,22 @@ function draw_loadsheet_window(wnd, x, y)
     imgui.PushStyleColor(imgui.constant.Col.Text, c_text)
     imgui.TextUnformatted(string.format("%s%s   %s", d.airline or "", d.fltnum or "", d.date or ""))
     imgui.TextUnformatted(string.format("Aircraft: %s (%s)  Reg: %s", d.aircraft_name or "?", d.aircraft_icao or "?", d.reg or "?"))
-    imgui.TextUnformatted(string.format("Route: %s -> %s (ALT: %s)", d.orig or "?", d.dest or "?", d.altn or "?"))
-    imgui.TextUnformatted(string.format("Dispatcher: %s   Captain: %s", d.dispatcher or "?", d.captain or "?"))
+    if d.slm_source ~= "manual" then
+        imgui.TextUnformatted(string.format("Route: %s -> %s (ALT: %s)", d.orig or "?", d.dest or "?", d.altn or "?"))
+    end
+    if d.slm_source == "manual" then
+        imgui.TextUnformatted("Dispatcher: ")
+        imgui.SameLine(nil, 0)
+        imgui.TextUnformatted(d.dispatcher or "?")
+        imgui.SameLine(nil, 4)
+        imgui.PushStyleColor(imgui.constant.Col.Text, 0xFFB0B0B0)
+        imgui.TextUnformatted("(Ko-Fi Donator)")
+        imgui.PopStyleColor()
+        imgui.SameLine(nil, 10)
+        imgui.TextUnformatted("Captain: " .. (d.captain or "?"))
+    else
+        imgui.TextUnformatted(string.format("Dispatcher: %s   Captain: %s", d.dispatcher or "?", d.captain or "?"))
+    end
     imgui.PopStyleColor()
     imgui.NewLine()
     imgui.Separator()
@@ -284,7 +298,6 @@ function draw_loadsheet_window(wnd, x, y)
 
 	imgui.EndTable()
 	imgui.NewLine()
-	imgui.Separator()
 
 	---------------------------------------------------------
 	local function weight_color(actual, max)
@@ -295,6 +308,7 @@ function draw_loadsheet_window(wnd, x, y)
 	end
 
 if d.slm_source ~= "manual" then
+	imgui.Separator()
 	--------------------------------------------------------
 	-- WEIGHTS
 	--------------------------------------------------------
