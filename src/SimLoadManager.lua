@@ -120,6 +120,7 @@ embark_wnd = nil
 unit_system = "kg"
 simbrief_id = "REPLACE_WITH_YOUR_SIMBRIEF_ID"
 slm_captain_name = ""
+slm_data_source = "simbrief"  -- "simbrief" | "manual"
 settings_file = "Resources/plugins/FlyWithLua/Modules/simload_settings.txt"
 
 --------------------------------------------------------------------------------
@@ -243,6 +244,10 @@ local function slm_load_aircraft_data()
 end
 
 local simbrief_data_loaded = false
+
+local slm_manual_pax   = 0
+local slm_manual_cargo = 0.0
+local slm_manual_fuel  = 0.0
 
 local passengers_total = 0
 local cargo_total = 0
@@ -703,6 +708,10 @@ function load_user_settings()
                 slm_rp_enabled = (value == "true")
             elseif key == "captain_name" then
                 slm_captain_name = value
+            elseif key == "data_source" then
+                if value == "simbrief" or value == "manual" then
+                    slm_data_source = value
+                end
             end
         end
         file:close()
@@ -719,6 +728,7 @@ function save_user_settings()
     if file then
         file:write("simbrief_id=" .. simbrief_id .. "\n")
         file:write("captain_name=" .. slm_captain_name .. "\n")
+        file:write("data_source=" .. slm_data_source .. "\n")
         file:write("unit_system=" .. unit_system .. "\n")
         file:write("timing_preset=" .. timing_preset .. "\n")
         file:write("fuel_first=" .. tostring(fuel_first) .. "\n")
@@ -1080,7 +1090,9 @@ function start_embarkation()
         end
     elseif selected_location_group == "jetway" then
         if not crew_briefing_done and not crew_briefing_started then
-            command_once("sim/ground_ops/jetway")
+            if not aircraft_has_own_stairs then
+                command_once("sim/ground_ops/jetway")
+            end
         end
     end
     init_sounds()
@@ -1614,7 +1626,9 @@ function start_disembarkation()
 			start_disembarkation_pax_delay = os.clock() + 15
 		elseif selected_location_group == "jetway" then
 			if (not autodgs_available) or (autodgs_on_ground ~= 1) then
-				command_once("sim/ground_ops/jetway")
+				if not aircraft_has_own_stairs then
+					command_once("sim/ground_ops/jetway")
+				end
 			end
 			start_disembarkation_pax_delay = os.clock() + 25
         elseif selected_location_group == "terminal" then
@@ -1668,7 +1682,9 @@ function start_disembarkation()
 			end
         elseif selected_location_group == "jetway" then
 			if (not autodgs_available) or (autodgs_on_ground ~= 1) then
-				command_once("sim/ground_ops/jetway")
+				if not aircraft_has_own_stairs then
+					command_once("sim/ground_ops/jetway")
+				end
 			end
         elseif selected_location_group == "terminal" then
 			if not aircraft_has_own_stairs then
@@ -1716,7 +1732,9 @@ function start_disembarkation()
 			Bus_chg = true
         elseif selected_location_group == "jetway" then
 			if (not autodgs_available) or (autodgs_on_ground ~= 1) then
-				command_once("sim/ground_ops/jetway")
+				if not aircraft_has_own_stairs then
+					command_once("sim/ground_ops/jetway")
+				end
 			end
         elseif selected_location_group == "terminal" then
 			if not aircraft_has_own_stairs then
@@ -2304,7 +2322,7 @@ function slm_rp_start()
 
     elseif slm_aircraft_type == "zibo" then
         slm_rp_zibo_paxwt_dr = dataref_table("laminar/B738/std_pax_weight")
-        slm_rp_zibo_paxwt_dr[0] = SB_pax_weight or 0
+        slm_rp_zibo_paxwt_dr[0] = (slm_data_source == "manual") and 70 or (SB_pax_weight or 0)
         slm_rp_zibo_embark_zone = 5
         for z = 1, 5 do
             slm_rp_zibo_zone_dr[z] = dataref_table("laminar/B738/tab/zone" .. z .. "_payload")
@@ -2622,7 +2640,9 @@ function check_if_all_done()
                 show_StairsXPJ2 = false; StairsXPJ2_chg = true
 
                 if selected_location_group == "jetway" then
-                    command_once("sim/ground_ops/jetway")
+                    if not aircraft_has_own_stairs then
+                        command_once("sim/ground_ops/jetway")
+                    end
                 end
             end
 
@@ -2644,7 +2664,9 @@ function slm_deploy_access()
             option_StairsXPJ_override = true
         end
     elseif selected_location_group == "jetway" then
-        command_once("sim/ground_ops/jetway")
+        if not aircraft_has_own_stairs then
+            command_once("sim/ground_ops/jetway")
+        end
     end
 end
 
@@ -2897,7 +2919,19 @@ function manage_sequence()
             slm_sequence_phase = "cleaning"
             start_cleaning()
         elseif slm_sequence_phase == "cleaning" and cleaning_done then
-            slm_sequence_phase = "simbrief_check"
+            if slm_data_source == "simbrief" then
+                slm_sequence_phase = "simbrief_check"
+            else
+                slm_sequence_phase = "crew_and_catering"
+                crew_briefing_done = false
+                if skip_crew_briefing then
+                    crew_briefing_done = true
+                    slm_deploy_access()
+                else
+                    start_crew_briefing()
+                end
+                start_catering()
+            end
         elseif slm_sequence_phase == "simbrief_check" and not slm_auto_import_done then
             slm_auto_import_done = true
             slm_turnaround_check_simbrief()
@@ -3866,12 +3900,26 @@ function build_embark_window(wnd, x, y)
 
         imgui.Spacing()
 
-        -- SimBrief ID
+        -- Data source selector
+        imgui.TextUnformatted("Data source:")
+        if imgui.RadioButton("SimBrief##src", slm_data_source == "simbrief") then
+            slm_data_source = "simbrief"
+            save_user_settings()
+        end
+        imgui.SameLine()
+        if imgui.RadioButton("Manual##src", slm_data_source == "manual") then
+            slm_data_source = "manual"
+            save_user_settings()
+        end
+
+        -- SimBrief ID (greyed out in manual mode)
+        if slm_data_source == "manual" then imgui.BeginDisabled() end
         local changed, new_id = imgui.InputText("SimBrief ID", simbrief_id or "", 100)
         if changed then
             simbrief_id = new_id
             save_user_settings()
         end
+        if slm_data_source == "manual" then imgui.EndDisabled() end
 
         imgui.Spacing()
         local busy = embark_started or disembark_started
@@ -4148,19 +4196,36 @@ end
 		imgui.BeginDisabled()
 	end
 
-	if imgui.Button("Load Simbrief data") then
-		fetch_simbrief_data(simbrief_id)
-		slm_detect_aircraft()
-	end
-	imgui.SameLine()
-	if imgui.Button("Dispatch") then
-		local sep = package.config:sub(1, 1)
-		if sep == "\\" then
-			os.execute("start https://dispatch.simbrief.com/options/new")
-		elseif SCRIPT_DIRECTORY:match("^/Users/") then
-			os.execute("open https://dispatch.simbrief.com/options/new")
-		else
-			os.execute("xdg-open https://dispatch.simbrief.com/options/new")
+	if slm_data_source == "simbrief" then
+		if imgui.Button("Load Simbrief data") then
+			fetch_simbrief_data(simbrief_id)
+			slm_detect_aircraft()
+		end
+		imgui.SameLine()
+		if imgui.Button("Dispatch") then
+			local sep = package.config:sub(1, 1)
+			if sep == "\\" then
+				os.execute("start https://dispatch.simbrief.com/options/new")
+			elseif SCRIPT_DIRECTORY:match("^/Users/") then
+				os.execute("open https://dispatch.simbrief.com/options/new")
+			else
+				os.execute("xdg-open https://dispatch.simbrief.com/options/new")
+			end
+		end
+	else
+		local chg_pax, new_pax = imgui.InputInt("Pax##manual", slm_manual_pax)
+		if chg_pax then slm_manual_pax = math.max(0, new_pax) end
+
+		local chg_cargo, new_cargo = imgui.InputFloat("Cargo (kg)##manual", slm_manual_cargo, 10, 100, "%.0f")
+		if chg_cargo then slm_manual_cargo = math.max(0, new_cargo) end
+
+		local chg_fuel, new_fuel = imgui.InputFloat("Fuel (kg)##manual", slm_manual_fuel, 100, 1000, "%.0f")
+		if chg_fuel then slm_manual_fuel = math.max(0, new_fuel) end
+
+		if not (embark_started or disembark_started) then
+			if imgui.Button("Load manual data") then
+				slm_load_manual_data()
+			end
 		end
 	end
 
@@ -4206,7 +4271,7 @@ end
 		slm_set_location_jetway()
 	end
 
-	local chg_own, new_own = imgui.Checkbox("Do not call stairs", aircraft_has_own_stairs)
+	local chg_own, new_own = imgui.Checkbox("Don't call jetway / stairs", aircraft_has_own_stairs)
 	if chg_own then
 		aircraft_has_own_stairs = new_own
 	end
