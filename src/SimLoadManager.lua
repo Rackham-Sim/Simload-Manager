@@ -123,6 +123,11 @@ slm_captain_name = ""
 slm_data_source = "simbrief"  -- "simbrief" | "manual"
 settings_file = "Resources/plugins/FlyWithLua/Modules/simload_settings.txt"
 
+load_controllers = {
+    "Xavier24", "james.C", "Furax84", "Dudley.B", "Jugac64",
+    "Mark", "Othmar", "Pea", "Christy.D", "Guilb'Air", "Sydney.M"
+}
+
 --------------------------------------------------------------------------------
 -- JSON PARSER (minimal, no external dependencies)
 --------------------------------------------------------------------------------
@@ -3882,6 +3887,56 @@ function slm_draw_sequence_steps()
         draw_embark_fuel()
     end
 
+end
+
+--------------------------------------------------------------------------------
+-- MANUAL DATA LOAD
+--------------------------------------------------------------------------------
+function slm_load_manual_data()
+    slm_detect_aircraft()
+    passengers_total     = slm_manual_pax
+    cargo_total          = slm_manual_cargo
+    fuel_total           = slm_manual_fuel
+    SB_pax_weight        = 70
+    SB_bag_weight        = 0
+    SB_pax_count         = slm_manual_pax
+    SB_bag_count         = 0
+    SB_pax_mass_planned  = slm_manual_pax * 70
+    SB_bag_mass_planned  = 0
+
+    local idx1 = math.random(1, #load_controllers)
+    local idx2
+    repeat idx2 = math.random(1, #load_controllers) until idx2 ~= idx1
+    local manual_dispatcher  = load_controllers[idx1]
+    local manual_controller  = load_controllers[idx2]
+
+    SLM_Loadsheet_Data = {
+        airline           = "",
+        fltnum            = "",
+        date              = os.date("%d%b%y"):upper(),
+        aircraft_icao     = PLANE_ICAO or "?",
+        aircraft_name     = "",
+        reg               = "",
+        orig              = "???",
+        dest              = "???",
+        altn              = "",
+        captain           = (slm_captain_name ~= "" and slm_captain_name) or "N/A",
+        dispatcher        = manual_dispatcher,
+        manual_controller = manual_controller,
+        pax_total         = slm_manual_pax,
+        cargo_total       = slm_manual_cargo,
+        pax_weight        = 70,
+        bag_weight        = 0,
+        pax_mass_planned  = slm_manual_pax * 70,
+        bag_mass_planned  = 0,
+        pax_count_sb      = slm_manual_pax,
+        bag_count_sb      = 0,
+        fuel_block        = slm_manual_fuel,
+        payload_planned   = slm_manual_pax * 70 + slm_manual_cargo,
+        slm_source        = "manual",
+    }
+    logMsg(string.format("[SLM] Manual data loaded: pax=%d cargo=%.0f fuel=%.0f",
+        slm_manual_pax, slm_manual_cargo, slm_manual_fuel))
 end
 
 --------------------------------------------------------------------------------
