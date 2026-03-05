@@ -48,6 +48,65 @@ if not exist "%DIST%" mkdir "%DIST%"
 if not exist "%DIST%\SLM-Data" mkdir "%DIST%\SLM-Data"
 
 :: ============================================================
+:: Deploiement SLM-Data (avant compilation pour creer les dossiers cibles)
+:: ============================================================
+if not exist "%XPLANE_SCRIPTS%" (
+    echo.
+    echo [AVERT.] Dossier X-Plane introuvable : %XPLANE_SCRIPTS%
+    echo          Les fichiers compiles sont disponibles dans dist\
+    pause
+    exit /b 0
+)
+
+echo Deploiement des ressources SLM-Data...
+echo.
+
+:: -- Copie du dossier audio
+set "SOUNDS_SRC=%SRC%\SLM-Data\SimLoad-Manager-Sounds"
+set "SOUNDS_DIST=%DIST%\SLM-Data\SimLoad-Manager-Sounds"
+set "SOUNDS_DST=%XPLANE_SCRIPTS%\SLM-Data\SimLoad-Manager-Sounds"
+if exist "%SOUNDS_SRC%" (
+    xcopy /e /i /y "%SOUNDS_SRC%" "%SOUNDS_DIST%" >nul
+    if errorlevel 1 (
+        echo [ECHEC]  Copie du dossier audio vers dist\SLM-Data\
+        set "ERRORS=1"
+    ) else (
+        echo [OK]     SimLoad-Manager-Sounds -^> dist\SLM-Data\
+    )
+    xcopy /e /i /y "%SOUNDS_SRC%" "%SOUNDS_DST%" >nul
+    if errorlevel 1 (
+        echo [ECHEC]  Copie du dossier audio vers X-Plane\SLM-Data\
+        set "ERRORS=1"
+    ) else (
+        echo [OK]     SimLoad-Manager-Sounds -^> X-Plane\SLM-Data\
+    )
+) else (
+    echo [AVERT.] Dossier audio introuvable dans src\SLM-Data\, ignore.
+)
+
+:: -- Copie de aircraft.json
+if exist "%SRC%\SLM-Data\aircraft.json" (
+    copy /y "%SRC%\SLM-Data\aircraft.json" "%DIST%\SLM-Data\aircraft.json" >nul
+    if errorlevel 1 (
+        echo [ECHEC]  Copie aircraft.json vers dist\SLM-Data\
+        set "ERRORS=1"
+    ) else (
+        echo [OK]     aircraft.json -^> dist\SLM-Data\
+    )
+    copy /y "%SRC%\SLM-Data\aircraft.json" "%XPLANE_SCRIPTS%\SLM-Data\aircraft.json" >nul
+    if errorlevel 1 (
+        echo [ECHEC]  Copie aircraft.json vers X-Plane\SLM-Data\
+        set "ERRORS=1"
+    ) else (
+        echo [OK]     aircraft.json -^> X-Plane\SLM-Data\
+    )
+) else (
+    echo [AVERT.] aircraft.json introuvable dans src\SLM-Data\, ignore.
+)
+
+echo.
+
+:: ============================================================
 :: Compilation
 :: ============================================================
 echo Compilation...
@@ -112,64 +171,6 @@ if !ERRORS! == 1 (
     echo [ERREUR] Compilation echouee.
     pause
     exit /b 1
-)
-
-:: ============================================================
-:: Deploiement - Audio uniquement (les .lua sont deja deployes)
-:: ============================================================
-if not exist "%XPLANE_SCRIPTS%" (
-    echo.
-    echo [AVERT.] Dossier X-Plane introuvable : %XPLANE_SCRIPTS%
-    echo          Les fichiers compiles sont disponibles dans dist\
-    pause
-    exit /b 0
-)
-
-echo.
-echo Deploiement des ressources audio...
-echo.
-
-:: -- Copie du dossier audio
-set "SOUNDS_SRC=%SRC%\SLM-Data\SimLoad-Manager-Sounds"
-set "SOUNDS_DIST=%DIST%\SLM-Data\SimLoad-Manager-Sounds"
-set "SOUNDS_DST=%XPLANE_SCRIPTS%\SLM-Data\SimLoad-Manager-Sounds"
-if exist "%SOUNDS_SRC%" (
-    xcopy /e /i /y "%SOUNDS_SRC%" "%SOUNDS_DIST%" >nul
-    if errorlevel 1 (
-        echo [ECHEC]  Copie du dossier audio vers dist\SLM-Data\
-        set "ERRORS=1"
-    ) else (
-        echo [OK]     SimLoad-Manager-Sounds -^> dist\SLM-Data\
-    )
-    xcopy /e /i /y "%SOUNDS_SRC%" "%SOUNDS_DST%" >nul
-    if errorlevel 1 (
-        echo [ECHEC]  Copie du dossier audio vers X-Plane\SLM-Data\
-        set "ERRORS=1"
-    ) else (
-        echo [OK]     SimLoad-Manager-Sounds -^> X-Plane\SLM-Data\
-    )
-) else (
-    echo [AVERT.] Dossier audio introuvable dans src\SLM-Data\, ignore.
-)
-
-:: -- Copie de aircraft.json
-if exist "%SRC%\SLM-Data\aircraft.json" (
-    copy /y "%SRC%\SLM-Data\aircraft.json" "%DIST%\SLM-Data\aircraft.json" >nul
-    if errorlevel 1 (
-        echo [ECHEC]  Copie aircraft.json vers dist\SLM-Data\
-        set "ERRORS=1"
-    ) else (
-        echo [OK]     aircraft.json -^> dist\SLM-Data\
-    )
-    copy /y "%SRC%\SLM-Data\aircraft.json" "%XPLANE_SCRIPTS%\SLM-Data\aircraft.json" >nul
-    if errorlevel 1 (
-        echo [ECHEC]  Copie aircraft.json vers X-Plane\SLM-Data\
-        set "ERRORS=1"
-    ) else (
-        echo [OK]     aircraft.json -^> X-Plane\SLM-Data\
-    )
-) else (
-    echo [AVERT.] aircraft.json introuvable dans src\SLM-Data\, ignore.
 )
 
 echo.
