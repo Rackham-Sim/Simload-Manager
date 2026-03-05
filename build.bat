@@ -49,19 +49,34 @@ if not exist "%DIST%" mkdir "%DIST%"
 :: ============================================================
 :: Compilation
 :: ============================================================
-
 echo Compilation...
 echo.
 
 for %%f in ("%SRC%\*.lua") do (
     set "FNAME=%%~nxf"
-    "%LUAJIT_EXE%" -b "%%f" "%DIST%\!FNAME!" 2>&1
+    set "TMPFILE=%DIST%\~tmp_%%~nxf"
+
+    :: -- Version RELEASE pour dist\ (dev_mode = false)
+    powershell -Command "(Get-Content '%%f') -replace 'local slm_dev_mode = (true|false)', 'local slm_dev_mode = false' | Set-Content '!TMPFILE!'"
+    "%LUAJIT_EXE%" -b "!TMPFILE!" "%DIST%\!FNAME!" 2>&1
     if errorlevel 1 (
-        echo [ECHEC]  !FNAME!
+        echo [ECHEC]  !FNAME! (release^)
         set "ERRORS=1"
     ) else (
-        echo [OK]     !FNAME! -^> dist\!FNAME!
+        echo [OK]     !FNAME! -^> dist\ (dev_mode=false^)
     )
+
+    :: -- Version DEV pour X-Plane (dev_mode = true)
+    powershell -Command "(Get-Content '%%f') -replace 'local slm_dev_mode = (true|false)', 'local slm_dev_mode = true' | Set-Content '!TMPFILE!'"
+    "%LUAJIT_EXE%" -b "!TMPFILE!" "%XPLANE_SCRIPTS%\!FNAME!" 2>&1
+    if errorlevel 1 (
+        echo [ECHEC]  !FNAME! (dev^)
+        set "ERRORS=1"
+    ) else (
+        echo [OK]     !FNAME! -^> X-Plane\ (dev_mode=true^)
+    )
+
+    del "!TMPFILE!" >nul 2>&1
 )
 
 if !ERRORS! == 1 (
@@ -72,7 +87,7 @@ if !ERRORS! == 1 (
 )
 
 :: ============================================================
-:: Deploiement
+:: Deploiement - Audio uniquement (les .lua sont deja deployes)
 :: ============================================================
 if not exist "%XPLANE_SCRIPTS%" (
     echo.
@@ -81,21 +96,10 @@ if not exist "%XPLANE_SCRIPTS%" (
     pause
     exit /b 0
 )
-echo.
-echo Deploiement vers X-Plane...
-echo.
 
-:: -- Copie des scripts .lua
-for %%f in ("%DIST%\*.lua") do (
-    set "FNAME=%%~nxf"
-    copy /y "%%f" "%XPLANE_SCRIPTS%\!FNAME!" >nul
-    if errorlevel 1 (
-        echo [ECHEC]  Copie de !FNAME!
-        set "ERRORS=1"
-    ) else (
-        echo [OK]     !FNAME! deploye
-    )
-)
+echo.
+echo Deploiement des ressources audio...
+echo.
 
 :: -- Copie du dossier audio
 set "SOUNDS_SRC=%DIST%\SimLoad-Manager-Sounds"

@@ -1,4 +1,4 @@
---SIMLOAD MANAGER V3.0
+--SIMLOAD MANAGER V3.1
 
 --------------------------------------------------------------------------------
 -- IMGUI CHECK
@@ -12,7 +12,7 @@ end
 --------------------------------------------------------------------------------
 -- UPDATE CHECK
 --------------------------------------------------------------------------------
-SLM_VERSION = "3.0"
+SLM_VERSION = "3.1"
 
 local slm_dev_mode = false   -- set to true to show [DEV] button in UI
 
@@ -3416,7 +3416,7 @@ preset_values.veryfast  = capture_preset(apply_veryfast_timings)
 function create_embark_window()
     if embark_wnd == nil then
         embark_wnd = float_wnd_create(425, 900, 1, true)
-        float_wnd_set_title(embark_wnd, "Simload Manager 3.0")
+        float_wnd_set_title(embark_wnd, "Simload Manager 3.1")
         float_wnd_set_imgui_builder(embark_wnd, "build_embark_window")
         float_wnd_set_onclose(embark_wnd, "on_close_embark_window")
         logMsg("[SLM] Embark window created.")
@@ -3447,7 +3447,7 @@ local slm_open_loadsheet_flag = false
 
 local function ensure_loadsheet_loaded()
     if not _G["open_loadsheet_window"] then
-        dofile(SCRIPT_DIRECTORY .. "SimLoadManager_loadsheet.lua")
+        dofile(SCRIPT_DIRECTORY .. "SLM-Data/SimLoadManager_loadsheet.lua")
     end
 end
 
