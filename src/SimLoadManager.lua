@@ -3795,16 +3795,19 @@ function build_embark_window(wnd, x, y)
     if imgui.CollapsingHeader("Settings") then
         imgui.Spacing()
 
+        -- Captain name
+        local changed_capt, new_capt = imgui.InputText("Captain", slm_captain_name or "", 100)
+        if changed_capt then
+            slm_captain_name = new_capt
+            save_user_settings()
+        end
+
+        imgui.Spacing()
+
         -- SimBrief ID
         local changed, new_id = imgui.InputText("SimBrief ID", simbrief_id or "", 100)
         if changed then
             simbrief_id = new_id
-            save_user_settings()
-        end
-
-        local changed, new_name = imgui.InputText("Captain", slm_captain_name or "", 100)
-        if changed then
-            slm_captain_name = new_name
             save_user_settings()
         end
 
