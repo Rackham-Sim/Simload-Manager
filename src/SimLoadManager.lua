@@ -160,7 +160,7 @@ local cleaning_loop_playing  = false
 local is_muted = false
 
 
-local sound_dir = SCRIPT_DIRECTORY .. "SimLoad-Manager-Sounds/"
+local sound_dir = SCRIPT_DIRECTORY .. "SLM-Data/SimLoad-Manager-Sounds/"
 local Volume = 1.0
 
 local fuel_total = 0
