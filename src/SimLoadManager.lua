@@ -2318,6 +2318,8 @@ function slm_rp_start()
         slm_rp_toliss_nopax_dr    = dataref_table("AirbusFBW/NoPax")
         slm_rp_toliss_fwdcargo_dr = dataref_table("AirbusFBW/FwdCargo")
         slm_rp_toliss_aftcargo_dr = dataref_table("AirbusFBW/AftCargo")
+        local slm_rp_toliss_paxdistrib_dr = dataref_table("AirbusFBW/PaxDistrib")
+        slm_rp_toliss_paxdistrib_dr[0] = 0.5
         slm_rp_toliss_last_setweight = os.clock()
         logMsg(string.format("[SLM-RP] ToLiss: démarré pax=%d cargo=%.0f",
             passengers_total or 0, slm_rp_target_cargo_kg))
