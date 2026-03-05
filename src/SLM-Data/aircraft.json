@@ -54,12 +54,13 @@
     "E140": "Real Fuel & Payload Fill temporarily disabled for XCraft Embraer family.\nProper dataref mapping coming in a future update.",
     "E145": "Real Fuel & Payload Fill temporarily disabled for XCraft Embraer family.\nProper dataref mapping coming in a future update.",
     "E45X": "Real Fuel & Payload Fill temporarily disabled for XCraft Embraer family.\nProper dataref mapping coming in a future update.",
-    "E170": "Real Fuel & Payload Fill temporarily disabled for XCraft Embraer family.\nProper dataref mapping coming in a future update.",
-    "E175": "Real Fuel & Payload Fill temporarily disabled for XCraft Embraer family.\nProper dataref mapping coming in a future update.",
-    "E190": "Real Fuel & Payload Fill temporarily disabled for XCraft Embraer family.\nProper dataref mapping coming in a future update.",
-    "E195": "Real Fuel & Payload Fill temporarily disabled for XCraft Embraer family.\nProper dataref mapping coming in a future update.",
-    "E35L": "Real Fuel & Payload Fill temporarily disabled for XCraft Embraer family.\nProper dataref mapping coming in a future update.",
-    "E19L": "Real Fuel & Payload Fill temporarily disabled for XCraft Embraer family.\nProper dataref mapping coming in a future update."
+    "E35L": "Real Fuel & Payload Fill temporarily disabled for XCraft Embraer family.\nProper dataref mapping coming in a future update."
   },
-  "rp_stations": {}
+  "rp_stations": {
+    "E170": {"pax": [0,1,2,3], "cargo": [4,5]},
+    "E175": {"pax": [0,1,2,3], "cargo": [4,5]},
+    "E190": {"pax": [0,1,2,3], "cargo": [4,5]},
+    "E195": {"pax": [0,1,2,3], "cargo": [4,5]},
+    "E19L": {"pax": [0,1,2,3], "cargo": [4,5]}
+  }
 }

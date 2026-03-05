@@ -333,6 +333,7 @@ local slm_rp_last_pax_unloaded   = nil -- suivi déchargement pax
 local slm_rp_last_cargo_unloaded = nil -- suivi déchargement cargo
 -- Laminar default
 local slm_rp_station_dr        = nil   -- handle m_stations
+local slm_rp_station_map       = nil   -- rp_stations entry for current ICAO
 -- ToLiss
 local slm_rp_toliss_nopax_dr       = nil
 local slm_rp_toliss_fwdcargo_dr    = nil
@@ -2296,6 +2297,8 @@ function slm_rp_start()
     if slm_aircraft_type == "default" then
         slm_rp_station_dr = dataref_table("sim/flightmodel/weight/m_stations")
         for i = 0, 8 do slm_rp_station_dr[i] = 0 end
+        local rp_map = slm_aircraft_data.rp_stations and slm_aircraft_data.rp_stations[PLANE_ICAO or ""]
+        slm_rp_station_map = rp_map or nil
         logMsg(string.format("[SLM-RP] Default: démarré pax=%.0f cargo=%.0f",
             slm_rp_target_pax_kg, slm_rp_target_cargo_kg))
 
@@ -2334,6 +2337,7 @@ function slm_rp_stop()
     slm_rp_target_pax_kg     = 0
     slm_rp_target_cargo_kg   = 0
     slm_rp_station_dr        = nil
+    slm_rp_station_map       = nil
     slm_rp_zibo_zone_dr      = {}
     slm_rp_zibo_cargo1_dr    = nil
     slm_rp_zibo_cargo2_dr    = nil
@@ -2356,6 +2360,8 @@ function slm_rp_update()
     if slm_aircraft_type == "default" then
         if not slm_rp_station_dr then return end
         local dr = slm_rp_station_dr
+        local pax_indices   = (slm_rp_station_map and slm_rp_station_map.pax)   or {0,1,2}
+        local cargo_indices = (slm_rp_station_map and slm_rp_station_map.cargo) or {3,4}
 
         if (passengers_total or 0) > 0 and slm_rp_target_pax_kg > 0 then
             if slm_rp_last_pax_loaded == nil then
@@ -2364,11 +2370,12 @@ function slm_rp_update()
                 local delta_pax = (passengers_loaded or 0) - slm_rp_last_pax_loaded
                 if delta_pax > 0 then
                     slm_rp_last_pax_loaded = passengers_loaded
-                    local per_station = delta_pax * slm_rp_target_pax_kg / passengers_total / 3
-                    for i = 0, 2 do dr[i] = (dr[i] or 0) + per_station end
+                    local per_station = delta_pax * slm_rp_target_pax_kg / passengers_total / #pax_indices
+                    for _, i in ipairs(pax_indices) do dr[i] = (dr[i] or 0) + per_station end
                 end
             end
-            local sum_pax = (dr[0] or 0) + (dr[1] or 0) + (dr[2] or 0)
+            local sum_pax = 0
+            for _, i in ipairs(pax_indices) do sum_pax = sum_pax + (dr[i] or 0) end
             pax_done_rp = sum_pax >= slm_rp_target_pax_kg - 0.5
         end
 
@@ -2379,11 +2386,12 @@ function slm_rp_update()
                 local delta_units = (cargo_loaded or 0) - slm_rp_last_cargo_loaded
                 if delta_units > 0 then
                     slm_rp_last_cargo_loaded = cargo_loaded
-                    local per_station = delta_units / 2
-                    for i = 3, 4 do dr[i] = (dr[i] or 0) + per_station end
+                    local per_station = delta_units / #cargo_indices
+                    for _, i in ipairs(cargo_indices) do dr[i] = (dr[i] or 0) + per_station end
                 end
             end
-            local sum_cargo = (dr[3] or 0) + (dr[4] or 0)
+            local sum_cargo = 0
+            for _, i in ipairs(cargo_indices) do sum_cargo = sum_cargo + (dr[i] or 0) end
             cargo_done_rp = sum_cargo >= slm_rp_target_cargo_kg - 0.5
         end
 
@@ -2472,6 +2480,8 @@ function slm_rp_unload_update()
             else return end
         end
         local dr = slm_rp_station_dr
+        local pax_indices   = (slm_rp_station_map and slm_rp_station_map.pax)   or {0,1,2}
+        local cargo_indices = (slm_rp_station_map and slm_rp_station_map.cargo) or {3,4}
 
         if (passengers_total or 0) > 0 and slm_rp_target_pax_kg > 0 then
             if slm_rp_last_pax_unloaded == nil then
@@ -2480,8 +2490,8 @@ function slm_rp_unload_update()
                 local delta_pax = (passengers_unloaded or 0) - slm_rp_last_pax_unloaded
                 if delta_pax > 0 then
                     slm_rp_last_pax_unloaded = passengers_unloaded
-                    local per_station = delta_pax * slm_rp_target_pax_kg / passengers_total / 3
-                    for i = 0, 2 do dr[i] = math.max(0, (dr[i] or 0) - per_station) end
+                    local per_station = delta_pax * slm_rp_target_pax_kg / passengers_total / #pax_indices
+                    for _, i in ipairs(pax_indices) do dr[i] = math.max(0, (dr[i] or 0) - per_station) end
                 end
             end
         end
@@ -2493,8 +2503,8 @@ function slm_rp_unload_update()
                 local delta_units = (cargo_unloaded or 0) - slm_rp_last_cargo_unloaded
                 if delta_units > 0 then
                     slm_rp_last_cargo_unloaded = cargo_unloaded
-                    local per_station = delta_units / 2
-                    for i = 3, 4 do dr[i] = math.max(0, (dr[i] or 0) - per_station) end
+                    local per_station = delta_units / #cargo_indices
+                    for _, i in ipairs(cargo_indices) do dr[i] = math.max(0, (dr[i] or 0) - per_station) end
                 end
             end
         end
