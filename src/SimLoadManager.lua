@@ -390,8 +390,6 @@ SLM_crew_briefing_fraction = create_dataref_table("FlyWithLua/SimLoadManager/cre
 SLM_catering_fraction      = create_dataref_table("FlyWithLua/SimLoadManager/catering_fraction", "Float")
 SLM_cleaning_fraction      = create_dataref_table("FlyWithLua/SimLoadManager/cleaning_fraction", "Float")
 
-define_shared_DataRef("FlyWithLua/SimLoadManager/captain_name", "String")
-
 --------------------------------------------------------------------------------
 -- DEFAULT TIMING
 --------------------------------------------------------------------------------
