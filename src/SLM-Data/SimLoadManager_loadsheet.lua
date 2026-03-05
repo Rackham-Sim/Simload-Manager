@@ -1,5 +1,5 @@
 -- ==========================================================
--- SimLoadManager Loadsheet - Display Module (v1.1)
+-- SimLoadManager Loadsheet - Display Module (v1.2)
 -- ==========================================================
 
 if not SUPPORTS_FLOATING_WINDOWS then
