@@ -45,6 +45,7 @@ if not exist "%SRC%" (
 
 :: -- Creer dist si absent
 if not exist "%DIST%" mkdir "%DIST%"
+if not exist "%DIST%\SLM-Data" mkdir "%DIST%\SLM-Data"
 
 :: ============================================================
 :: Compilation
@@ -79,6 +80,33 @@ for %%f in ("%SRC%\*.lua") do (
     del "!TMPFILE!" >nul 2>&1
 )
 
+for %%f in ("%SRC%\SLM-Data\*.lua") do (
+    set "FNAME=%%~nxf"
+    set "TMPFILE=%DIST%\SLM-Data\~tmp_%%~nxf"
+
+    :: -- Version RELEASE pour dist\SLM-Data\ (dev_mode = false)
+    powershell -Command "(Get-Content '%%f') -replace 'local slm_dev_mode = (true|false)', 'local slm_dev_mode = false' | Set-Content '!TMPFILE!'"
+    "%LUAJIT_EXE%" -b "!TMPFILE!" "%DIST%\SLM-Data\!FNAME!" 2>&1
+    if errorlevel 1 (
+        echo [ECHEC]  SLM-Data\!FNAME! (release^)
+        set "ERRORS=1"
+    ) else (
+        echo [OK]     SLM-Data\!FNAME! -^> dist\SLM-Data\ (dev_mode=false^)
+    )
+
+    :: -- Version DEV pour X-Plane (dev_mode = true)
+    powershell -Command "(Get-Content '%%f') -replace 'local slm_dev_mode = (true|false)', 'local slm_dev_mode = true' | Set-Content '!TMPFILE!'"
+    "%LUAJIT_EXE%" -b "!TMPFILE!" "%XPLANE_SCRIPTS%\SLM-Data\!FNAME!" 2>&1
+    if errorlevel 1 (
+        echo [ECHEC]  SLM-Data\!FNAME! (dev^)
+        set "ERRORS=1"
+    ) else (
+        echo [OK]     SLM-Data\!FNAME! -^> X-Plane\SLM-Data\ (dev_mode=true^)
+    )
+
+    del "!TMPFILE!" >nul 2>&1
+)
+
 if !ERRORS! == 1 (
     echo.
     echo [ERREUR] Compilation echouee.
@@ -102,18 +130,46 @@ echo Deploiement des ressources audio...
 echo.
 
 :: -- Copie du dossier audio
-set "SOUNDS_SRC=%DIST%\SimLoad-Manager-Sounds"
-set "SOUNDS_DST=%XPLANE_SCRIPTS%\SimLoad-Manager-Sounds"
+set "SOUNDS_SRC=%SRC%\SLM-Data\SimLoad-Manager-Sounds"
+set "SOUNDS_DIST=%DIST%\SLM-Data\SimLoad-Manager-Sounds"
+set "SOUNDS_DST=%XPLANE_SCRIPTS%\SLM-Data\SimLoad-Manager-Sounds"
 if exist "%SOUNDS_SRC%" (
-    xcopy /e /i /y "%SOUNDS_SRC%" "%SOUNDS_DST%" >nul
+    xcopy /e /i /y "%SOUNDS_SRC%" "%SOUNDS_DIST%" >nul
     if errorlevel 1 (
-        echo [ECHEC]  Copie du dossier audio
+        echo [ECHEC]  Copie du dossier audio vers dist\SLM-Data\
         set "ERRORS=1"
     ) else (
-        echo [OK]     SimLoad-Manager-Sounds deploye
+        echo [OK]     SimLoad-Manager-Sounds -^> dist\SLM-Data\
+    )
+    xcopy /e /i /y "%SOUNDS_SRC%" "%SOUNDS_DST%" >nul
+    if errorlevel 1 (
+        echo [ECHEC]  Copie du dossier audio vers X-Plane\SLM-Data\
+        set "ERRORS=1"
+    ) else (
+        echo [OK]     SimLoad-Manager-Sounds -^> X-Plane\SLM-Data\
     )
 ) else (
-    echo [AVERT.] Dossier audio introuvable dans dist\, ignore.
+    echo [AVERT.] Dossier audio introuvable dans src\SLM-Data\, ignore.
+)
+
+:: -- Copie de aircraft.json
+if exist "%SRC%\SLM-Data\aircraft.json" (
+    copy /y "%SRC%\SLM-Data\aircraft.json" "%DIST%\SLM-Data\aircraft.json" >nul
+    if errorlevel 1 (
+        echo [ECHEC]  Copie aircraft.json vers dist\SLM-Data\
+        set "ERRORS=1"
+    ) else (
+        echo [OK]     aircraft.json -^> dist\SLM-Data\
+    )
+    copy /y "%SRC%\SLM-Data\aircraft.json" "%XPLANE_SCRIPTS%\SLM-Data\aircraft.json" >nul
+    if errorlevel 1 (
+        echo [ECHEC]  Copie aircraft.json vers X-Plane\SLM-Data\
+        set "ERRORS=1"
+    ) else (
+        echo [OK]     aircraft.json -^> X-Plane\SLM-Data\
+    )
+) else (
+    echo [AVERT.] aircraft.json introuvable dans src\SLM-Data\, ignore.
 )
 
 echo.
