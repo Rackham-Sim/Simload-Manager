@@ -121,6 +121,127 @@ unit_system = "kg"
 simbrief_id = "REPLACE_WITH_YOUR_SIMBRIEF_ID"
 slm_captain_name = ""
 settings_file = "Resources/plugins/FlyWithLua/Modules/simload_settings.txt"
+
+--------------------------------------------------------------------------------
+-- JSON PARSER (minimal, no external dependencies)
+--------------------------------------------------------------------------------
+local function slm_parse_json(s)
+    local pos = 1
+    local parse_value  -- forward declaration for mutual recursion
+
+    local function skip_ws()
+        while pos <= #s and s:sub(pos, pos):match("%s") do pos = pos + 1 end
+    end
+
+    local function parse_string()
+        pos = pos + 1  -- skip opening "
+        local result = {}
+        while pos <= #s do
+            local c = s:sub(pos, pos)
+            if c == '"' then
+                pos = pos + 1
+                return table.concat(result)
+            elseif c == '\\' then
+                pos = pos + 1
+                local e = s:sub(pos, pos)
+                if     e == 'n'  then result[#result+1] = '\n'
+                elseif e == 't'  then result[#result+1] = '\t'
+                elseif e == 'r'  then result[#result+1] = '\r'
+                elseif e == '"'  then result[#result+1] = '"'
+                elseif e == '\\' then result[#result+1] = '\\'
+                else                  result[#result+1] = e
+                end
+                pos = pos + 1
+            else
+                result[#result+1] = c
+                pos = pos + 1
+            end
+        end
+        return table.concat(result)
+    end
+
+    local function parse_number()
+        local start = pos
+        while pos <= #s and s:sub(pos, pos):match("[%-%.%deE%+]") do pos = pos + 1 end
+        return tonumber(s:sub(start, pos - 1))
+    end
+
+    local function parse_object()
+        local obj = {}
+        pos = pos + 1; skip_ws()
+        if s:sub(pos, pos) == "}" then pos = pos + 1; return obj end
+        while true do
+            skip_ws()
+            local key = parse_string()
+            skip_ws()
+            pos = pos + 1  -- ':'
+            local val = parse_value()
+            obj[key] = val
+            skip_ws()
+            local c = s:sub(pos, pos)
+            if c == "," then pos = pos + 1
+            elseif c == "}" then pos = pos + 1; break end
+        end
+        return obj
+    end
+
+    local function parse_array()
+        local arr = {}
+        pos = pos + 1; skip_ws()
+        if s:sub(pos, pos) == "]" then pos = pos + 1; return arr end
+        while true do
+            local val = parse_value()
+            arr[#arr+1] = val
+            skip_ws()
+            local c = s:sub(pos, pos)
+            if c == "," then pos = pos + 1
+            elseif c == "]" then pos = pos + 1; break end
+        end
+        return arr
+    end
+
+    parse_value = function()
+        skip_ws()
+        local c = s:sub(pos, pos)
+        if     c == "{"  then return parse_object()
+        elseif c == "["  then return parse_array()
+        elseif c == '"'  then return parse_string()
+        elseif c == "t"  then pos = pos + 4; return true
+        elseif c == "f"  then pos = pos + 5; return false
+        elseif c == "n"  then pos = pos + 4; return nil
+        else                   return parse_number()
+        end
+    end
+
+    return parse_value()
+end
+
+--------------------------------------------------------------------------------
+-- AIRCRAFT DATA (loaded from SLM-Data/aircraft.json)
+--------------------------------------------------------------------------------
+local slm_aircraft_data = {}
+
+local function slm_load_aircraft_data()
+    local path = SYSTEM_DIRECTORY .. "Resources/plugins/FlyWithLua/Scripts/SLM-Data/aircraft.json"
+    local f = io.open(path, "r")
+    if not f then
+        logMsg("[SLM] aircraft.json introuvable : " .. path)
+        return
+    end
+    local content = f:read("*all")
+    f:close()
+    slm_aircraft_data = slm_parse_json(content) or {}
+    -- Convert tank_max string keys ("0","1",...) to integer keys for direct table[i] access
+    if slm_aircraft_data.tank_max then
+        for icao, tanks in pairs(slm_aircraft_data.tank_max) do
+            local fixed = {}
+            for k, v in pairs(tanks) do fixed[tonumber(k)] = v end
+            slm_aircraft_data.tank_max[icao] = fixed
+        end
+    end
+    logMsg("[SLM] aircraft.json chargé")
+end
+
 local simbrief_data_loaded = false
 
 local passengers_total = 0
@@ -1889,60 +2010,6 @@ end
 -- Fuel Tanks List
 --------------------------------------------------------------------------------
 
-local SLM_TANK_MAX = {
-    ["B738"] = {[0]=3907, [1]=13080, [2]=3907}, --Laminar
-    ["A333"] = {[0]=32960, [1]=32040, [2]=32960, [3]=2830, [4]=2830, [5]=4940}, --Laminar
-    ["MD82"] = {[0]=9330, [1]=4204, [2]=4204}, --Laminar
-    ["E19L"] = {[0]=6494, [1]=6494, [2]=4570, [3]=4329}, --X-Craft
-    ["E35L"] = {[0]=2703, [1]=2703, [2]=824, [3]=932, [4]=932, [5]=606, [6]=606, [7]=0, [8]=0},
-}
-
-local SLM_TANK_GROUPS = {
-    ["A332"] = {{0,1},{2}},
-    ["A338"] = {{0,1},{2}},
-    ["A339"] = {{0,1},{2}},
-    ["A35K"] = {{0,1},{2}},
-    ["A359"] = {{0,1},{2}},
-    ["B752"] = {{0,1},{2}},
-    ["B753"] = {{0,1},{2}},
-    ["B762"] = {{0,1},{2}},
-    ["B763"] = {{0,1},{2}},
-    ["B764"] = {{0,1},{2}},
-    ["B788"] = {{0,1},{2}},
-    ["B789"] = {{0,1},{2}},
-    ["B738"] = {{0,2},{1}},
-    ["MD11"] = {{0,1},{2}},
-    ["MD82"] = {{0,2},{1}},
-    ["C17"]  = {{0,1},{2}},
-    ["IL96"] = {{0,1},{2}},
-    ["A333"] = {{0,2,3,4},{1,5}},
-    ["E19L"] = {{0,1},{2,3}},
-    ["E35L"] = {{0,1},{3,4},{4,6},{0}},
-    ["A345"] = {{0,1},{2},{3,4}},
-    ["A346"] = {{0,1},{2},{3,4}},
-    ["A388"] = {{0,1},{2},{3,4}},
-    ["B742"] = {{0,1},{2},{3,4}},
-    ["B744"] = {{0,1},{2},{3,4}},
-    ["B748"] = {{0,1},{2},{3,4}},
-    ["B772"] = {{0,1},{2},{3,4}},
-    ["B77L"] = {{0,1},{2},{3,4}},
-    ["B77W"] = {{0,1},{2},{3,4}},
-    ["B773"] = {{0,1},{2},{3,4}},
-    ["B779"] = {{0,1},{2},{3,4}},
-}
-
-
-local SLM_TANK_GROUPS_TOLISS = {
-    -- Famille A320 ToLiss
-    ["A319"] = {{1,2},{0}},
-    ["A320"] = {{1,2},{0}},
-    ["A20N"] = {{1,2},{0}},
-    ["A321"] = {{1,2},{0}},
-    ["A21N"] = {{1,2},{0}},
-    ["A339"] = {{1,2},{0}},
-    ["A346"] = {{1,2},{0}},
-}
-
 local function slm_rf_get_dr()
     if slm_rf_tank_dr == nil then
         slm_rf_tank_dr = dataref_table("sim/flightmodel/weight/m_fuel")
@@ -1977,7 +2044,7 @@ function slm_rf_start()
     if slm_aircraft_type == "toliss" then
         slm_rf_toliss_dr = dataref_table("toliss_airbus/fuelTankContent_kgs")
 
-        local base_groups = SLM_TANK_GROUPS_TOLISS[PLANE_ICAO or ""] or {{1,2},{3,4},{0}}
+        local base_groups = (slm_aircraft_data.tank_groups_toliss or {})[PLANE_ICAO or ""] or {{1,2},{3,4},{0}}
         slm_rf_groups = {}
         for i, g in ipairs(base_groups) do slm_rf_groups[i] = g end
         local extra_ref = XPLMFindDataRef("AirbusFBW/FuelNumExtraTanks")
@@ -2000,7 +2067,7 @@ function slm_rf_start()
         logMsg("[SLM-RF] Zibo : groupes ailes=[0,2] puis centre=[1]")
     else
         slm_rf_toliss_dr = nil
-        slm_rf_groups = SLM_TANK_GROUPS[PLANE_ICAO or ""] or {{0,1}}
+        slm_rf_groups = (slm_aircraft_data.tank_groups or {})[PLANE_ICAO or ""] or {{0,1}}
     end
 
     slm_rf_initial_real_kg = slm_rf_total_current()   -- snapshot pour le log
@@ -2010,7 +2077,7 @@ function slm_rf_start()
     slm_rf_history            = {}  -- réinitialise l'historique de saturation
     slm_rf_last_fuel_loaded   = nil   -- sera initialisé au premier appel de slm_rf_update
 
-    local tank_max = SLM_TANK_MAX[PLANE_ICAO or ""]
+    local tank_max = (slm_aircraft_data.tank_max or {})[PLANE_ICAO or ""]
     logMsg("[SLM-RF] Mode saturation : " .. (tank_max and "précis (max définis)" or "historique glissant (fallback)"))
     logMsg("[SLM-RF] Remplissage réel démarré : cible=" ..
            string.format("%.0f", slm_rf_target_kg) ..
@@ -2048,7 +2115,7 @@ local function slm_rf_is_sat(h)
 end
 
 local function slm_rf_is_sat_for_tank(ti, h, cur)
-    local tank_max = SLM_TANK_MAX[PLANE_ICAO or ""]
+    local tank_max = (slm_aircraft_data.tank_max or {})[PLANE_ICAO or ""]
     if tank_max and tank_max[ti] then
         return cur >= tank_max[ti]
     end
@@ -2184,29 +2251,14 @@ end
 -- DÉTECTION CENTRALISÉE DU TYPE D'AVION
 --------------------------------------------------------------------------------
 
-local SLM_EXCLUDED_ICAO = {
-    ["DH8D"] = "This aircraft manages its own payload and fuel.\nPlease use the onboard tablet to edit loading data",
-    -- XCraft Embraer family - temporarily excluded pending proper station mapping implementation
-    ["E135"] = "Real Fuel & Payload Fill temporarily disabled for XCraft Embraer family.\nProper dataref mapping coming in a future update.",
-    ["E140"] = "Real Fuel & Payload Fill temporarily disabled for XCraft Embraer family.\nProper dataref mapping coming in a future update.",
-    ["E145"] = "Real Fuel & Payload Fill temporarily disabled for XCraft Embraer family.\nProper dataref mapping coming in a future update.",
-    ["E45X"] = "Real Fuel & Payload Fill temporarily disabled for XCraft Embraer family.\nProper dataref mapping coming in a future update.",
-    ["E170"] = "Real Fuel & Payload Fill temporarily disabled for XCraft Embraer family.\nProper dataref mapping coming in a future update.",
-    ["E175"] = "Real Fuel & Payload Fill temporarily disabled for XCraft Embraer family.\nProper dataref mapping coming in a future update.",
-    ["E190"] = "Real Fuel & Payload Fill temporarily disabled for XCraft Embraer family.\nProper dataref mapping coming in a future update.",
-    ["E195"] = "Real Fuel & Payload Fill temporarily disabled for XCraft Embraer family.\nProper dataref mapping coming in a future update.",
-    ["E35L"] = "Real Fuel & Payload Fill temporarily disabled for XCraft Embraer family.\nProper dataref mapping coming in a future update.",
-    ["E19L"] = "Real Fuel & Payload Fill temporarily disabled for XCraft Embraer family.\nProper dataref mapping coming in a future update.",
-}
-
 function slm_detect_aircraft()
     slm_exclusion_message = nil
     slm_rf_excluded       = false
     slm_rp_excluded       = false
 
     local icao = PLANE_ICAO or ""
-    if SLM_EXCLUDED_ICAO[icao] then
-        slm_exclusion_message = SLM_EXCLUDED_ICAO[icao]
+    if (slm_aircraft_data.excluded_icao or {})[icao] then
+        slm_exclusion_message = (slm_aircraft_data.excluded_icao or {})[icao]
         slm_rf_excluded = true
         slm_rp_excluded = true
         slm_aircraft_type = "default"
@@ -4474,6 +4526,7 @@ do_every_frame("slm_update_beacon_state()")  -- détecte l'état de la beacon ch
 
 
 load_user_settings()
+slm_load_aircraft_data()
 
 --------------------------------------------------------------------------------
 -- INITIALISATION AU DÉMARRAGE : remise à zéro des datarefs payload
