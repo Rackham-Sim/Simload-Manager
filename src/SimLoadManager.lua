@@ -1,4 +1,4 @@
---SIMLOAD MANAGER V3.1
+--SIMLOAD MANAGER V3.2
 
 --------------------------------------------------------------------------------
 -- IMGUI CHECK
@@ -12,7 +12,7 @@ end
 --------------------------------------------------------------------------------
 -- UPDATE CHECK
 --------------------------------------------------------------------------------
-SLM_VERSION = "3.1"
+SLM_VERSION = "3.2"
 
 local slm_dev_mode = false   -- set to true to show [DEV] button in UI
 
@@ -2889,6 +2889,11 @@ function start_turnaround()
     slm_sequence_phase      = "arrival_ops"
     slm_auto_import_done    = false
     slm_auto_import_message = nil
+    if slm_data_source ~= "simbrief" then
+        SLM_Loadsheet_Data   = nil
+        simbrief_data_loaded = false
+        loadsheet_ready      = false
+    end
     crew_briefing_done      = false
     crew_briefing_started   = false
     catering_done           = false
@@ -2932,17 +2937,21 @@ function manage_sequence()
             if slm_data_source == "simbrief" then
                 slm_sequence_phase = "simbrief_check"
             else
-                -- manual and fsd: go straight to crew_and_catering
-                slm_sequence_phase = "crew_and_catering"
-                crew_briefing_done = false
-                if skip_crew_briefing then
-                    crew_briefing_done = true
-                    slm_deploy_access()
-                else
-                    start_crew_briefing()
-                end
-                start_catering()
+                -- manual and fsd: wait for user to load new data
+                slm_sequence_phase = "waiting_for_new_plan"
+                slm_auto_import_message = nil
+                SLM_Loadsheet_Data = nil
             end
+        elseif slm_sequence_phase == "waiting_for_new_plan" and SLM_Loadsheet_Data ~= nil then
+            slm_sequence_phase = "crew_and_catering"
+            crew_briefing_done = false
+            if skip_crew_briefing then
+                crew_briefing_done = true
+                slm_deploy_access()
+            else
+                start_crew_briefing()
+            end
+            start_catering()
         elseif slm_sequence_phase == "simbrief_check" and not slm_auto_import_done then
             slm_auto_import_done = true
             slm_turnaround_check_simbrief()
@@ -3526,7 +3535,7 @@ preset_values.veryfast  = capture_preset(apply_veryfast_timings)
 function create_embark_window()
     if embark_wnd == nil then
         embark_wnd = float_wnd_create(425, 900, 1, true)
-        float_wnd_set_title(embark_wnd, "Simload Manager 3.1")
+        float_wnd_set_title(embark_wnd, "Simload Manager 3.2")
         float_wnd_set_imgui_builder(embark_wnd, "build_embark_window")
         float_wnd_set_onclose(embark_wnd, "on_close_embark_window")
         logMsg("[SLM] Embark window created.")
@@ -3725,7 +3734,7 @@ function slm_draw_sequence_steps()
 
     if mode == "turnaround" then
         local fp_status
-        if slm_new_plan_imported then
+        if slm_new_plan_imported or (slm_data_source ~= "simbrief" and SLM_Loadsheet_Data ~= nil) then
             fp_status = "done"
         elseif slm_sequence_phase == "waiting_for_new_plan" then
             fp_status = "active"
@@ -3733,7 +3742,21 @@ function slm_draw_sequence_steps()
             fp_status = "pending"
         end
         slm_draw_step("Flight Plan Update", fp_status)
-        if slm_auto_import_message then
+        if slm_sequence_phase == "waiting_for_new_plan" then
+            imgui.PushStyleColor(imgui.constant.Col.Text, 0xFF00A5FF)
+            if slm_data_source == "simbrief" then
+                imgui.TextUnformatted("  No new flight plan detected.")
+                imgui.TextUnformatted("  Please generate your next flight on SimBrief,")
+                imgui.TextUnformatted("  then click 'Load SimBrief Data'.")
+            elseif slm_data_source == "manual" then
+                imgui.TextUnformatted("  Enter your next flight data")
+                imgui.TextUnformatted("  and click Load manual data.")
+            elseif slm_data_source == "fsd" then
+                imgui.TextUnformatted("  Send your next flight data from Flight Sim Deck,")
+                imgui.TextUnformatted("  then click Load FSD data.")
+            end
+            imgui.PopStyleColor()
+        elseif slm_auto_import_message then
             local col = (slm_sequence_phase == "waiting_for_new_plan") and 0xFF00A5FF or 0xFF00FF00
             imgui.PushStyleColor(imgui.constant.Col.Text, col)
             for line in (slm_auto_import_message .. "\n"):gmatch("(.-)\n") do
@@ -4323,16 +4346,20 @@ end
 			end
 		end
 	elseif slm_data_source == "fsd" then
-		-- Show read-only FSD values if available
 		if slm_fsd_available then
 			imgui.PushStyleColor(imgui.constant.Col.Text, 0xFFAAAAAA)
 			imgui.TextUnformatted("Source: Flight Sim Deck")
 			imgui.PopStyleColor()
-		end
-		if not (embark_started or disembark_started) then
-			if imgui.Button("Load FSD data") then
-				slm_load_fsd_data()
+			if not (embark_started or disembark_started) then
+				if imgui.Button("Load FSD data") then
+					slm_load_fsd_data()
+				end
 			end
+		else
+			imgui.PushStyleColor(imgui.constant.Col.Text, 0xFF2255FF)
+			imgui.TextUnformatted("[!] Flight Sim Deck not detected.")
+			imgui.TextUnformatted("    Please switch your data source in Settings.")
+			imgui.PopStyleColor()
 		end
 	end
 
@@ -4349,7 +4376,13 @@ end
 		imgui.PopStyleColor()
 	else
 		imgui.PushStyleColor(imgui.constant.Col.Text, 0xFF4444FF)
-		imgui.TextUnformatted("  Please load SimBrief data before starting")
+		if slm_data_source == "simbrief" then
+			imgui.TextUnformatted("  Please load SimBrief data before starting")
+		elseif slm_data_source == "manual" then
+			imgui.TextUnformatted("  Please fill in your data and click Load manual data")
+		elseif slm_data_source == "fsd" then
+			imgui.TextUnformatted("  Please send your data from Flight Sim Deck")
+		end
 		imgui.PopStyleColor()
 	end
 	if slm_exclusion_message then
