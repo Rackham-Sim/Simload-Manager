@@ -1,4 +1,4 @@
---SIMLOAD MANAGER V3.9.1
+--SIMLOAD MANAGER V3.9.2
 
 --------------------------------------------------------------------------------
 -- IMGUI CHECK
@@ -12,7 +12,7 @@ end
 --------------------------------------------------------------------------------
 -- UPDATE CHECK
 --------------------------------------------------------------------------------
-SLM_VERSION = "3.9.1"
+SLM_VERSION = "3.9.2"
 logMsg("[SLM] SimLoad Manager v" .. SLM_VERSION .. " loaded")
 
 local slm_dev_mode = false
@@ -132,7 +132,7 @@ settings_file = "Resources/plugins/FlyWithLua/Modules/simload_settings.txt"
 load_controllers = {
     "Xavier24", "james.C", "Furax84", "Dudley.B", "Jugac64",
     "Mark", "Othmar", "Pea", "Christy.D", "Guilb'Air", "Sydney.M",
-	"bagolu", "Gritsch"
+	"bagolu", "Gritsch", "N. Reichel", "feliciano"
 }
 
 --------------------------------------------------------------------------------
@@ -2208,7 +2208,11 @@ function slm_rf_start()
 
     slm_rf_group_dr_override = {}
     if slm_aircraft_type == "toliss" then
-        slm_rf_toliss_dr = dataref_table("toliss_airbus/fuelTankContent_kgs")
+        slm_rf_toliss_dr = XPLMFindDataRef("toliss_airbus/fuelTankContent_kgs")
+            and dataref_table("toliss_airbus/fuelTankContent_kgs") or nil
+        if not slm_rf_toliss_dr then
+            logMsg("[SLM-RF] WARN: toliss_airbus/fuelTankContent_kgs not found (XP11?), using fallback sim dataref")
+        end
 
         local base_groups = (slm_aircraft_data.tank_groups_toliss or {})[PLANE_ICAO or ""] or {{1,2},{3,4},{0}}
         slm_rf_groups = {}
@@ -2292,7 +2296,6 @@ end
 function slm_rf_update()
     if not slm_rf_active then return end
     if slm_beacon_on then return end
-    if slm_aircraft_type == "toliss" and not slm_rf_toliss_dr then return end
     local dr = slm_rf_get_dr()
     if not dr then return end
 
@@ -3891,7 +3894,7 @@ preset_values.veryfast  = capture_preset(apply_veryfast_timings)
 function create_embark_window()
     if embark_wnd == nil then
         embark_wnd = float_wnd_create(425, 900, 1, true)
-        float_wnd_set_title(embark_wnd, "Simload Manager 3.9.1")
+        float_wnd_set_title(embark_wnd, "Simload Manager 3.9.2")
         float_wnd_set_imgui_builder(embark_wnd, "build_embark_window")
         float_wnd_set_onclose(embark_wnd, "on_close_embark_window")
         logMsg("[SLM] Embark window created.")
