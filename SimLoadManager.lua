@@ -1,4 +1,4 @@
---SIMLOAD MANAGER V3.9.2
+--SIMLOAD MANAGER V3.9.3
 
 --------------------------------------------------------------------------------
 -- IMGUI CHECK
@@ -12,7 +12,7 @@ end
 --------------------------------------------------------------------------------
 -- UPDATE CHECK
 --------------------------------------------------------------------------------
-SLM_VERSION = "3.9.2"
+SLM_VERSION = "3.9.3"
 logMsg("[SLM] SimLoad Manager v" .. SLM_VERSION .. " loaded")
 
 local slm_dev_mode = false
@@ -3894,7 +3894,7 @@ preset_values.veryfast  = capture_preset(apply_veryfast_timings)
 function create_embark_window()
     if embark_wnd == nil then
         embark_wnd = float_wnd_create(425, 900, 1, true)
-        float_wnd_set_title(embark_wnd, "Simload Manager 3.9.2")
+        float_wnd_set_title(embark_wnd, "Simload Manager 3.9.3")
         float_wnd_set_imgui_builder(embark_wnd, "build_embark_window")
         float_wnd_set_onclose(embark_wnd, "on_close_embark_window")
         logMsg("[SLM] Embark window created.")
@@ -4062,10 +4062,20 @@ function slm_send_hoppie_acars()
         return
     end
 
-    local from           = callsign:sub(1, 3) .. "OPS"
-    local to             = callsign
-    local packet_content = slm_build_acars_packet():gsub("\n", "%%0A")
-    local packet         = "/data2/313//NE/" .. packet_content
+    local from     = callsign:sub(1, 3) .. "OPS"
+    local to       = callsign
+    local icao     = PLANE_ICAO or ""
+    local is_telex = (icao == "A320" or icao == "A20N")
+
+    local raw_content = slm_build_acars_packet()
+    local packet, msg_type
+    if is_telex then
+        packet   = raw_content:gsub("@", ""):gsub("\n", "%%0A")
+        msg_type = "telex"
+    else
+        packet   = "/data2/313//NE/" .. raw_content:gsub("\n", "%%0A")
+        msg_type = "cpdlc"
+    end
 
     local ok_http, http = pcall(require, "socket.http")
     if not ok_http then
@@ -4082,8 +4092,8 @@ function slm_send_hoppie_acars()
         return
     end
 
-    local payload = string.format("logon=%s&from=%s&to=%s&type=cpdlc&packet=%s",
-        slm_hoppie_logon, from, to, packet)
+    local payload = string.format("logon=%s&from=%s&to=%s&type=%s&packet=%s",
+        slm_hoppie_logon, from, to, msg_type, packet)
 
     local response_chunks = {}
     http.TIMEOUT = 5
