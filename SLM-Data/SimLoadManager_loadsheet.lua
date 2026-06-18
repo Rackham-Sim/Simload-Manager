@@ -71,9 +71,17 @@ function draw_loadsheet_window(wnd, x, y)
     imgui.PopStyleColor()
     imgui.PushStyleColor(imgui.constant.Col.Text, c_text)
     imgui.TextUnformatted(string.format("%s%s   %s", d.airline or "", d.fltnum or "", d.date or ""))
-    imgui.TextUnformatted(string.format("Aircraft: %s (%s)  Reg: %s", d.aircraft_name or "?", d.aircraft_icao or "?", d.reg or "?"))
+    imgui.TextUnformatted(string.format("Aircraft: %s (%s)", d.aircraft_name or "?", d.aircraft_icao or "?"))
     if d.slm_source ~= "manual" and d.slm_source ~= "fsd" then
         imgui.TextUnformatted(string.format("Route: %s -> %s (ALT: %s)", d.orig or "?", d.dest or "?", d.altn or "?"))
+    elseif (d.orig and d.orig ~= "???") or (d.dest and d.dest ~= "???") then
+        imgui.TextUnformatted(string.format("Route: %s -> %s", d.orig or "?", d.dest or "?"))
+    end
+    if d.std or d.sta then
+        local parts = {}
+        if d.std then parts[#parts + 1] = "Block-Off: " .. d.std end
+        if d.sta  then parts[#parts + 1] = "Block-On:  " .. d.sta  end
+        imgui.TextUnformatted(table.concat(parts, "   "))
     end
     if d.slm_source == "manual" or d.slm_source == "fsd" then
         imgui.TextUnformatted("Dispatcher: ")
