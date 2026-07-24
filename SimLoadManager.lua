@@ -1,4 +1,4 @@
---SIMLOAD MANAGER V4.0
+--SIMLOAD MANAGER V4.2
 
 --------------------------------------------------------------------------------
 -- IMGUI CHECK
@@ -12,7 +12,7 @@ end
 --------------------------------------------------------------------------------
 -- UPDATE CHECK
 --------------------------------------------------------------------------------
-SLM_VERSION = "4.0"
+SLM_VERSION = "4.2"
 logMsg("[SLM] SimLoad Manager v" .. SLM_VERSION .. " loaded")
 
 local slm_dev_mode = false
@@ -132,7 +132,7 @@ settings_file = "Resources/plugins/FlyWithLua/Modules/simload_settings.txt"
 load_controllers = {
     "Xavier24", "james.C", "Furax84", "Dudley.B", "Jugac64",
     "Mark", "Othmar", "Pea", "Christy.D", "Guilb'Air", "Sydney.M",
-	"bagolu", "Gritsch", "N. Reichel", "feliciano"
+	"bagolu", "Gritsch", "N. Reichel", "Feliciano", "JF.Caviglioli"
 }
 
 --------------------------------------------------------------------------------
@@ -254,6 +254,117 @@ local function slm_load_aircraft_data()
     logMsg("[SLM] aircraft.json loaded")
 end
 
+--------------------------------------------------------------------------------
+-- TOLISS ZFWCG
+--------------------------------------------------------------------------------
+-- ToLiss doesn't expose a live ZFWCG dataref: "toliss_airbus/init/ZFWCG" mirrors
+-- the MCDU INIT B input field (what the pilot types), not a computed value, and
+-- "AirbusFBW/CGLocationPercent" is the gross weight CG (fuel included), not ZFW.
+-- We interpolate it ourselves from reference curves in aircraft.json
+-- ("toliss_cg"), sampled from the ToLiss EFB Weight & Balance page at three
+-- fwd/aft passenger-distribution settings (35/50/60%), blended by the live
+-- PaxDistrib dataref, then combined with cargo as a mass-weighted average of
+-- %MAC arms (valid because %MAC is an affine transform of the physical arm,
+-- so it can be averaged directly without converting back to meters).
+
+-- FlyWithLua's PLANE_ICAO is snapshotted once at aircraft load; some ToLiss
+-- aircraft only settle their real sim/aircraft/view/acf_ICAO a bit later, so
+-- this reads it live instead (falls back to PLANE_ICAO if unset).
+function slm_get_live_icao()
+    local raw = slm_live_icao_dr or PLANE_ICAO or ""
+    return raw:match("^([^%z]*)") or raw
+end
+
+local function slm_toliss_cg_profile()
+    local db = slm_aircraft_data.toliss_cg
+    if not db then return nil end
+    local icao = slm_get_live_icao()
+    local key  = icao
+
+    if icao == "A21N" then
+        local ref = XPLMFindDataRef("AirbusFBW/A321ExitConfig")
+        if ref and XPLMGetDatai(ref) == 3 then
+            key = "A21N_200"
+        end
+    elseif icao == "A319" then
+        local max_pax = slm_max_passengers
+        if not max_pax and SLM_Loadsheet_Data then
+            max_pax = tonumber(SLM_Loadsheet_Data.pax_total)
+        end
+        if max_pax == 160 then key = "A319_160" end
+    end
+
+    return db[key]
+end
+
+-- Stepwise-linear interpolation of a reference curve at a given pax count.
+local function slm_toliss_curve_at(pax_tab, curve, pax_no)
+    if not pax_tab or not curve or #pax_tab == 0 then return nil end
+    local last = #pax_tab
+    if pax_no <= pax_tab[1] then return curve[1] end
+    if pax_no >= pax_tab[last] then return curve[last] end
+    for i = 1, last - 1 do
+        local lo, hi = pax_tab[i], pax_tab[i + 1]
+        if pax_no >= lo and pax_no <= hi then
+            local t = (hi > lo) and (pax_no - lo) / (hi - lo) or 0
+            return curve[i] + t * (curve[i + 1] - curve[i])
+        end
+    end
+    return curve[last]
+end
+
+-- %MAC of DOW+pax alone (no cargo yet), blending the 35/50/60 reference
+-- curves by the current fwd/aft passenger distribution (0.35-0.60 -- the
+-- Simulation Manual warns the slider's full extremes "throw the CG
+-- completely out of bounds").
+local function slm_toliss_pax_pct(profile, pax_no, distrib)
+    local c = profile.curves
+    distrib = math.max(0.35, math.min(0.60, distrib or 0.5))
+    local pct_050 = slm_toliss_curve_at(c.pax_tab, c.zfwcg_050, pax_no)
+    if not pct_050 then return nil end
+    if distrib < 0.5 then
+        local pct_035 = slm_toliss_curve_at(c.pax_tab, c.zfwcg_035, pax_no)
+        local t = (0.5 - distrib) / 0.15
+        return pct_050 + t * ((pct_035 or pct_050) - pct_050)
+    elseif distrib > 0.5 then
+        local pct_060 = slm_toliss_curve_at(c.pax_tab, c.zfwcg_060, pax_no)
+        local t = (distrib - 0.5) / 0.10
+        return pct_050 + t * ((pct_060 or pct_050) - pct_050)
+    end
+    return pct_050
+end
+
+-- Final ZFWCG (%MAC) for the current ToLiss aircraft, or nil if unsupported
+-- (aircraft not ToLiss, or variant not in aircraft.json).
+function slm_toliss_zfwcg(pax_no, fwd_cargo_kg, aft_cargo_kg, distrib)
+    local profile = slm_toliss_cg_profile()
+    if not profile then return nil end
+
+    local pax_pct = slm_toliss_pax_pct(profile, pax_no or 0, distrib)
+    if not pax_pct then return nil end
+
+    local dow_kg = tonumber(profile.oew) or 0
+    local mass   = dow_kg + (pax_no or 0) * 100 -- ToLiss assumes 100kg/pax
+    local moment = mass * pax_pct
+
+    local geo = profile.geometry
+    fwd_cargo_kg = fwd_cargo_kg or 0
+    aft_cargo_kg = aft_cargo_kg or 0
+    if geo and fwd_cargo_kg > 0 then
+        local fwd_pct = (geo.fwd_cargo_arm - geo.lemac) / geo.mac * 100
+        moment = moment + fwd_cargo_kg * fwd_pct
+        mass   = mass + fwd_cargo_kg
+    end
+    if geo and aft_cargo_kg > 0 then
+        local aft_pct = (geo.aft_cargo_arm - geo.lemac) / geo.mac * 100
+        moment = moment + aft_cargo_kg * aft_pct
+        mass   = mass + aft_cargo_kg
+    end
+
+    if mass <= 0 then return nil end
+    return moment / mass
+end
+
 local simbrief_data_loaded = false
 
 local slm_manual_pax    = 0
@@ -366,6 +477,7 @@ local slm_rp_toliss_fwdcargo_dr    = nil
 local slm_rp_toliss_aftcargo_dr    = nil
 local slm_rp_toliss_last_setweight = 0
 local slm_toliss_chocks_dr         = nil
+local slm_toliss_paxdistrib_ro_dr  = nil
 local slm_rp_zibo_zone_dr        = {}
 local slm_rp_zibo_cargo1_dr      = nil
 local slm_rp_zibo_cargo2_dr      = nil
@@ -392,6 +504,7 @@ local landing_time = "--:--Z"
 local block_on_time = "--:--Z"
 local passed_500ft = false
 local slm_landing_confirm_time = nil
+local slm_airborne_since = nil
 
 slm_acars_output    = "none"    -- "none" | "hoppie" | "si"
 slm_hoppie_logon    = ""
@@ -421,6 +534,12 @@ dataref("beacon", "sim/cockpit/electrical/beacon_lights_on", "readonly")
 dataref("onground", "sim/flightmodel/failures/onground_any", "readonly")
 dataref("zulu_hours", "sim/cockpit2/clock_timer/zulu_time_hours", "readonly")
 dataref("slm_flight_id_dr",    "sim/cockpit2/radios/actuators/flight_id", "readonly")
+-- FlyWithLua's PLANE_ICAO is snapshotted once at aircraft load. Some ToLiss
+-- aircraft (e.g. a single A321 model covering both ceo/neo) only settle
+-- their real ICAO (sim/aircraft/view/acf_ICAO) a bit later, after PLANE_ICAO
+-- was already cached -- so for CG variant resolution we read this live
+-- instead of trusting PLANE_ICAO.
+dataref("slm_live_icao_dr",    "sim/aircraft/view/acf_ICAO",              "readonly")
 slm_zibo_fmc_line_dr = nil
 if XPLMFindDataRef("laminar/B738/fmc1/Line02_L") then
     dataref("slm_zibo_fmc_line_dr", "laminar/B738/fmc1/Line02_L", "readonly")
@@ -2754,7 +2873,7 @@ function slm_rf_start()
                 logMsg("[SLM-RF] ToLiss ACT: extra tank 2 â†’ fuelTankContent_kgs[4] (after [3])")
             end
         end
-        logMsg("[SLM-RF] ToLiss (ICAO=" .. tostring(PLANE_ICAO) ..
+        logMsg("[SLM-RF] ToLiss (ICAO=" .. slm_get_live_icao() ..
                "): writing to fuelTankContent_kgs, groups=" .. #slm_rf_groups)
     elseif slm_aircraft_type == "zibo" then
         slm_rf_toliss_dr = nil
@@ -2777,7 +2896,7 @@ function slm_rf_start()
     logMsg("[SLM-RF] Real fuel fill started: target=" ..
            string.format("%.0f", slm_rf_target_kg) ..
            " kg, current=" .. string.format("%.0f", slm_rf_initial_real_kg) ..
-           " kg, ICAO=" .. tostring(PLANE_ICAO) ..
+           " kg, ICAO=" .. slm_get_live_icao() ..
            ", groups=" .. #slm_rf_groups)
 end
 
@@ -3819,6 +3938,7 @@ function slm_ta_to_departure()
     landing_time   = "--:--Z"
     block_on_time  = "--:--Z"
     passed_500ft   = false
+    slm_airborne_since = nil
     start_departure_sequence(true)
 end
 
@@ -3981,6 +4101,7 @@ function reset_loads()
 	block_on_time = "--:--Z"
 	passed_500ft = false
 	slm_landing_confirm_time = nil
+	slm_airborne_since = nil
 	SLM_real_pax        = 0
 	SLM_real_cargo      = 0
 	SLM_real_fuel_block = 0
@@ -4400,9 +4521,15 @@ function detect_takeoff_and_landing()
         takeoff_time = current_zulu_hhmm()
         passed_500ft = false
         slm_landing_confirm_time = nil
+        slm_airborne_since = os.clock()
     end
 
-    if not passed_500ft and onground == 0 and slm_beacon_on then
+    -- Beacon-on is the normal trigger. Fallback: if the beacon was never toggled
+    -- on during the climb (forgotten/turned off), a sustained time airborne still
+    -- confirms the flight so the plugin doesn't get stuck offering "Start Loading"
+    -- after landing.
+    if not passed_500ft and onground == 0
+       and (slm_beacon_on or (slm_airborne_since and (os.clock() - slm_airborne_since) >= 60)) then
         passed_500ft           = true
         slm_steps_visible      = false
         slm_last_sequence_mode = "in_flight"
@@ -4502,7 +4629,7 @@ preset_values.veryfast  = capture_preset(apply_veryfast_timings)
 function create_embark_window()
     if embark_wnd == nil then
         embark_wnd = float_wnd_create(500, 900, 1, true)
-        float_wnd_set_title(embark_wnd, "Simload Manager 4.0")
+        float_wnd_set_title(embark_wnd, "Simload Manager 4.2")
         float_wnd_set_imgui_builder(embark_wnd, "build_embark_window")
         float_wnd_set_onclose(embark_wnd, "on_close_embark_window")
         logMsg("[SLM] Embark window created.")
@@ -4590,6 +4717,36 @@ local function slm_fmt_row(label, value, digit)
     return label .. string.rep("_", n) .. " @" .. value .. "@ "
 end
 
+-- Refreshes SLM_Loadsheet_Data.zfwcg from the live pax/cargo/distribution
+-- state. Called every frame (so the loadsheet window shows it continuously,
+-- not only after a CPDLC/TELEX/ACARS send) and again right before building
+-- the outbound packet so the sent message always carries the latest value.
+function slm_toliss_update_zfwcg()
+    if not SLM_Loadsheet_Data then return end
+    if slm_aircraft_type ~= "toliss" then
+        SLM_Loadsheet_Data.zfwcg = nil
+        return
+    end
+
+    local fwd_cargo_kg, aft_cargo_kg
+    if slm_rp_toliss_fwdcargo_dr and slm_rp_toliss_aftcargo_dr then
+        fwd_cargo_kg = slm_rp_toliss_fwdcargo_dr[0]
+        aft_cargo_kg = slm_rp_toliss_aftcargo_dr[0]
+    else
+        local cargo_kg = to_kg(SLM_real_cargo or 0)
+        fwd_cargo_kg = cargo_kg / 2
+        aft_cargo_kg = cargo_kg / 2
+    end
+
+    if slm_toliss_paxdistrib_ro_dr == nil then
+        slm_toliss_paxdistrib_ro_dr = XPLMFindDataRef("AirbusFBW/PaxDistrib") or false
+    end
+    local distrib = slm_toliss_paxdistrib_ro_dr and XPLMGetDataf(slm_toliss_paxdistrib_ro_dr) or 0.5
+
+    local zfwcg = slm_toliss_zfwcg(SLM_real_pax or 0, fwd_cargo_kg, aft_cargo_kg, distrib)
+    SLM_Loadsheet_Data.zfwcg = zfwcg and string.format("%.1f", zfwcg) or nil
+end
+
 local function slm_build_acars_packet()
     local ld    = SLM_Loadsheet_Data
     local ctrl  = slm_load_controller or "SLM"
@@ -4605,13 +4762,19 @@ local function slm_build_acars_packet()
 
     -- ZFW: compute from weights like the loadsheet (oew + payload), not MCDU init page
     -- oew from SimBrief if available, otherwise derive from X-Plane total weight
-    local oew_kg  = tonumber(ld.oew) or 0
+    -- ld.oew and SLM_real_payload are in display units (unit_system), convert to real kg here
+    -- so zfw_kg is unambiguously in kg before from_kg() converts it back for display below.
+    local oew_kg  = to_kg(tonumber(ld.oew) or 0)
     if oew_kg <= 0 then
-        oew_kg = math.max(0, (slm_total_weight_kg or 0) - (sim_fuel_total_kg or 0) - (SLM_real_payload or 0))
+        oew_kg = math.max(0, (slm_total_weight_kg or 0) - (sim_fuel_total_kg or 0) - to_kg(SLM_real_payload or 0))
     end
-    local zfw_kg  = oew_kg + (SLM_real_payload or 0)
+    local zfw_kg  = oew_kg + to_kg(SLM_real_payload or 0)
     local fob = fmt_w(SLM_real_fuel_block or 0)
     local zfw = fmt_w(from_kg(zfw_kg))
+
+    slm_toliss_update_zfwcg()
+    local zfwcg_str = ld.zfwcg
+
     local lines
     if slm_data_source == "simbrief" then
         local flt  = (ld.airline ~= "N/A" and ld.airline or "") .. (ld.fltnum ~= "N/A" and ld.fltnum or "")
@@ -4624,10 +4787,11 @@ local function slm_build_acars_packet()
             slm_fmt_row("PAX", pax,  9),
             slm_fmt_row("PLD", pld,  9),
             slm_fmt_row("ZFW", zfw,  9),
-            slm_fmt_row("TOW", tow,  9),
-            slm_fmt_row("FOB", fob,  9),
-            slm_fmt_row("BY",  ctrl, 9),
         }
+        if zfwcg_str then lines[#lines+1] = slm_fmt_row("ZFWCG", zfwcg_str, 9) end
+        lines[#lines+1] = slm_fmt_row("TOW", tow,  9)
+        lines[#lines+1] = slm_fmt_row("FOB", fob,  9)
+        lines[#lines+1] = slm_fmt_row("BY",  ctrl, 9)
     else
         local payload = fmt_w(SLM_real_payload or 0)
         lines = {
@@ -4635,9 +4799,10 @@ local function slm_build_acars_packet()
             slm_fmt_row("PAX", pax,     9),
             slm_fmt_row("PLD", payload, 9),
             slm_fmt_row("ZFW", zfw,     9),
-            slm_fmt_row("FOB", fob,     9),
-            slm_fmt_row("BY",  ctrl,    9),
         }
+        if zfwcg_str then lines[#lines+1] = slm_fmt_row("ZFWCG", zfwcg_str, 9) end
+        lines[#lines+1] = slm_fmt_row("FOB", fob,     9)
+        lines[#lines+1] = slm_fmt_row("BY",  ctrl,    9)
     end
 
     return table.concat(lines, "\n")
@@ -6512,6 +6677,7 @@ do_every_frame("detect_block_times()")
 do_every_frame("detect_takeoff_and_landing()")
 do_every_frame("slm_update_init_once()")
 do_every_frame("update_slm_datarefs()")
+do_every_frame("slm_toliss_update_zfwcg()")
 do_every_frame("manage_sequence()")
 do_every_frame("manage_crew_briefing()")
 do_every_frame("manage_catering()")

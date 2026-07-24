@@ -371,6 +371,14 @@ if d.slm_source ~= "manual" and d.slm_source ~= "fsd" then
 	imgui.TextUnformatted(string.format("%+.0f %s", ldw_margin, unit))
 	imgui.PopStyleColor()
 
+	if d.zfwcg then
+		imgui.TableNextRow()
+		imgui.TableSetColumnIndex(0); imgui.TextUnformatted("ZFWCG")
+		imgui.TableSetColumnIndex(1); imgui.TextUnformatted("--")
+		imgui.TableSetColumnIndex(2); imgui.TextUnformatted(string.format("%s%% MAC", d.zfwcg))
+		imgui.TableSetColumnIndex(3); imgui.TextUnformatted("")
+	end
+
 	imgui.EndTable()
 end -- slm_source ~= "manual"
 
