@@ -1,4 +1,4 @@
---SIMLOAD MANAGER V4.2
+--SIMLOAD MANAGER V4.3
 
 --------------------------------------------------------------------------------
 -- IMGUI CHECK
@@ -12,7 +12,7 @@ end
 --------------------------------------------------------------------------------
 -- UPDATE CHECK
 --------------------------------------------------------------------------------
-SLM_VERSION = "4.2"
+SLM_VERSION = "4.3"
 logMsg("[SLM] SimLoad Manager v" .. SLM_VERSION .. " loaded")
 
 local slm_dev_mode = false
@@ -121,12 +121,74 @@ end
 --------------------------------------------------------------------------------
 embark_wnd = nil
 unit_system = "kg"
+-- Plugin UI font size: 0 = default (no custom font), 1-9 = FlyWithLua custom font slot
+-- (imgui_push_font, requires FlyWithLua NG 2.8.15+ with fonts installed in Custom_Fonts/)
+slm_font_choice = 0
+SLM_FONT_LABELS = {
+    [1] = "ProFontWindows 13", [2] = "ProFontWindows 16", [3] = "ProFontWindows 20",
+    [4] = "Roboto-Light 13",   [5] = "Roboto-Light 16",   [6] = "Roboto-Light 20",
+    [7] = "Roboto-Regular 13", [8] = "Roboto-Regular 16", [9] = "Roboto-Regular 20",
+}
+-- true once the 3 custom font files are confirmed present in FlyWithLua's Custom_Fonts folder
+-- (auto-copied from X-Plane's own Resources/fonts by slm_ensure_custom_fonts() below)
+slm_custom_fonts_ready = false
+
+local SLM_CUSTOM_FONT_FILES = {"ProFontWindows.ttf", "Roboto-Light.ttf", "Roboto-Regular.ttf"}
+
+local function slm_file_exists(path)
+    local f = io.open(path, "rb")
+    if f then f:close(); return true end
+    return false
+end
+
+local function slm_copy_file(src, dst)
+    local sf = io.open(src, "rb")
+    if not sf then return false end
+    local data = sf:read("*a")
+    sf:close()
+    if not data or data == "" then return false end
+    local df = io.open(dst, "wb")
+    if not df then return false end
+    df:write(data)
+    df:close()
+    return true
+end
+
+-- X-Plane already ships ProFontWindows.ttf / Roboto-Light.ttf / Roboto-Regular.ttf in
+-- Resources/fonts; FlyWithLua NG 2.8.15+ just needs them mirrored into its own
+-- Custom_Fonts/ folder to make them selectable via imgui_push_font(). Files that
+-- merely sit in that folder are inert until a script explicitly pushes one, so this
+-- is safe to run automatically (idempotent: skips files already present).
+function slm_ensure_custom_fonts()
+    if not imgui_push_font then
+        slm_custom_fonts_ready = false
+        return
+    end
+    local fonts_src_dir = SYSTEM_DIRECTORY .. "Resources" .. DIRECTORY_SEPARATOR .. "fonts" .. DIRECTORY_SEPARATOR
+    local fonts_dst_dir = SYSTEM_DIRECTORY .. "Resources" .. DIRECTORY_SEPARATOR .. "plugins" .. DIRECTORY_SEPARATOR
+        .. "FlyWithLua" .. DIRECTORY_SEPARATOR .. "Custom_Fonts" .. DIRECTORY_SEPARATOR
+    local all_ready = true
+    for _, fname in ipairs(SLM_CUSTOM_FONT_FILES) do
+        local dst = fonts_dst_dir .. fname
+        if not slm_file_exists(dst) then
+            if slm_copy_file(fonts_src_dir .. fname, dst) then
+                logMsg("[SLM] Custom font installed: " .. fname)
+            else
+                logMsg("[SLM] Could not install custom font " .. fname .. " (source or destination unavailable)")
+                all_ready = false
+            end
+        end
+    end
+    slm_custom_fonts_ready = all_ready
+end
+
 local function to_kg(v)   return (unit_system == "lbs") and ((v or 0) * 0.453592) or (v or 0) end
 local function from_kg(v) return (unit_system == "lbs") and ((v or 0) * 2.20462)  or (v or 0) end
 simbrief_id = "REPLACE_WITH_YOUR_SIMBRIEF_ID"
 slm_captain_name = ""
 slm_data_source = "simbrief"
 local slm_fsd_available = false
+local slm_walkaround_available = false
 settings_file = "Resources/plugins/FlyWithLua/Modules/simload_settings.txt"
 
 load_controllers = {
@@ -718,6 +780,10 @@ SLM_pax_total             = create_dataref_table("FlyWithLua/SimLoadManager/pax_
 SLM_cargo_total           = create_dataref_table("FlyWithLua/SimLoadManager/cargo_total", "Float")
 SLM_fuel_total            = create_dataref_table("FlyWithLua/SimLoadManager/fuel_total", "Float")
 
+-- Writable: set the desired fuel figure (in the active unit_system) here, then fire the
+-- "FlyWithLua/SimloadManager/TopFuel" command to apply it (same effect as the "Fuel Top-Up" button).
+SLM_fuel_topup_target     = create_dataref_table("FlyWithLua/SimLoadManager/fuel_topup_target", "Float")
+
 SLM_pax_done              = create_dataref_table("FlyWithLua/SimLoadManager/pax_done", "Int")
 SLM_cargo_done            = create_dataref_table("FlyWithLua/SimLoadManager/cargo_done", "Float")
 SLM_fuel_done             = create_dataref_table("FlyWithLua/SimLoadManager/fuel_done", "Float")
@@ -1072,6 +1138,9 @@ function load_user_settings()
                 slm_pax_variability_enabled = (value == "true")
             elseif key == "manual_max_pax" then
                 slm_manual_max_pax = tonumber(value) or 0
+            elseif key == "slm_font_choice" then
+                local n = tonumber(value) or 0
+                slm_font_choice = (n >= 0 and n <= 9) and math.floor(n) or 0
             end
             end  -- end else (main section)
         end
@@ -1124,6 +1193,7 @@ function save_user_settings()
         file:write("event_chance=" .. tostring(slm_event_chance) .. "\n")
         file:write("pax_variability_enabled=" .. tostring(slm_pax_variability_enabled) .. "\n")
         file:write("manual_max_pax=" .. tostring(slm_manual_max_pax) .. "\n")
+        file:write("slm_font_choice=" .. tostring(slm_font_choice or 0) .. "\n")
 
         if slm_lf_mode then
             file:write("[LastFlight]\n")
@@ -4629,7 +4699,7 @@ preset_values.veryfast  = capture_preset(apply_veryfast_timings)
 function create_embark_window()
     if embark_wnd == nil then
         embark_wnd = float_wnd_create(500, 900, 1, true)
-        float_wnd_set_title(embark_wnd, "Simload Manager 4.2")
+        float_wnd_set_title(embark_wnd, "Simload Manager 4.3")
         float_wnd_set_imgui_builder(embark_wnd, "build_embark_window")
         float_wnd_set_onclose(embark_wnd, "on_close_embark_window")
         logMsg("[SLM] Embark window created.")
@@ -5154,7 +5224,8 @@ function slm_draw_sequence_steps()
             local frac = (crew_briefing_duration and crew_briefing_duration > 0) and
                 math.min(1.0, (os.clock() - crew_briefing_start_time) / crew_briefing_duration) or 0
             slm_draw_step(briefing_label, "active", frac, estimated_time_crew,
-                "Crew is arriving and conducting briefing.\nTime to review your flight plan.")
+                "Crew is arriving and conducting briefing.\nTime to review your flight plan"
+                .. (slm_walkaround_available and " & Walkaround." or "."))
             imgui.SameLine()
             if imgui.Button("Finish Briefing") then
                 crew_briefing_started = false
@@ -5163,6 +5234,12 @@ function slm_draw_sequence_steps()
                 if briefing_playing then
                     briefing_playing = false
                     stop_sound(sounds.briefing.id)
+                end
+            end
+            if slm_walkaround_available then
+                imgui.SameLine()
+                if imgui.Button("Start Walkaround") then
+                    command_once("walkaround/start_stop_cabin")
                 end
             end
         else
@@ -5599,6 +5676,17 @@ local function slm_detect_fsd()
     end
 end
 
+--------------------------------------------------------------------------------
+-- WALKAROUND INTEGRATION
+--------------------------------------------------------------------------------
+local function slm_detect_walkaround()
+    slm_walkaround_available = (XPLMFindCommand("walkaround/toggle_WalkAround") ~= nil)
+        or (XPLMFindDataRef("walkaround/toggle_WalkAround") ~= nil)
+    if slm_walkaround_available then
+        logMsg("[SLM] Walkaround plugin detected")
+    end
+end
+
 function slm_load_fsd_data()
     if not slm_fsd_available then return end
     slm_fsd_pax_dr     = slm_fsd_pax_dr     or dataref_table("FlightSimDeck/Boarding/Pax")
@@ -5718,6 +5806,35 @@ function slm_draw_settings_panel()
             save_user_settings()
         end
         if busy then imgui.EndDisabled() end
+
+        imgui.Spacing()
+        imgui.TextUnformatted("Plugin font size:")
+        imgui.SameLine()
+        if imgui.Button("<##slm_font_size") then
+            slm_font_choice = math.max(0, (slm_font_choice or 0) - 1)
+            save_user_settings()
+        end
+        imgui.SameLine()
+        imgui.TextUnformatted((slm_font_choice and slm_font_choice > 0)
+            and (SLM_FONT_LABELS[slm_font_choice] or ("Size " .. slm_font_choice))
+            or "Default")
+        imgui.SameLine()
+        if imgui.Button(">##slm_font_size") then
+            slm_font_choice = math.min(9, (slm_font_choice or 0) + 1)
+            save_user_settings()
+        end
+        if not imgui_push_font then
+            imgui.PushStyleColor(COL.Text, 0xFF888888)
+            imgui.TextUnformatted("(Requires FlyWithLua NG 2.8.15+)")
+            imgui.PopStyleColor()
+        elseif slm_font_choice and slm_font_choice > 0 and not slm_custom_fonts_ready then
+            imgui.PushStyleColor(COL.Text, 0xFFFFA500)
+            imgui.TextUnformatted("(Could not auto-install custom fonts. Manually copy")
+            imgui.TextUnformatted("ProFontWindows.ttf, Roboto-Light.ttf and Roboto-Regular.ttf")
+            imgui.TextUnformatted("from Resources/fonts to Resources/plugins/FlyWithLua/Custom_Fonts/,")
+            imgui.TextUnformatted("then reload scripts.)")
+            imgui.PopStyleColor()
+        end
 
         -- 4. OPERATIONS
         section_header("OPERATIONS")
@@ -6134,6 +6251,17 @@ function slm_draw_times_panel()
 end
 
 function build_embark_window(wnd, x, y)
+    -- imgui_push_font() must always be matched by imgui.PopFont(); routing the whole
+    -- window body through a wrapper guarantees that even if the body returns early.
+    local use_custom_font = imgui_push_font and slm_font_choice and slm_font_choice > 0
+    if use_custom_font then imgui_push_font(slm_font_choice) end
+
+    slm_build_embark_window_body(wnd, x, y)
+
+    if use_custom_font then imgui.PopFont() end
+end
+
+function slm_build_embark_window_body(wnd, x, y)
     slm_draw_settings_panel()
 
 	if not slm_update_checked or slm_update_status == "Unable to verify update at this time" then
@@ -6381,26 +6509,7 @@ function build_embark_window(wnd, x, y)
 		if ch then slm_topup_new_target = math.floor(nv) end
 		imgui.Spacing()
 		if imgui.Button("Apply##topup") then
-			fuel_total            = slm_topup_new_target
-			fuel_loaded           = math.floor(from_kg(sim_fuel_total_kg or 0))
-			slm_defuel_performed  = (fuel_total > 0 and fuel_loaded > fuel_total)
-			fuel_done             = false
-			fuel_loading          = false
-			fuel_last_update_time = nil
-			slm_rf_tolerance_checked = false
-			slm_rf_active            = false
-			slm_rf_skipped           = false
-			fuel_loop_playing        = false
-			sound_played.start_fuel_loading    = false
-			sound_played.finished_fuel_loading = false
-			if embark_done then
-				embark_done   = false
-				embark_started = true
-				loadsheet_ready = false
-				end_time        = nil
-				sound_played.finished_loading_all = false
-			end
-			start_fuel_loading()
+			slm_apply_fuel_topup(slm_topup_new_target)
 			slm_topup_active = false
 		end
 		imgui.SameLine()
@@ -6549,6 +6658,41 @@ function slm_cmd_start_ron()
     end
 end
 
+-- Shared by the "Apply##topup" UI button and the TopFuel command: sets a new fuel
+-- target (in the active unit_system) and (re)starts the fuel loading state machine.
+function slm_apply_fuel_topup(target_value)
+    fuel_total            = math.floor(target_value or 0)
+    fuel_loaded           = math.floor(from_kg(sim_fuel_total_kg or 0))
+    slm_defuel_performed  = (fuel_total > 0 and fuel_loaded > fuel_total)
+    fuel_done             = false
+    fuel_loading          = false
+    fuel_last_update_time = nil
+    slm_rf_tolerance_checked = false
+    slm_rf_active            = false
+    slm_rf_skipped           = false
+    fuel_loop_playing        = false
+    sound_played.start_fuel_loading    = false
+    sound_played.finished_fuel_loading = false
+    if embark_done then
+        embark_done     = false
+        embark_started  = true
+        loadsheet_ready = false
+        end_time        = nil
+        sound_played.finished_loading_all = false
+    end
+    start_fuel_loading()
+end
+
+-- Top-Fuel command: applies the value written to the "fuel_topup_target" dataref
+-- (same effect as the "Fuel Top-Up" -> "Apply" button in the SLM window).
+function slm_cmd_top_fuel()
+    local topup_available = simbrief_data_loaded and onground == 1 and not slm_beacon_on
+    if not topup_available then return end
+    local target = SLM_fuel_topup_target[0] or 0
+    if target <= 0 then return end
+    slm_apply_fuel_topup(target)
+end
+
 
 function slm_sync_toliss_chocks()
     if slm_aircraft_type ~= "toliss" then return end
@@ -6636,6 +6780,14 @@ create_command(
     ""
 )
 
+create_command(
+    "FlyWithLua/SimloadManager/TopFuel",
+    "Top-Fuel: apply the fuel_topup_target dataref as the new fuel target",
+    "slm_cmd_top_fuel()",
+    "",
+    ""
+)
+
 
 function check_simbrief_trigger()
     if trigger_simbrief_import then
@@ -6697,8 +6849,10 @@ slm_load_aircraft_data()
 -- STARTUP INIT
 --------------------------------------------------------------------------------
 do
+    slm_ensure_custom_fonts()
     slm_detect_aircraft()
     slm_detect_fsd()
+    slm_detect_walkaround()
     if XPLMFindDataRef("laminar/B738/tab/zone1_payload") then
         for z = 1, 5 do
             dataref_table("laminar/B738/tab/zone" .. z .. "_payload")[0] = 0

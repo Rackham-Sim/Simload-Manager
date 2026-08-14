@@ -50,6 +50,17 @@ math.randomseed(os.time())
 -- # Main UI
 ------------------------------------------------------------
 function draw_loadsheet_window(wnd, x, y)
+    -- imgui_push_font() must always be matched by imgui.PopFont(); routing the whole
+    -- window body through a wrapper guarantees that even though the body returns early.
+    local use_custom_font = imgui_push_font and slm_font_choice and slm_font_choice > 0
+    if use_custom_font then imgui_push_font(slm_font_choice) end
+
+    slm_draw_loadsheet_window_body(wnd, x, y)
+
+    if use_custom_font then imgui.PopFont() end
+end
+
+function slm_draw_loadsheet_window_body(wnd, x, y)
     if not loadsheet_ready or SLM_Loadsheet_Data == nil then
         imgui.TextUnformatted("Loadsheet not ready.")
         imgui.Separator()
