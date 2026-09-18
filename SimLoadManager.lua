@@ -1,4 +1,4 @@
---SIMLOAD MANAGER V4.3
+--SIMLOAD MANAGER V4.5
 
 --------------------------------------------------------------------------------
 -- IMGUI CHECK
@@ -12,7 +12,7 @@ end
 --------------------------------------------------------------------------------
 -- UPDATE CHECK
 --------------------------------------------------------------------------------
-SLM_VERSION = "4.3"
+SLM_VERSION = "4.5"
 logMsg("[SLM] SimLoad Manager v" .. SLM_VERSION .. " loaded")
 
 local slm_dev_mode = false
@@ -544,8 +544,21 @@ local slm_rp_zibo_zone_dr        = {}
 local slm_rp_zibo_cargo1_dr      = nil
 local slm_rp_zibo_cargo2_dr      = nil
 local slm_rp_zibo_paxwt_dr       = nil
-local slm_rp_zibo_embark_zone    = 5
-local slm_rp_zibo_disembark_zone = 1
+
+-- Cabin seating distribution (ToLiss PaxDistrib slider / Zibo per-zone quotas).
+-- One longitudinal bias is drawn per boarding: <0 = pax lean forward,
+-- >0 = pax lean aft, 0 = even. Magnitude is capped by the load factor so a
+-- near-full cabin stays balanced. No CG guard-rail -- the draw itself is bounded.
+-- Globals (the file-scope local budget is already near Lua's 200 limit).
+slm_pax_bias        = nil
+slm_zibo_caps       = nil   -- {z1..z5} seat caps for the active pax_layout
+slm_zibo_cabin_max  = nil
+SLM_ZIBO_ZONE_CAPS  = {
+    [0] = {16, 36, 36, 36, 36},   -- 160-seat layout
+    [1] = {36, 36, 36, 36, 36},   -- 180
+    [2] = {27, 42, 34, 42, 42},   -- 187
+    [3] = {27, 42, 36, 42, 42},   -- 189
+}
 
 local slm_beacon_on = false
 
@@ -611,16 +624,21 @@ dataref("zulu_minutes", "sim/cockpit2/clock_timer/zulu_time_minutes", "readonly"
 dataref("sim_fuel_total_kg", "sim/flightmodel/weight/m_fuel_total", "readonly")
 dataref("slm_date_days",    "sim/time/local_date_days",            "readonly")
 
-autodgs_on_ground = 0
+opensam_jetway_status = 0
 
-local function slm_autodgs_check()
-    -- Lazy detection: AutoDGS may load after SLM, so check at use time
-    local dr = XPLMFindDataRef("AutoDGS/on_ground")
+local function slm_opensam_jetway_check()
+    -- Lazy detection: OpenSAM may load after SLM, so check at use time.
+    -- opensam/jetway/status: 0 = no jetway(s), 1 = available for docking,
+    -- 2 = docked, -1 = can't dock / jetway(s) in transit.
+    -- Only 0 (no jetway detected, or OpenSAM absent) still fires our own
+    -- command_once as a safety fallback; any other value means OpenSAM
+    -- already has the jetway situation handled, so we stay hands-off.
+    local dr = XPLMFindDataRef("opensam/jetway/status")
     if dr then
         pcall(function()
-            dataref("autodgs_on_ground", "AutoDGS/on_ground", "readonly")
+            dataref("opensam_jetway_status", "opensam/jetway/status", "readonly")
         end)
-        return (autodgs_on_ground == 1)
+        return (opensam_jetway_status ~= 0)
     end
     return false
 end
@@ -648,6 +666,7 @@ skip_crew_briefing    = false
 slm_lowcost_mode          = false
 slm_tankering_mode        = false
 slm_manual_chocks         = false
+slm_no_chocks             = false   -- SLM never places chocks (independent of slm_manual_chocks, which governs removal)
 slm_lc_cleaning_required  = false
 slm_boarding_music_enabled = false
 slm_boarding_music_vol     = 0.5
@@ -1100,6 +1119,8 @@ function load_user_settings()
                 slm_tankering_mode = (value == "true")
             elseif key == "slm_manual_chocks" then
                 slm_manual_chocks = (value == "true")
+            elseif key == "slm_no_chocks" then
+                slm_no_chocks = (value == "true")
             elseif key == "slm_boarding_music_enabled" then
                 slm_boarding_music_enabled = (value == "true")
             elseif key == "slm_boarding_music_vol" then
@@ -1177,6 +1198,7 @@ function save_user_settings()
         file:write("slm_lowcost_mode=" .. tostring(slm_lowcost_mode) .. "\n")
         file:write("slm_tankering_mode=" .. tostring(slm_tankering_mode) .. "\n")
         file:write("slm_manual_chocks=" .. tostring(slm_manual_chocks) .. "\n")
+        file:write("slm_no_chocks=" .. tostring(slm_no_chocks) .. "\n")
         file:write("slm_boarding_music_enabled=" .. tostring(slm_boarding_music_enabled) .. "\n")
         file:write("slm_boarding_music_vol=" .. tostring(slm_boarding_music_vol or 0.5) .. "\n")
         file:write("custom_catering_time_per_pax=" .. tostring(custom_catering_time_per_pax or 4.0) .. "\n")
@@ -2054,8 +2076,7 @@ end
         People2_chg = true
         show_People1 = true
         People1_chg = true
-        show_Chocks = true
-        Chocks_chg = true
+        slm_place_chocks()
 
         if selected_location_group == "remote" then
 			if not aircraft_has_own_stairs then
@@ -2065,10 +2086,8 @@ end
 				StairsXPJ2_chg  = true
 				option_StairsXPJ_override = true
 			else
-				show_StairsXPJ  = false
-				StairsXPJ_chg   = true
-				show_StairsXPJ2 = false
-				StairsXPJ2_chg  = true
+				-- Own stairs / "Don't call jetway / stairs": stay hands-off,
+				-- never retract stairs the user placed manually (e.g. via SGES)
 				option_StairsXPJ_override = false
 			end
         elseif selected_location_group == "terminal"  then
@@ -2079,10 +2098,8 @@ end
 				StairsXPJ2_chg  = true
 				option_StairsXPJ_override = true
 			else
-				show_StairsXPJ  = false
-				StairsXPJ_chg   = true
-				show_StairsXPJ2 = false
-				StairsXPJ2_chg  = true
+				-- Own stairs / "Don't call jetway / stairs": stay hands-off,
+				-- never retract stairs the user placed manually (e.g. via SGES)
 				option_StairsXPJ_override = false
 			end
         end
@@ -2169,8 +2186,7 @@ if not sound_played.start_loading_cargo
     People2_chg = true
     show_People1 = true
     People1_chg = true
-    show_Chocks = true
-    Chocks_chg = true
+    slm_place_chocks()
 
     if selected_location_group == "remote" then
 		if not aircraft_has_own_stairs then
@@ -2181,10 +2197,8 @@ if not sound_played.start_loading_cargo
 			option_StairsXPJ_override = true
 			DualBoard = true
 		else
-			show_StairsXPJ  = false
-			StairsXPJ_chg   = true
-			show_StairsXPJ2 = false
-			StairsXPJ2_chg  = true
+			-- Own stairs / "Don't call jetway / stairs": stay hands-off,
+			-- never retract stairs the user placed manually (e.g. via SGES)
 			option_StairsXPJ_override = false
 			DualBoard = false
 		end
@@ -2197,10 +2211,8 @@ if not sound_played.start_loading_cargo
 			option_StairsXPJ_override = true
 			DualBoard = true
 		else
-			show_StairsXPJ  = false
-			StairsXPJ_chg   = true
-			show_StairsXPJ2 = false
-			StairsXPJ2_chg  = true
+			-- Own stairs / "Don't call jetway / stairs": stay hands-off,
+			-- never retract stairs the user placed manually (e.g. via SGES)
 			option_StairsXPJ_override = false
 			DualBoard = false
 		end
@@ -2409,8 +2421,7 @@ function start_disembarkation()
 		People2_chg = true
 		show_People1 = true
 		People1_chg = true
-		show_Chocks = true
-		Chocks_chg = true
+		slm_place_chocks()
 		if selected_location_group == "remote" then
 			if not aircraft_has_own_stairs then
 				show_StairsXPJ  = true
@@ -2420,10 +2431,8 @@ function start_disembarkation()
 				option_StairsXPJ_override = true
 				DualBoard = true
 			else
-				show_StairsXPJ  = false
-				StairsXPJ_chg   = true
-				show_StairsXPJ2 = false
-				StairsXPJ2_chg  = true
+				-- Own stairs / "Don't call jetway / stairs": stay hands-off,
+				-- never retract stairs the user placed manually (e.g. via SGES)
 				option_StairsXPJ_override = false
 				DualBoard = false
 			end
@@ -2431,7 +2440,7 @@ function start_disembarkation()
 			Bus_chg = true
 			start_disembarkation_pax_delay = os.clock() + 15
 		elseif selected_location_group == "jetway" then
-			if not slm_autodgs_check() then
+			if not slm_opensam_jetway_check() then
 				if not aircraft_has_own_stairs then
 					command_once("sim/ground_ops/jetway")
 				end
@@ -2446,10 +2455,8 @@ function start_disembarkation()
 				option_StairsXPJ_override = true
 				DualBoard = true
 			else
-				show_StairsXPJ  = false
-				StairsXPJ_chg   = true
-				show_StairsXPJ2 = false
-				StairsXPJ2_chg  = true
+				-- Own stairs / "Don't call jetway / stairs": stay hands-off,
+				-- never retract stairs the user placed manually (e.g. via SGES)
 				option_StairsXPJ_override = false
 				DualBoard = false
 			end
@@ -2472,8 +2479,7 @@ function start_disembarkation()
 		People2_chg = true
 		show_People1 = true
 		People1_chg = true
-		show_Chocks = true
-		Chocks_chg = true
+		slm_place_chocks()
 		if selected_location_group == "remote" then
 			if not aircraft_has_own_stairs then
 				show_StairsXPJ  = true
@@ -2483,15 +2489,13 @@ function start_disembarkation()
 				option_StairsXPJ_override = true
 				DualBoard = true
 			else
-				show_StairsXPJ  = false
-				StairsXPJ_chg   = true
-				show_StairsXPJ2 = false
-				StairsXPJ2_chg  = true
+				-- Own stairs / "Don't call jetway / stairs": stay hands-off,
+				-- never retract stairs the user placed manually (e.g. via SGES)
 				option_StairsXPJ_override = false
 				DualBoard = false
 			end
         elseif selected_location_group == "jetway" then
-			if not slm_autodgs_check() then
+			if not slm_opensam_jetway_check() then
 				if not aircraft_has_own_stairs then
 					command_once("sim/ground_ops/jetway")
 				end
@@ -2505,10 +2509,8 @@ function start_disembarkation()
 				option_StairsXPJ_override = true
 				DualBoard = true
 			else
-				show_StairsXPJ  = false
-				StairsXPJ_chg   = true
-				show_StairsXPJ2 = false
-				StairsXPJ2_chg  = true
+				-- Own stairs / "Don't call jetway / stairs": stay hands-off,
+				-- never retract stairs the user placed manually (e.g. via SGES)
 				option_StairsXPJ_override = false
 				DualBoard = false
 			end
@@ -2608,7 +2610,7 @@ function manage_disembark()
 				show_People3 = true; People3_chg = true
 				show_People2 = true; People2_chg = true
 				show_People1 = true; People1_chg = true
-				show_Chocks  = true; Chocks_chg  = true
+				slm_place_chocks()
 				if selected_location_group == "remote" then
 					if not aircraft_has_own_stairs then
 						show_StairsXPJ  = true; StairsXPJ_chg  = true
@@ -2616,15 +2618,15 @@ function manage_disembark()
 						option_StairsXPJ_override = true
 						DualBoard = true
 					else
-						show_StairsXPJ  = false; StairsXPJ_chg  = true
-						show_StairsXPJ2 = false; StairsXPJ2_chg = true
+						-- Own stairs / "Don't call jetway / stairs": stay hands-off,
+						-- never retract stairs the user placed manually (e.g. via SGES)
 						option_StairsXPJ_override = false
 						DualBoard = false
 					end
 					show_Bus = true; Bus_chg = true
 					show_Pax = true; Pax_chg = true
 				elseif selected_location_group == "jetway" then
-					if not slm_autodgs_check() then
+					if not slm_opensam_jetway_check() then
 						if not aircraft_has_own_stairs then
 							command_once("sim/ground_ops/jetway")
 						end
@@ -2636,8 +2638,8 @@ function manage_disembark()
 						option_StairsXPJ_override = true
 						DualBoard = true
 					else
-						show_StairsXPJ  = false; StairsXPJ_chg  = true
-						show_StairsXPJ2 = false; StairsXPJ2_chg = true
+						-- Own stairs / "Don't call jetway / stairs": stay hands-off,
+						-- never retract stairs the user placed manually (e.g. via SGES)
 						option_StairsXPJ_override = false
 						DualBoard = false
 					end
@@ -2721,7 +2723,7 @@ function manage_disembark()
 			Chocks_chg  = true
 		end
 
-		if slm_sequence_mode ~= "turnaround" then
+		if slm_sequence_mode ~= "turnaround" and not aircraft_has_own_stairs then
 			show_StairsXPJ  = false
 			StairsXPJ_chg   = true
 			show_StairsXPJ2 = false
@@ -2751,8 +2753,7 @@ function start_fuel_loading()
         People3_chg = true
         show_People4 = true
         People4_chg = true
-        show_Chocks = true
-        Chocks_chg = true
+        slm_place_chocks()
 
         if selected_location_group == "remote" or selected_location_group == "terminal" then
 			if not aircraft_has_own_stairs then
@@ -2762,10 +2763,8 @@ function start_fuel_loading()
 				StairsXPJ2_chg  = true
 				option_StairsXPJ_override = true
 			else
-				show_StairsXPJ  = false
-				StairsXPJ_chg   = true
-				show_StairsXPJ2 = false
-				StairsXPJ2_chg  = true
+				-- Own stairs / "Don't call jetway / stairs": stay hands-off,
+				-- never retract stairs the user placed manually (e.g. via SGES)
 				option_StairsXPJ_override = false
 			end
         end
@@ -3181,6 +3180,128 @@ function slm_detect_aircraft()
 end
 
 --------------------------------------------------------------------------------
+-- CABIN SEATING DISTRIBUTION
+--------------------------------------------------------------------------------
+-- Randomise where the (partial) pax load sits, so a half-empty cabin is not
+-- always perfectly balanced. Everything is driven by a single longitudinal
+-- bias in [-1, +1], drawn once per boarding.
+
+-- Best guess at the cabin capacity, for the load-factor cap on the bias.
+function slm_pax_cabin_capacity()
+    if slm_aircraft_type == "zibo" and slm_zibo_cabin_max and slm_zibo_cabin_max > 0 then
+        return slm_zibo_cabin_max
+    end
+    if slm_max_passengers and slm_max_passengers > 0 then return slm_max_passengers end
+    if slm_manual_max_pax and slm_manual_max_pax > 0 then return slm_manual_max_pax end
+    if slm_aircraft_type == "toliss" then
+        local prof = slm_toliss_cg_profile and slm_toliss_cg_profile()
+        if prof and tonumber(prof.max_pax) then return tonumber(prof.max_pax) end
+    end
+    return nil
+end
+
+-- Draw the bias once. Truncated Gaussian, mean shifted forward for low-cost
+-- (free seating -> pax bunch near the door), sigma widening as the cabin
+-- empties, and the whole thing scaled down toward 0 as the cabin fills.
+-- No-op until boarding has actually started (so pax variability is settled).
+function slm_ensure_pax_bias()
+    if slm_pax_bias ~= nil then return end
+    if not slm_pax_var_applied then return end
+    local cap = slm_pax_cabin_capacity()
+    local pax = passengers_total or 0
+    if not cap or cap <= 0 or pax <= 0 then
+        slm_pax_bias = 0
+        return
+    end
+    local free_frac = math.max(0, math.min(1, (cap - pax) / cap))
+    local mean  = slm_lowcost_mode and -0.30 or 0.0
+    local sigma = 0.12 + 0.40 * free_frac
+    local u1 = math.max(1e-9, math.random())
+    local u2 = math.random()
+    local g  = math.sqrt(-2 * math.log(u1)) * math.cos(2 * math.pi * u2)
+    local b  = mean + sigma * g
+    b = math.max(-1, math.min(1, b))
+    b = b * math.min(1, free_frac * 1.5)
+    slm_pax_bias = b
+    logMsg(string.format("[SLM-DIST] pax bias=%.2f (pax=%d cap=%d lowcost=%s)",
+        b, pax, cap, tostring(slm_lowcost_mode)))
+end
+
+-- Resolve the Zibo/LevelUp per-zone seat caps from the live pax_layout dataref.
+function slm_zibo_resolve_caps()
+    local layout = 1
+    local dr = XPLMFindDataRef("laminar/B738/pax_layout")
+    if dr then layout = XPLMGetDatai(dr) end
+    slm_zibo_caps = SLM_ZIBO_ZONE_CAPS[layout] or SLM_ZIBO_ZONE_CAPS[1]
+    slm_zibo_cabin_max = 0
+    for z = 1, 5 do slm_zibo_cabin_max = slm_zibo_cabin_max + slm_zibo_caps[z] end
+end
+
+-- Target pax count per Zibo zone (1=fwd .. 5=aft) for a given number already
+-- on board, honouring the bias and the per-zone seat caps. Sum == pax_now
+-- (unless the cabin is physically full).
+function slm_zibo_zone_quotas(pax_now)
+    local caps = slm_zibo_caps or {36, 36, 36, 36, 36}
+    local b    = slm_pax_bias or 0
+    local pos  = {-1, -0.5, 0, 0.5, 1}
+    local w, wsum = {}, 0
+    for z = 1, 5 do
+        w[z] = math.max(0.05, 1 + b * 0.6 * pos[z])
+        wsum = wsum + w[z]
+    end
+    local quota, assigned = {}, 0
+    for z = 1, 5 do
+        quota[z] = math.min(caps[z], math.floor(pax_now * w[z] / wsum + 0.5))
+        assigned = assigned + quota[z]
+    end
+    -- settle the rounding / cap remainder, filling toward the biased end first
+    local order = (b >= 0) and {5, 4, 3, 2, 1} or {1, 2, 3, 4, 5}
+    local diff  = pax_now - assigned
+    while diff > 0 do
+        local moved = false
+        for _, z in ipairs(order) do
+            if quota[z] < caps[z] then
+                quota[z] = quota[z] + 1; diff = diff - 1; moved = true
+                if diff == 0 then break end
+            end
+        end
+        if not moved then break end
+    end
+    while diff < 0 do
+        local moved = false
+        for _, z in ipairs(order) do
+            if quota[z] > 0 then
+                quota[z] = quota[z] - 1; diff = diff + 1; moved = true
+                if diff == 0 then break end
+            end
+        end
+        if not moved then break end
+    end
+    return quota
+end
+
+-- Drain the Zibo zones down to a target total, emptying the fullest zone first
+-- (tie -> forward), so zones deplete together and always reach zero.
+function slm_zibo_drain_to(remaining)
+    local cur, sum = {}, 0
+    for z = 1, 5 do
+        cur[z] = math.max(0, math.floor((slm_rp_zibo_zone_dr[z][0] or 0) + 0.5))
+        sum = sum + cur[z]
+    end
+    local excess = sum - math.max(0, remaining)
+    while excess > 0 do
+        local best, bestv = 0, 0
+        for z = 1, 5 do
+            if cur[z] > bestv then bestv = cur[z]; best = z end
+        end
+        if best == 0 then break end
+        cur[best] = cur[best] - 1
+        excess = excess - 1
+    end
+    for z = 1, 5 do slm_rp_zibo_zone_dr[z][0] = cur[z] end
+end
+
+--------------------------------------------------------------------------------
 -- REAL PAYLOAD FILL
 --------------------------------------------------------------------------------
 
@@ -3194,6 +3315,7 @@ function slm_rp_start()
     slm_rp_last_pax_loaded   = nil
     slm_rp_last_cargo_loaded = nil
     slm_rp_active            = true
+    slm_pax_bias             = nil   -- fresh seating draw for this boarding
 
     if slm_aircraft_type == "default" then
         slm_rp_station_dr = dataref_table("sim/flightmodel/weight/m_stations")
@@ -3206,7 +3328,7 @@ function slm_rp_start()
     elseif slm_aircraft_type == "zibo" then
         slm_rp_zibo_paxwt_dr = dataref_table("laminar/B738/std_pax_weight")
         slm_rp_zibo_paxwt_dr[0] = (slm_data_source == "manual" or slm_data_source == "fsd") and 70 or (SB_pax_weight or 0)
-        slm_rp_zibo_embark_zone = 5
+        slm_zibo_resolve_caps()
         for z = 1, 5 do
             slm_rp_zibo_zone_dr[z] = dataref_table("laminar/B738/tab/zone" .. z .. "_payload")
             slm_rp_zibo_zone_dr[z][0] = 0
@@ -3215,8 +3337,9 @@ function slm_rp_start()
         slm_rp_zibo_cargo2_dr = dataref_table("laminar/B738/tab/zone_cargo2_payload")
         slm_rp_zibo_cargo1_dr[0] = 0
         slm_rp_zibo_cargo2_dr[0] = 0
-        logMsg(string.format("[SLM-RP] Zibo: started pax=%d (%.0f/pax) cargo=%.0f",
-            passengers_total or 0, SB_pax_weight or 0, slm_rp_target_cargo_kg))
+        logMsg(string.format("[SLM-RP] Zibo: started pax=%d (%.0f/pax) cargo=%.0f layout_caps=%d/%d/%d/%d/%d",
+            passengers_total or 0, SB_pax_weight or 0, slm_rp_target_cargo_kg,
+            slm_zibo_caps[1], slm_zibo_caps[2], slm_zibo_caps[3], slm_zibo_caps[4], slm_zibo_caps[5]))
 
     elseif slm_aircraft_type == "toliss" then
         slm_rp_toliss_nopax_dr    = dataref_table("AirbusFBW/NoPax")
@@ -3247,6 +3370,9 @@ function slm_rp_stop()
     slm_rp_toliss_fwdcargo_dr    = nil
     slm_rp_toliss_aftcargo_dr    = nil
     slm_rp_toliss_last_setweight = 0
+    slm_pax_bias             = nil
+    slm_zibo_caps            = nil
+    slm_zibo_cabin_max       = nil
 end
 
 function slm_rp_update()
@@ -3324,29 +3450,18 @@ function slm_rp_update()
         if not slm_rp_zibo_zone_dr[1] then return end
 
         if (passengers_total or 0) > 0 then
-            if slm_rp_last_pax_loaded == nil then
-                slm_rp_last_pax_loaded = passengers_loaded or 0
-            else
-                local delta_pax = (passengers_loaded or 0) - slm_rp_last_pax_loaded
-                if delta_pax > 0 then
-                    slm_rp_last_pax_loaded = passengers_loaded
-                    for _ = 1, delta_pax do
-                        slm_rp_zibo_zone_dr[slm_rp_zibo_embark_zone][0] =
-                            (slm_rp_zibo_zone_dr[slm_rp_zibo_embark_zone][0] or 0) + 1
-                        slm_rp_zibo_embark_zone = slm_rp_zibo_embark_zone - 1
-                        if slm_rp_zibo_embark_zone < 1 then slm_rp_zibo_embark_zone = 5 end
-                    end
-                elseif delta_pax < 0 then
-                    slm_rp_last_pax_loaded = passengers_loaded
-                    for _ = 1, math.abs(delta_pax) do
-                        slm_rp_zibo_embark_zone = slm_rp_zibo_embark_zone + 1
-                        if slm_rp_zibo_embark_zone > 5 then slm_rp_zibo_embark_zone = 1 end
-                        slm_rp_zibo_zone_dr[slm_rp_zibo_embark_zone][0] =
-                            math.max(0, (slm_rp_zibo_zone_dr[slm_rp_zibo_embark_zone][0] or 0) - 1)
-                    end
-                end
+            -- Quota-based fill: each frame, size the 5 zones for how many pax are
+            -- actually on board so far, honouring the per-flight bias and the
+            -- seat caps. Handles event-driven pax drops for free (loaded shrinks
+            -- -> quotas shrink -> zones tick down).
+            slm_ensure_pax_bias()
+            local loaded = passengers_loaded or 0
+            if loaded ~= slm_rp_last_pax_loaded then
+                local q = slm_zibo_zone_quotas(loaded)
+                for z = 1, 5 do slm_rp_zibo_zone_dr[z][0] = q[z] end
+                slm_rp_last_pax_loaded = loaded
             end
-            pax_done_rp = (passengers_loaded or 0) >= (passengers_total or 0)
+            pax_done_rp = loaded >= (passengers_total or 0)
         end
 
         if (cargo_total or 0) > 0 and slm_rp_target_cargo_kg > 0 then
@@ -3371,6 +3486,20 @@ function slm_rp_update()
 
     elseif slm_aircraft_type == "toliss" then
         if not slm_rp_toliss_nopax_dr then return end
+
+        -- Set the fwd/aft distribution slider once, from the per-flight bias.
+        -- Clamp = 0.35-0.60, the edge of the certified ZFWCG envelope (also the
+        -- bound the loadsheet CG curves are sampled to). The Gaussian keeps most
+        -- flights near 0.5; low-cost skews forward. ToLiss exposes no finer
+        -- seating control than this slider.
+        if slm_pax_bias == nil then
+            slm_ensure_pax_bias()
+            if slm_pax_bias ~= nil then
+                local pd = math.max(0.35, math.min(0.60, 0.50 + slm_pax_bias * 0.09))
+                dataref_table("AirbusFBW/PaxDistrib")[0] = pd
+                logMsg(string.format("[SLM-DIST] ToLiss PaxDistrib=%.3f", pd))
+            end
+        end
 
         if (passengers_total or 0) > 0 then
             slm_rp_toliss_nopax_dr[0] = passengers_loaded or 0
@@ -3452,22 +3581,11 @@ function slm_rp_unload_update()
             slm_rp_zibo_cargo2_dr = dataref_table("laminar/B738/tab/zone_cargo2_payload")
         end
 
-        if (passengers_total or 0) > 0 then
-            if slm_rp_last_pax_unloaded == nil then
-                slm_rp_last_pax_unloaded = passengers_unloaded or 0
-                slm_rp_zibo_disembark_zone = 1
-            else
-                local delta_pax = (passengers_unloaded or 0) - slm_rp_last_pax_unloaded
-                if delta_pax > 0 then
-                    slm_rp_last_pax_unloaded = passengers_unloaded
-                    for _ = 1, delta_pax do
-                        slm_rp_zibo_zone_dr[slm_rp_zibo_disembark_zone][0] =
-                            math.max(0, (slm_rp_zibo_zone_dr[slm_rp_zibo_disembark_zone][0] or 0) - 1)
-                        slm_rp_zibo_disembark_zone = slm_rp_zibo_disembark_zone + 1
-                        if slm_rp_zibo_disembark_zone > 5 then slm_rp_zibo_disembark_zone = 1 end
-                    end
-                end
-            end
+        if (passengers_total or 0) > 0 and (passengers_unloaded or 0) ~= slm_rp_last_pax_unloaded then
+            local base = (arr_passengers_total and arr_passengers_total > 0)
+                and arr_passengers_total or (passengers_total or 0)
+            slm_zibo_drain_to(math.max(0, base - (passengers_unloaded or 0)))
+            slm_rp_last_pax_unloaded = passengers_unloaded
         end
 
         if (cargo_total or 0) > 0 then
@@ -3563,8 +3681,10 @@ function check_if_all_done()
                 show_People2   = false; People2_chg   = true
                 show_People1   = false; People1_chg   = true
                 if not slm_manual_chocks then show_Chocks = false; Chocks_chg = true end
-                show_StairsXPJ  = false; StairsXPJ_chg  = true
-                show_StairsXPJ2 = false; StairsXPJ2_chg = true
+                if not aircraft_has_own_stairs then
+                    show_StairsXPJ  = false; StairsXPJ_chg  = true
+                    show_StairsXPJ2 = false; StairsXPJ2_chg = true
+                end
 
                 if selected_location_group == "jetway" then
                     if not aircraft_has_own_stairs then
@@ -3929,7 +4049,7 @@ end
 
 function start_departure_sequence(is_after_flight)
     slm_detect_aircraft()
-    show_Chocks = true; Chocks_chg = true
+    slm_place_chocks()
     slm_sync_toliss_chocks()
     slm_initial_fuel_kg       = sim_fuel_total_kg
     slm_initial_fuel_captured = true
@@ -3964,7 +4084,7 @@ function start_turnaround()
         apply_fast_timings()
         slm_lc_forced_fast = true
     end
-    show_Chocks = true; Chocks_chg = true
+    slm_place_chocks()
     slm_sync_toliss_chocks()
 	slm_sequence_mode       = "turnaround"
     slm_last_sequence_mode  = "turnaround"
@@ -3987,7 +4107,7 @@ end
 
 function start_night_stop()
     slm_detect_aircraft()
-    show_Chocks = true; Chocks_chg = true
+    slm_place_chocks()
     slm_sync_toliss_chocks()
     slm_sequence_mode      = "night_stop"
     slm_last_sequence_mode = "night_stop"
@@ -4065,15 +4185,16 @@ function manage_sequence()
             slm_sequence_phase = "crew_deplane"
             start_crew_deplane()
         elseif slm_sequence_phase == "crew_deplane" and crew_deplane_done then
-            show_Chocks = true
-            Chocks_chg  = true
+            slm_place_chocks()
             show_Cones  = true
             Cones_chg   = true
 
-            show_StairsXPJ  = false
-            StairsXPJ_chg   = true
-            show_StairsXPJ2 = false
-            StairsXPJ2_chg  = true
+            if not aircraft_has_own_stairs then
+                show_StairsXPJ  = false
+                StairsXPJ_chg   = true
+                show_StairsXPJ2 = false
+                StairsXPJ2_chg  = true
+            end
             slm_sequence_phase = "done"
             slm_clear_last_flight()   -- RON complete: wipe saved flight
         end
@@ -4264,6 +4385,9 @@ function reset_loads()
 	slm_effective_cargo       = nil
 	slm_max_passengers        = nil
 	slm_pax_var_applied       = false
+	slm_pax_bias              = nil
+	slm_zibo_caps             = nil
+	slm_zibo_cabin_max        = nil
 	slm_planned_cargo_display = nil
 	slm_catering_elapsed_at_pause = nil
 
@@ -4699,7 +4823,7 @@ preset_values.veryfast  = capture_preset(apply_veryfast_timings)
 function create_embark_window()
     if embark_wnd == nil then
         embark_wnd = float_wnd_create(500, 900, 1, true)
-        float_wnd_set_title(embark_wnd, "Simload Manager 4.3")
+        float_wnd_set_title(embark_wnd, "Simload Manager 4.5")
         float_wnd_set_imgui_builder(embark_wnd, "build_embark_window")
         float_wnd_set_onclose(embark_wnd, "on_close_embark_window")
         logMsg("[SLM] Embark window created.")
@@ -5727,6 +5851,19 @@ function slm_draw_settings_panel()
             imgui.Spacing()
         end
 
+        -- In dev builds, mask sensitive fields (SimBrief ID, API keys) with asterisks so
+        -- they don't leak in screenshots/streams taken while testing; edit them with
+        -- dev mode off, or directly in simload_settings.txt.
+        local function sensitive_input(label, value, maxlen)
+            if slm_dev_mode then
+                imgui.BeginDisabled()
+                imgui.InputText(label, string.rep("*", #(value or "")), maxlen)
+                imgui.EndDisabled()
+                return false, value
+            end
+            return imgui.InputText(label, value or "", maxlen)
+        end
+
         -- 1. PILOT PROFILE
         section_header("PILOT PROFILE")
         if busy then imgui.BeginDisabled() end
@@ -5760,7 +5897,7 @@ function slm_draw_settings_panel()
         if busy then imgui.EndDisabled() end
 
         if busy or slm_data_source == "manual" or slm_data_source == "fsd" then imgui.BeginDisabled() end
-        local changed, new_id = imgui.InputText("SimBrief ID", simbrief_id or "", 100)
+        local changed, new_id = sensitive_input("SimBrief ID", simbrief_id, 100)
         if changed then
             simbrief_id = new_id
             save_user_settings()
@@ -5778,7 +5915,7 @@ function slm_draw_settings_panel()
         if imgui.RadioButton("SayIntentions##acars", slm_acars_output == "si")     then slm_acars_output = "si";     save_user_settings() end
 
         if slm_acars_output == "hoppie" then
-            local chg_logon, new_logon = imgui.InputText("Logon code##hoppie", slm_hoppie_logon or "", 32)
+            local chg_logon, new_logon = sensitive_input("Logon code##hoppie", slm_hoppie_logon, 32)
             if chg_logon then slm_hoppie_logon = new_logon; save_user_settings() end
             imgui.TextUnformatted("Message type:")
             imgui.SameLine()
@@ -5786,7 +5923,7 @@ function slm_draw_settings_panel()
             imgui.SameLine()
             if imgui.RadioButton("CPDLC##mtype", slm_hoppie_msgtype == "cpdlc") then slm_hoppie_msgtype = "cpdlc"; save_user_settings() end
         elseif slm_acars_output == "si" then
-            local chg_key, new_key = imgui.InputText("API Key##si", slm_si_key or "", 64)
+            local chg_key, new_key = sensitive_input("API Key##si", slm_si_key, 64)
             if chg_key then slm_si_key = new_key; save_user_settings() end
         end
         if busy then imgui.EndDisabled() end
@@ -5877,9 +6014,14 @@ function slm_draw_settings_panel()
             skip_crew_briefing = new_skip
             save_user_settings()
         end
-        local chg_mc, new_mc = imgui.Checkbox("Manual Chocks (SLM never removes them)", slm_manual_chocks)
+        local chg_mc, new_mc = imgui.Checkbox("Chocks: SLM never removes them", slm_manual_chocks)
         if chg_mc then
             slm_manual_chocks = new_mc
+            save_user_settings()
+        end
+        local chg_nc, new_nc = imgui.Checkbox("Chocks: SLM never places them", slm_no_chocks)
+        if chg_nc then
+            slm_no_chocks = new_nc
             save_user_settings()
         end
         if busy then imgui.EndDisabled() end
@@ -6693,6 +6835,14 @@ function slm_cmd_top_fuel()
     slm_apply_fuel_topup(target)
 end
 
+
+-- Place wheel chocks, unless the user ticked "No Chocks (SLM never places them)".
+-- Removal is governed separately by slm_manual_chocks.
+function slm_place_chocks()
+    if slm_no_chocks then return end
+    show_Chocks = true
+    Chocks_chg  = true
+end
 
 function slm_sync_toliss_chocks()
     if slm_aircraft_type ~= "toliss" then return end
