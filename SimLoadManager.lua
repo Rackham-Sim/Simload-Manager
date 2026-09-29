@@ -1,4 +1,4 @@
---SIMLOAD MANAGER V4.5
+--SIMLOAD MANAGER V4.6
 
 --------------------------------------------------------------------------------
 -- IMGUI CHECK
@@ -12,7 +12,7 @@ end
 --------------------------------------------------------------------------------
 -- UPDATE CHECK
 --------------------------------------------------------------------------------
-SLM_VERSION = "4.5"
+SLM_VERSION = "4.6"
 logMsg("[SLM] SimLoad Manager v" .. SLM_VERSION .. " loaded")
 
 local slm_dev_mode = false
@@ -667,6 +667,7 @@ slm_lowcost_mode          = false
 slm_tankering_mode        = false
 slm_manual_chocks         = false
 slm_no_chocks             = false   -- SLM never places chocks (independent of slm_manual_chocks, which governs removal)
+slm_bpb_remove_chocks     = false   -- with slm_manual_chocks: remove chocks when BetterPushback starts (#SL05)
 slm_lc_cleaning_required  = false
 slm_boarding_music_enabled = false
 slm_boarding_music_vol     = 0.5
@@ -1121,6 +1122,8 @@ function load_user_settings()
                 slm_manual_chocks = (value == "true")
             elseif key == "slm_no_chocks" then
                 slm_no_chocks = (value == "true")
+            elseif key == "slm_bpb_remove_chocks" then
+                slm_bpb_remove_chocks = (value == "true")
             elseif key == "slm_boarding_music_enabled" then
                 slm_boarding_music_enabled = (value == "true")
             elseif key == "slm_boarding_music_vol" then
@@ -1199,6 +1202,7 @@ function save_user_settings()
         file:write("slm_tankering_mode=" .. tostring(slm_tankering_mode) .. "\n")
         file:write("slm_manual_chocks=" .. tostring(slm_manual_chocks) .. "\n")
         file:write("slm_no_chocks=" .. tostring(slm_no_chocks) .. "\n")
+        file:write("slm_bpb_remove_chocks=" .. tostring(slm_bpb_remove_chocks) .. "\n")
         file:write("slm_boarding_music_enabled=" .. tostring(slm_boarding_music_enabled) .. "\n")
         file:write("slm_boarding_music_vol=" .. tostring(slm_boarding_music_vol or 0.5) .. "\n")
         file:write("custom_catering_time_per_pax=" .. tostring(custom_catering_time_per_pax or 4.0) .. "\n")
@@ -3305,6 +3309,20 @@ end
 -- REAL PAYLOAD FILL
 --------------------------------------------------------------------------------
 
+-- ToLiss weighs every passenger at a fixed 100 kg (AirbusFBW/NoPax), whereas the
+-- OFP pax weight is usually lighter (bags are already in cargo). Fold the gap
+-- into the cargo holds so the aircraft's ZFW matches the loadsheet (#SL06).
+-- Returns the full-load cargo mass in kg (cargo_total is in the OFP unit).
+local SLM_TOLISS_PAX_KG = 100
+local function slm_toliss_cargo_kg()
+    local cargo_kg = to_kg(cargo_total or 0)
+    local pax_kg   = SB_pax_weight or 0
+    if pax_kg > 0 then
+        cargo_kg = cargo_kg + (passengers_total or 0) * (pax_kg - SLM_TOLISS_PAX_KG)
+    end
+    return math.max(0, cargo_kg)
+end
+
 function slm_rp_start()
     if not slm_rp_enabled or slm_rp_excluded then return end
     if slm_beacon_on then return end
@@ -3509,7 +3527,7 @@ function slm_rp_update()
 
         if (cargo_total or 0) > 0 and slm_rp_target_cargo_kg > 0 then
             local frac = math.min(1.0, (cargo_loaded or 0) / cargo_total)
-            local half  = (cargo_total / 2) * frac
+            local half  = (slm_toliss_cargo_kg() / 2) * frac
             slm_rp_toliss_fwdcargo_dr[0] = half
             slm_rp_toliss_aftcargo_dr[0] = half
             cargo_done_rp = (cargo_loaded or 0) >= (cargo_total or 0)
@@ -3615,7 +3633,7 @@ function slm_rp_unload_update()
 
         if (cargo_total or 0) > 0 then
             local remaining_frac = math.max(0, 1.0 - (cargo_unloaded or 0) / cargo_total)
-            local half = (cargo_total / 2) * remaining_frac
+            local half = (slm_toliss_cargo_kg() / 2) * remaining_frac
             slm_rp_toliss_fwdcargo_dr[0] = half
             slm_rp_toliss_aftcargo_dr[0] = half
         end
@@ -4823,7 +4841,7 @@ preset_values.veryfast  = capture_preset(apply_veryfast_timings)
 function create_embark_window()
     if embark_wnd == nil then
         embark_wnd = float_wnd_create(500, 900, 1, true)
-        float_wnd_set_title(embark_wnd, "Simload Manager 4.5")
+        float_wnd_set_title(embark_wnd, "Simload Manager 4.6")
         float_wnd_set_imgui_builder(embark_wnd, "build_embark_window")
         float_wnd_set_onclose(embark_wnd, "on_close_embark_window")
         logMsg("[SLM] Embark window created.")
@@ -6019,6 +6037,15 @@ function slm_draw_settings_panel()
             slm_manual_chocks = new_mc
             save_user_settings()
         end
+        if slm_manual_chocks and slm_bpb_detect() then
+            imgui.TextUnformatted("   ")
+            imgui.SameLine()
+            local chg_bpb, new_bpb = imgui.Checkbox("Let BPB remove chocks", slm_bpb_remove_chocks)
+            if chg_bpb then
+                slm_bpb_remove_chocks = new_bpb
+                save_user_settings()
+            end
+        end
         local chg_nc, new_nc = imgui.Checkbox("Chocks: SLM never places them", slm_no_chocks)
         if chg_nc then
             slm_no_chocks = new_nc
@@ -6844,6 +6871,35 @@ function slm_place_chocks()
     Chocks_chg  = true
 end
 
+-- BetterPushback detection via its "bp/started" dataref (#SL05). Cached once
+-- found; otherwise re-probed every 5 s in case BPB registers late.
+slm_bpb_started_ref = nil
+slm_bpb_next_probe  = 0
+slm_bpb_was_started = nil
+function slm_bpb_detect()
+    if slm_bpb_started_ref then return true end
+    local now = os.clock()
+    if now < slm_bpb_next_probe then return false end
+    slm_bpb_next_probe  = now + 5
+    slm_bpb_started_ref = XPLMFindDataRef("bp/started")
+    if slm_bpb_started_ref then logMsg("[SLM] BetterPushback detected") end
+    return slm_bpb_started_ref ~= nil
+end
+
+-- "Let BPB remove chocks": remove them on the bp/started 0 -> 1 edge only, so a
+-- reload mid-pushback or ticking the option mid-push doesn't fire retroactively.
+function slm_bpb_watch()
+    if not slm_bpb_detect() then return end
+    local started = XPLMGetDatai(slm_bpb_started_ref) ~= 0
+    local was     = slm_bpb_was_started
+    slm_bpb_was_started = started
+    if was == nil or was or not started then return end
+    if not (slm_manual_chocks and slm_bpb_remove_chocks) then return end
+    show_Chocks = false
+    Chocks_chg  = true
+    logMsg("[SLM] BetterPushback started: chocks removed")
+end
+
 function slm_sync_toliss_chocks()
     if slm_aircraft_type ~= "toliss" then return end
     if not Chocks_chg then return end  -- only write on explicit change, not every frame
@@ -6989,6 +7045,7 @@ do_every_frame("slm_rf_update()")
 do_every_frame("slm_rp_update()")
 do_every_frame("slm_rp_unload_update()")
 do_every_frame("slm_update_beacon_state()")
+do_every_frame("slm_bpb_watch()")
 do_every_frame("slm_sync_toliss_chocks()")
 
 
