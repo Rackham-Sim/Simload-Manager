@@ -56,15 +56,6 @@
 	"MD80": [[1,2],[0]],
 	"CONC": [[0,1,2,3,4,5,6,7,8]]
   },
-  "tank_groups_toliss": {
-    "A319":[[1,2],[0]],
-    "A320":[[1,2],[0]],
-    "A20N":[[1,2],[0]],
-    "A321":[[1,2],[0]],
-    "A21N":[[1,2],[0]],
-    "A339":[[1,2],[0]],
-    "A346":[[1,2],[0]]
-  },
   "excluded_icao": {
     "DH8D": "This aircraft manages its own payload and fuel.\nPlease use the onboard tablet to edit loading data"
   },

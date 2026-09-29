@@ -1,4 +1,4 @@
---SIMLOAD MANAGER V4.6
+--SIMLOAD MANAGER V4.7
 
 --------------------------------------------------------------------------------
 -- IMGUI CHECK
@@ -12,7 +12,7 @@ end
 --------------------------------------------------------------------------------
 -- UPDATE CHECK
 --------------------------------------------------------------------------------
-SLM_VERSION = "4.6"
+SLM_VERSION = "4.7"
 logMsg("[SLM] SimLoad Manager v" .. SLM_VERSION .. " loaded")
 
 local slm_dev_mode = false
@@ -504,7 +504,7 @@ local slm_rf_enabled   = true
 local slm_rf_active    = false
 local slm_rf_target_kg = 0
 local slm_rf_last_t    = 0
-local slm_rf_interval  = 0.5
+local slm_rf_interval  = 2.0   -- ToLiss: seconds between m_fuel total updates
 local slm_rf_step_kg   = 10.0
 local slm_rf_group_idx = 1
 local slm_rf_groups    = {}
@@ -514,7 +514,6 @@ local slm_rf_history   = {}
 local slm_rf_tank_dr          = nil
 local slm_rf_last_fuel_loaded = nil
 local slm_rf_initial_real_kg  = 0
-local slm_rf_toliss_dr        = nil
 local slm_rf_group_dr_override   = {}
 local slm_rf_tolerance_checked   = false
 local slm_rf_skipped             = false
@@ -2901,7 +2900,7 @@ local function slm_rf_get_dr()
 end
 
 local function slm_rf_total_current()
-    local tdr = (slm_aircraft_type == "toliss" and slm_rf_toliss_dr) or slm_rf_get_dr()
+    local tdr = slm_rf_get_dr()
     local t = 0
     for i = 0, 8 do
         local v = tdr[i] or 0
@@ -2925,35 +2924,14 @@ function slm_rf_start()
 
     slm_rf_group_dr_override = {}
     if slm_aircraft_type == "toliss" then
-        slm_rf_toliss_dr = XPLMFindDataRef("toliss_airbus/fuelTankContent_kgs")
-            and dataref_table("toliss_airbus/fuelTankContent_kgs") or nil
-        if not slm_rf_toliss_dr then
-            logMsg("[SLM-RF] WARN: toliss_airbus/fuelTankContent_kgs not found (XP11?), using fallback sim dataref")
-        end
-
-        local base_groups = (slm_aircraft_data.tank_groups_toliss or {})[PLANE_ICAO or ""] or {{1,2},{3,4},{0}}
+        -- ToLiss spreads the fuel over its tanks itself (see slm_rf_update)
         slm_rf_groups = {}
-        for i, g in ipairs(base_groups) do slm_rf_groups[i] = g end
-        local extra_ref = XPLMFindDataRef("AirbusFBW/FuelNumExtraTanks")
-        if extra_ref then
-            local num_extra = XPLMGetDatai(extra_ref)
-            if num_extra >= 1 then
-                slm_rf_groups[#slm_rf_groups + 1] = {3}
-                logMsg("[SLM-RF] ToLiss ACT: extra tank 1 â†’ fuelTankContent_kgs[3]")
-            end
-            if num_extra >= 2 then
-                slm_rf_groups[#slm_rf_groups + 1] = {4}
-                logMsg("[SLM-RF] ToLiss ACT: extra tank 2 â†’ fuelTankContent_kgs[4] (after [3])")
-            end
-        end
         logMsg("[SLM-RF] ToLiss (ICAO=" .. slm_get_live_icao() ..
-               "): writing to fuelTankContent_kgs, groups=" .. #slm_rf_groups)
+               "): writing fuel deltas to m_fuel, ToLiss distributes")
     elseif slm_aircraft_type == "zibo" then
-        slm_rf_toliss_dr = nil
         slm_rf_groups = {{0,2},{1}}
         logMsg("[SLM-RF] Zibo: wing groups=[0,2] then center=[1]")
     else
-        slm_rf_toliss_dr = nil
         slm_rf_groups = (slm_aircraft_data.tank_groups or {})[PLANE_ICAO or ""] or {{0,1}}
     end
 
@@ -2963,6 +2941,7 @@ function slm_rf_start()
     slm_rf_group_idx          = slm_defuel_performed and #slm_rf_groups or 1
     slm_rf_history            = {}
     slm_rf_last_fuel_loaded   = nil
+    slm_rf_last_t             = 0
 
     local tank_max = (slm_aircraft_data.tank_max or {})[PLANE_ICAO or ""]
     logMsg("[SLM-RF] Saturation mode: " .. (tank_max and "precise (defined max)" or "sliding history (fallback)"))
@@ -2983,7 +2962,6 @@ function slm_rf_stop()
     slm_rf_history            = {}
     slm_rf_last_fuel_loaded   = nil
     slm_rf_initial_real_kg    = 0
-    slm_rf_toliss_dr          = nil
     slm_rf_group_dr_override  = {}
     slm_rf_tolerance_checked  = false
     slm_rf_skipped            = false
@@ -3016,6 +2994,48 @@ function slm_rf_update()
     local dr = slm_rf_get_dr()
     if not dr then return end
 
+    -- ToLiss: when m_fuel changes, ToLiss takes the sum of all slots as the new
+    -- total, like a refuel ("Updating internal fuel amount to changed settings"):
+    -- it spreads that total over its tanks itself and closes the outer tank
+    -- transfer valves, which writing fuelTankContent_kgs never does. A written
+    -- value replaces the slot content (writing into the centre slot [0] is only an
+    -- "addition" while it is empty), so the delta goes into an empty slot,
+    -- searched from [8] down, once ToLiss has consumed the previous one. If all
+    -- 9 slots hold fuel, the delta is added onto [8]'s content (same sum).
+    if slm_aircraft_type == "toliss" then
+        local now = os.clock()
+        if now - slm_rf_last_t < slm_rf_interval then return end
+        slm_rf_last_t = now
+        local total, slot = 0, 8  -- no empty slot (all 9 tanks used): add onto [8]
+        for i = 0, 8 do
+            local v = dr[i] or 0
+            if v < 0 then return end  -- previous negative delta not consumed yet
+            total = total + v
+        end
+        for i = 8, 0, -1 do
+            if (dr[i] or 0) == 0 then slot = i; break end
+        end
+        local diff = to_kg(fuel_loaded or 0) - total
+        if math.abs(diff) > 1.0 then
+            -- ToLiss ignores changes under 40 kg (a final 15 kg remainder was
+            -- never taken): step 50 kg the other way first, the next write then
+            -- covers remainder + 50 kg. Going away from the target also keeps a
+            -- full-tank target from being clamped at max capacity.
+            if fuel_loaded == fuel_total and math.abs(diff) < 45 then
+                diff = (diff > 0) and -50 or 50
+                logMsg("[SLM-RF] ToLiss: final remainder under 40 kg, stepping 50 kg away first")
+            end
+            dr[slot] = (dr[slot] or 0) + diff
+            return  -- let ToLiss consume it before checking completion
+        end
+        if fuel_loaded == fuel_total then
+            slm_rf_active = false
+            logMsg("[SLM-RF] ToLiss done: total set to " ..
+                   string.format("%.0f", to_kg(fuel_total or 0)) .. " kg via m_fuel")
+        end
+        return
+    end
+
     if slm_rf_last_fuel_loaded == nil then
         slm_rf_last_fuel_loaded = fuel_loaded or 0
         return
@@ -3031,7 +3051,7 @@ function slm_rf_update()
     delta_kg = math.abs(delta_kg)
 
     local total     = slm_rf_total_current()
-    local active_dr = (slm_aircraft_type == "toliss" and slm_rf_toliss_dr) or dr
+    local active_dr = dr
 
     if is_defueling then
         local still_excess = total - slm_rf_target_kg
@@ -4841,7 +4861,7 @@ preset_values.veryfast  = capture_preset(apply_veryfast_timings)
 function create_embark_window()
     if embark_wnd == nil then
         embark_wnd = float_wnd_create(500, 900, 1, true)
-        float_wnd_set_title(embark_wnd, "Simload Manager 4.6")
+        float_wnd_set_title(embark_wnd, "Simload Manager 4.7")
         float_wnd_set_imgui_builder(embark_wnd, "build_embark_window")
         float_wnd_set_onclose(embark_wnd, "on_close_embark_window")
         logMsg("[SLM] Embark window created.")
