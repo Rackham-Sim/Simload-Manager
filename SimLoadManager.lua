@@ -1,4 +1,4 @@
---SIMLOAD MANAGER V4.7
+--SIMLOAD MANAGER V4.8
 
 --------------------------------------------------------------------------------
 -- IMGUI CHECK
@@ -12,7 +12,7 @@ end
 --------------------------------------------------------------------------------
 -- UPDATE CHECK
 --------------------------------------------------------------------------------
-SLM_VERSION = "4.7"
+SLM_VERSION = "4.8"
 logMsg("[SLM] SimLoad Manager v" .. SLM_VERSION .. " loaded")
 
 local slm_dev_mode = false
@@ -533,6 +533,9 @@ local slm_rp_last_pax_unloaded   = nil
 local slm_rp_last_cargo_unloaded = nil
 local slm_rp_station_dr        = nil
 local slm_rp_station_map       = nil
+-- kg written per category (default stations): pax and cargo may share stations
+slm_rp_pax_written_kg    = 0   -- global: main chunk is at the 200-local limit
+slm_rp_cargo_written_kg  = 0
 local slm_rp_toliss_nopax_dr       = nil
 local slm_rp_toliss_fwdcargo_dr    = nil
 local slm_rp_toliss_aftcargo_dr    = nil
@@ -3332,15 +3335,17 @@ end
 -- ToLiss weighs every passenger at a fixed 100 kg (AirbusFBW/NoPax), whereas the
 -- OFP pax weight is usually lighter (bags are already in cargo). Fold the gap
 -- into the cargo holds so the aircraft's ZFW matches the loadsheet (#SL06).
--- Returns the full-load cargo mass in kg (cargo_total is in the OFP unit).
+-- ToLiss reads FwdCargo/AftCargo in its own weight unit (lbs when set to LBS)
+-- and exposes no dataref for it, so we assume it matches the OFP/SLM unit.
+-- Returns the full-load cargo mass in the OFP/SLM unit.
 local SLM_TOLISS_PAX_KG = 100
-local function slm_toliss_cargo_kg()
+local function slm_toliss_cargo()
     local cargo_kg = to_kg(cargo_total or 0)
     local pax_kg   = SB_pax_weight or 0
     if pax_kg > 0 then
         cargo_kg = cargo_kg + (passengers_total or 0) * (pax_kg - SLM_TOLISS_PAX_KG)
     end
-    return math.max(0, cargo_kg)
+    return from_kg(math.max(0, cargo_kg))
 end
 
 function slm_rp_start()
@@ -3360,6 +3365,8 @@ function slm_rp_start()
         for i = 0, 8 do slm_rp_station_dr[i] = 0 end
         local rp_map = slm_aircraft_data.rp_stations and slm_aircraft_data.rp_stations[PLANE_ICAO or ""]
         slm_rp_station_map = rp_map or nil
+        slm_rp_pax_written_kg   = 0
+        slm_rp_cargo_written_kg = 0
         logMsg(string.format("[SLM-RP] Default: started pax=%.0f cargo=%.0f",
             slm_rp_target_pax_kg, slm_rp_target_cargo_kg))
 
@@ -3435,6 +3442,7 @@ function slm_rp_update()
                     slm_rp_last_pax_loaded = passengers_loaded
                     local pax_weights = slm_rp_station_map and slm_rp_station_map.pax_weights
                     local total_kg = math.abs(delta_pax) * slm_rp_target_pax_kg / math.max(1, passengers_total or 1)
+                    slm_rp_pax_written_kg = math.max(0, slm_rp_pax_written_kg + (delta_pax > 0 and total_kg or -total_kg))
                     if pax_weights then
                         local total_w = 0
                         for _, w in ipairs(pax_weights) do total_w = total_w + w end
@@ -3450,9 +3458,7 @@ function slm_rp_update()
                     end
                 end
             end
-            local sum_pax = 0
-            for _, i in ipairs(pax_indices) do sum_pax = sum_pax + (dr[i] or 0) end
-            pax_done_rp = sum_pax >= slm_rp_target_pax_kg - 0.5
+            pax_done_rp = slm_rp_pax_written_kg >= slm_rp_target_pax_kg - 0.5
         end
 
         if (cargo_total or 0) > 0 and slm_rp_target_cargo_kg > 0 then
@@ -3464,6 +3470,7 @@ function slm_rp_update()
                     slm_rp_last_cargo_loaded = cargo_loaded
                     local cargo_weights = slm_rp_station_map and slm_rp_station_map.cargo_weights
                     local total_kg = to_kg(math.abs(delta_units))
+                    slm_rp_cargo_written_kg = math.max(0, slm_rp_cargo_written_kg + (delta_units > 0 and total_kg or -total_kg))
                     if cargo_weights then
                         local total_w = 0
                         for _, w in ipairs(cargo_weights) do total_w = total_w + w end
@@ -3479,9 +3486,7 @@ function slm_rp_update()
                     end
                 end
             end
-            local sum_cargo = 0
-            for _, i in ipairs(cargo_indices) do sum_cargo = sum_cargo + (dr[i] or 0) end
-            cargo_done_rp = sum_cargo >= slm_rp_target_cargo_kg - 0.5
+            cargo_done_rp = slm_rp_cargo_written_kg >= slm_rp_target_cargo_kg - 0.5
         end
 
     elseif slm_aircraft_type == "zibo" then
@@ -3547,7 +3552,7 @@ function slm_rp_update()
 
         if (cargo_total or 0) > 0 and slm_rp_target_cargo_kg > 0 then
             local frac = math.min(1.0, (cargo_loaded or 0) / cargo_total)
-            local half  = (slm_toliss_cargo_kg() / 2) * frac
+            local half  = (slm_toliss_cargo() / 2) * frac
             slm_rp_toliss_fwdcargo_dr[0] = half
             slm_rp_toliss_aftcargo_dr[0] = half
             cargo_done_rp = (cargo_loaded or 0) >= (cargo_total or 0)
@@ -3653,7 +3658,7 @@ function slm_rp_unload_update()
 
         if (cargo_total or 0) > 0 then
             local remaining_frac = math.max(0, 1.0 - (cargo_unloaded or 0) / cargo_total)
-            local half = (slm_toliss_cargo_kg() / 2) * remaining_frac
+            local half = (slm_toliss_cargo() / 2) * remaining_frac
             slm_rp_toliss_fwdcargo_dr[0] = half
             slm_rp_toliss_aftcargo_dr[0] = half
         end
@@ -4861,7 +4866,7 @@ preset_values.veryfast  = capture_preset(apply_veryfast_timings)
 function create_embark_window()
     if embark_wnd == nil then
         embark_wnd = float_wnd_create(500, 900, 1, true)
-        float_wnd_set_title(embark_wnd, "Simload Manager 4.7")
+        float_wnd_set_title(embark_wnd, "Simload Manager 4.8")
         float_wnd_set_imgui_builder(embark_wnd, "build_embark_window")
         float_wnd_set_onclose(embark_wnd, "on_close_embark_window")
         logMsg("[SLM] Embark window created.")
@@ -4962,8 +4967,8 @@ function slm_toliss_update_zfwcg()
 
     local fwd_cargo_kg, aft_cargo_kg
     if slm_rp_toliss_fwdcargo_dr and slm_rp_toliss_aftcargo_dr then
-        fwd_cargo_kg = slm_rp_toliss_fwdcargo_dr[0]
-        aft_cargo_kg = slm_rp_toliss_aftcargo_dr[0]
+        fwd_cargo_kg = to_kg(slm_rp_toliss_fwdcargo_dr[0])  -- ToLiss unit = OFP unit
+        aft_cargo_kg = to_kg(slm_rp_toliss_aftcargo_dr[0])
     else
         local cargo_kg = to_kg(SLM_real_cargo or 0)
         fwd_cargo_kg = cargo_kg / 2
