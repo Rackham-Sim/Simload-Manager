@@ -1,0 +1,1707 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SimLoad Manager</title>
+<!--
+  SimLoad Manager - web window (CEF).
+  Contract: the plugin calls slm.onLang(dict); the page asks for the state with
+  xplane.slmGetState({ v }) about 4 times a second and gets { v, running, state }
+  when it changed (state being SLM_State, src/SimLoadManager.lua), else { v }.
+  slm.onState({ running, state }) stays for tests. The page never decides anything:
+  it shows the state and sends user actions with xplane.slmAction({ name, arg }).
+  xplane.slmFit({ h }) reports the content height so the plugin can size the window.
+  Web version (local network, served by the plugin over http://): window.xplane is
+  replaced by calls to /api/state, /api/action and /api/lang; no Settings tab, the
+  language follows X-Plane, and links open on the device (#SL12).
+  No text in this file: every label comes from lang/<code>.json (data-i18n / t()).
+  Self-contained on purpose (no external file), so the plugin can inject it if
+  file:// URLs are refused.
+-->
+<style>
+:root{
+  color-scheme:dark;
+  --bg:#0d131a; --panel:#141d27; --panel2:#1a2532; --line:#26364a; --line2:#32465e;
+  --text:#e4ebf2; --muted:#8a9cb0; --faint:#5b6d82;
+  --accent:#f2b544; --accent-ink:#1a1204; --cyan:#58d0e3;
+  --ok:#3fd68b; --warn:#f2b544; --crit:#ff6a5f; --track:#223041;
+  --f-disp:"Bahnschrift SemiCondensed","Bahnschrift","Arial Narrow",system-ui,sans-serif;
+  --f-body:"Segoe UI",system-ui,sans-serif;
+  --f-mono:"Cascadia Mono","Consolas",ui-monospace,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--text);font-family:var(--f-body);font-size:14px;line-height:1.45;overflow-y:auto;-webkit-user-select:none;user-select:none}
+input{-webkit-user-select:text;user-select:text}
+h1,h2,h3{margin:0;font-family:var(--f-disp);font-weight:700;letter-spacing:.02em}
+button{font:inherit}
+[hidden]{display:none!important}
+.mono{font-family:var(--f-mono);font-variant-numeric:tabular-nums}
+.label{font-family:var(--f-mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+.sp{flex:1}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.stack{display:flex;flex-direction:column;gap:12px;min-width:0}
+
+/* top bar */
+.top{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:10px 16px;background:var(--panel2);border-bottom:1px solid var(--line)}
+.brand{font-family:var(--f-disp);font-weight:700;font-size:17px;letter-spacing:.08em;text-transform:uppercase}
+.pill{display:inline-flex;align-items:center;gap:6px;font-family:var(--f-mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;padding:3px 9px;border-radius:20px;border:1px solid var(--line2);color:var(--muted)}
+.pill::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
+.pill.live{color:var(--cyan);border-color:var(--cyan)}
+.pill.ok{color:var(--ok);border-color:var(--ok)}
+.pill.warn{color:var(--warn);border-color:var(--warn)}
+.tabs{display:flex;gap:4px;flex-wrap:wrap}
+.tab{font-family:var(--f-disp);font-weight:600;font-size:15px;letter-spacing:.04em;padding:6px 12px;border-radius:6px;border:1px solid var(--line);background:var(--panel);color:var(--muted);cursor:pointer}
+.tab[aria-selected="true"]{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.tab:disabled{opacity:.4;cursor:default}
+/* Settings is not a flight view: set apart from Ground Ops / Loadsheet by a divider */
+.tab[data-tab="settings"]{position:relative;margin-left:21px}
+.tab[data-tab="settings"]::before{content:"";position:absolute;left:-13px;top:5px;bottom:5px;width:1px;background:var(--line2)}
+/* The window has no X-Plane frame: the top bar moves it (xplane.slmWindow) and
+   holds the close button; a 1px border outlines it. */
+html{border:1px solid var(--line2)}
+.top{cursor:move}
+.top .tab,.top .wbtn{cursor:pointer}
+.wctl{display:flex;gap:2px;margin-left:4px}
+.wbtn{display:grid;place-items:center;width:30px;height:30px;padding:0;border-radius:6px;border:1px solid transparent;background:transparent;color:var(--muted)}
+.wbtn svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.wbtn:hover{color:var(--text);border-color:var(--line2)}
+.wbtn.close:hover{color:#fff;background:var(--crit);border-color:var(--crit)}
+/* Web version: a normal browser page, no window to move or close, no Settings. */
+html.web{border:0}
+html.web .top{cursor:default}
+html.web .wctl,html.web .tab[data-tab="settings"]{display:none}
+html:not(.web) #web-lost{display:none}
+.web-urls{display:flex;flex-direction:column;gap:2px;font-family:var(--f-mono);font-size:13px;-webkit-user-select:text;user-select:text}
+.web-urls span{color:var(--muted);font-family:var(--f-body);font-size:11.5px}
+/* QR code: dark on white with its quiet zone, or phone cameras miss it. */
+.web-qr{display:flex;flex-direction:column;align-items:center;gap:6px;font-size:11.5px;color:var(--muted);text-align:center}
+.web-qr svg{width:150px;height:150px;display:block;border-radius:6px}
+
+main{padding:16px}
+#v-ops{display:flex;flex-direction:column;gap:14px;padding-bottom:26px}
+#v-ops[hidden]{display:none}
+.banner{padding:9px 14px;border-radius:8px;font-size:13.5px;border:1px solid}
+.banner.crit{border-color:color-mix(in srgb,var(--crit) 60%,transparent);background:color-mix(in srgb,var(--crit) 12%,transparent)}
+.banner.warn{border-color:color-mix(in srgb,var(--warn) 55%,transparent);background:color-mix(in srgb,var(--warn) 10%,transparent)}
+.banner.info{border-color:var(--line2);background:var(--panel);color:var(--muted)}
+main > .banner{margin-bottom:12px}
+
+/* buttons */
+.btn{font-family:var(--f-disp);font-weight:600;font-size:15px;letter-spacing:.04em;padding:8px 14px;border-radius:6px;border:1px solid var(--line2);background:var(--panel2);color:var(--text);cursor:pointer;white-space:nowrap}
+.btn:hover:not(:disabled){border-color:var(--cyan)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.btn.primary:hover:not(:disabled){filter:brightness(1.08)}
+.btn.ghost{background:transparent}
+.btn.small{font-size:13.5px;padding:5px 10px}
+.btn.xs{font-size:12.5px;padding:3px 8px}
+.btn.big{font-size:16px;padding:9px 18px}
+.btn:disabled{opacity:.4;cursor:default}
+.btn.on{border-color:var(--cyan);color:var(--cyan)}
+.link{background:none;border:0;padding:0;color:var(--muted);cursor:pointer;font-size:12px}
+.link:hover{color:var(--text)}
+
+/* flight header */
+.flight{display:grid;grid-template-columns:auto 1fr auto;gap:18px;align-items:center;padding-bottom:14px;border-bottom:1px solid var(--line)}
+.who{display:flex;flex-direction:column;gap:5px;min-width:0}
+.cs{font-family:var(--f-disp);font-size:32px;font-weight:700;line-height:1}
+.ac{font-family:var(--f-mono);font-size:11px;color:var(--muted);letter-spacing:.06em}
+.src{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:2px}
+.src-tag{font-family:var(--f-mono);font-size:11.5px;color:var(--ok)}
+.route{grid-column:2;display:flex;align-items:flex-start;gap:12px;justify-content:center;min-width:0}
+.apt{display:flex;flex-direction:column;align-items:center;gap:5px;min-width:0;text-align:center;font-family:var(--f-disp);font-size:28px;font-weight:700;line-height:1}
+/* airport name from SimBrief, under the ICAO */
+.apt small{max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--f-body);font-size:12px;font-weight:500;line-height:1.2;color:var(--muted)}
+.apt small:empty{display:none}
+/* the line stays level with the ICAO codes (half their height), names or not */
+.route .line{flex:1;max-width:160px;height:1px;margin-top:14px;background:var(--line2);position:relative}
+.route .line::after{content:"\2708";position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);color:var(--accent);font-size:24px;line-height:1;background:var(--bg);padding:0 8px}
+.times{grid-column:3;border-collapse:collapse;font-family:var(--f-mono);font-size:13.5px;font-weight:600}
+.times th{font-weight:600;color:var(--muted);text-align:right;padding:0 0 3px 14px;font-size:11.5px;letter-spacing:.08em;text-transform:uppercase}
+.times td{text-align:right;padding:2px 0 2px 14px}
+.times td:first-child{text-align:left;color:var(--text);font-family:var(--f-body);font-weight:500;padding-left:0}
+
+/* forms */
+.form{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px 10px;padding:12px 14px;background:var(--panel);border:1px solid var(--line);border-radius:10px}
+.field{display:flex;flex-direction:column;gap:3px}
+.field span{font-size:11.5px;color:var(--muted)}
+input[type=text],input[type=number],input[type=password]{font-family:var(--f-mono);font-size:13px;padding:6px 8px;border-radius:6px;border:1px solid var(--line2);background:var(--panel2);color:var(--text);width:100%}
+input:focus{outline:1px solid var(--cyan);border-color:var(--cyan)}
+input:disabled{opacity:.5}
+select{font:inherit;font-size:12.5px;padding:5px;border-radius:6px;border:1px solid var(--line2);background:var(--panel2);color:var(--text);max-width:100%}
+.lf-lines{font-family:var(--f-mono);font-size:12.5px;white-space:pre-wrap;margin:6px 0 8px}
+
+/* command strip */
+.cmd{display:flex;flex-wrap:wrap;align-items:center;gap:14px 20px;padding:12px 16px;background:var(--panel);border:1px solid var(--line);border-radius:10px}
+.prog{display:flex;align-items:center;gap:12px}
+.ring-box{position:relative;width:56px;height:56px;flex:none}
+.ring-box svg{display:block}
+/* No transition on values refreshed 4x/s: it would never end and keep Chromium
+   repainting every frame (~26 ms per frame in X-Plane, #SL08). */
+#ring{transition:stroke .4s ease}
+.ring-box.complete #ring{stroke:var(--ok)}
+.ring-check{position:absolute;left:0;top:0;transform-origin:50% 50%}
+.ring-check.pop{animation:chip-in .6s ease-out}
+.prog .pct{font-family:var(--f-mono);font-size:24px;font-weight:600;line-height:1.1}
+.prog .rem{font-family:var(--f-mono);font-size:12px;color:var(--muted)}
+.vsep{width:1px;align-self:stretch;background:var(--line)}
+.seg{display:inline-flex;border:1px solid var(--line2);border-radius:7px;overflow:hidden}
+.seg button{font-size:13px;font-weight:600;padding:6px 12px;border:0;background:transparent;color:var(--muted);cursor:pointer;border-right:1px solid var(--line)}
+.seg button:last-child{border-right:0}
+/* Same weight selected or not: a bolder label would widen the button and shift the switch. */
+.seg button[aria-pressed="true"]{background:var(--cyan);color:var(--bg)}
+.seg button:disabled{cursor:default}
+.seg.locked{opacity:.5}
+.check{display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:var(--muted)}
+.sw{width:34px;height:20px;border-radius:10px;border:1px solid var(--line2);background:var(--track);position:relative;padding:0;cursor:pointer;flex:none}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--muted);transition:transform .15s}
+.sw[aria-checked="true"]{border-color:var(--cyan);background:color-mix(in srgb,var(--cyan) 35%,var(--track))}
+.sw[aria-checked="true"]::after{transform:translateX(14px);background:var(--cyan)}
+.sw:disabled{opacity:.45;cursor:default}
+.hint{font-size:13px;color:var(--warn)}
+
+/* body */
+.body{display:grid;grid-template-columns:minmax(0,1fr) 250px;gap:16px;align-items:start}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;gap:10px}
+.card.dev{border-style:dashed;border-color:var(--line2)}
+.card .btn.wide{text-align:left}
+
+/* operations list */
+.ops{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.done-line{display:flex;flex-wrap:wrap;align-items:center;gap:8px 18px;padding:10px 16px;border-bottom:1px solid var(--line);font-size:13px;color:var(--muted)}
+.chip{display:inline-flex;align-items:center;gap:8px}
+.chip i{width:9px;height:9px;border-radius:50%;background:var(--ok)}
+/* One line per step: dot | name (+ status) | Act./Schd | bar (+ step buttons) */
+.op{display:grid;grid-template-columns:16px minmax(150px,210px) 250px minmax(0,1fr);gap:14px;align-items:center;padding:9px 16px;border-bottom:1px solid var(--line)}
+/* A finished step folds away, then pops into the done line. */
+.op.folding{overflow:hidden;transition:height .5s ease,padding .5s ease,opacity .35s ease,border-color .5s ease}
+.op.folding.folded{height:0!important;padding-top:0;padding-bottom:0;opacity:0;border-bottom-color:transparent}
+@keyframes chip-in{from{opacity:0;transform:translateY(10px) scale(.85)}60%{opacity:1;transform:translateY(-2px) scale(1.05)}to{opacity:1;transform:none}}
+@keyframes chip-glow{from{box-shadow:0 0 0 6px color-mix(in srgb,var(--ok) 45%,transparent)}to{box-shadow:0 0 0 0 transparent}}
+.chip.pop{animation:chip-in .6s ease-out}
+.chip.pop i{animation:chip-glow 1.2s ease-out .3s}
+.ops > :last-child{border-bottom:0}
+.op.active{background:color-mix(in srgb,var(--cyan) 5%,transparent)}
+.dot{width:11px;height:11px;border-radius:50%;border:2px solid var(--faint);justify-self:center}
+.op.active .dot{border-color:var(--cyan);background:var(--cyan);box-shadow:0 0 0 4px color-mix(in srgb,var(--cyan) 25%,transparent)}
+.op.done .dot{border-color:var(--ok);background:var(--ok)}
+.op .nm{font-weight:600}
+.op.pending .nm{color:var(--muted);font-weight:400}
+.op .sub{font-family:var(--f-mono);font-size:12px;color:var(--muted);white-space:pre-wrap}
+.fig{display:flex;flex-direction:column;gap:6px;min-width:0}
+.op .wide{grid-column:2 / 4}
+.v{display:flex;align-items:baseline;gap:8px;font-family:var(--f-mono);font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden}
+.v b{font-size:19px;font-weight:600}
+.v span{font-size:12.5px;color:var(--muted)}
+.v b + span{margin-left:6px}
+.op.pending .v b{color:var(--muted)}
+.bar{height:6px;border-radius:3px;background:var(--track);overflow:hidden}
+.bar i{display:block;height:100%;background:var(--cyan)}
+.op.done .bar i{background:var(--ok)}
+.bar.b-ok i{background:var(--ok)} .bar.b-warn i,.bar.b-event i{background:var(--warn)} .bar.b-bad i{background:var(--crit)}
+.note{padding:9px 16px;border-bottom:1px solid var(--line);font-family:var(--f-mono);font-size:12.5px;white-space:pre-wrap}
+.empty{padding:18px 16px;color:var(--muted);font-size:13.5px}
+.t-done,.t-ok{color:var(--ok)} .t-pending,.t-muted{color:var(--muted)} .t-event,.t-warn,.t-notice,.t-amber{color:var(--warn)}
+.t-info,.t-eta{color:var(--cyan)} .t-bad,.t-error{color:var(--crit)}
+
+/* side rail */
+.topup{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-family:var(--f-mono);font-size:12.5px;margin:0}
+.topup dt{color:var(--muted)} .topup dd{margin:0;text-align:right}
+.status{font-size:12.5px}
+
+/* Footer pinned to the bottom of the window; #v-ops keeps room for it. */
+.foot{position:fixed;left:0;right:0;bottom:0;z-index:4;display:flex;align-items:center;gap:14px;padding:8px 16px;background:var(--bg);border-top:1px solid var(--line);font-size:12px}
+
+/* settings */
+#v-settings > .banner{margin-bottom:12px}
+.set-grid{display:grid;grid-template-columns:190px minmax(0,1fr);background:var(--panel);border:1px solid var(--line);border-radius:10px;min-height:380px}
+.set-nav{border-right:1px solid var(--line);display:flex;flex-direction:column;gap:2px;padding:8px}
+.set-nav button{text-align:left;font-size:14.5px;padding:9px 12px;border-radius:6px;border:0;background:transparent;color:var(--muted);cursor:pointer}
+.set-nav button:hover{color:var(--text)}
+.set-nav button[aria-selected="true"]{background:var(--panel2);color:var(--text);box-shadow:inset 3px 0 0 var(--accent)}
+.set-pane{padding:4px 22px 10px;display:flex;flex-direction:column}
+/* Panes stacked in one cell: the tallest sets the height, which stays the same from one section to another. */
+.set-panes{display:grid}
+.set-panes > .set-pane{grid-area:1/1}
+.set-panes > .set-pane[hidden]{display:flex!important;visibility:hidden}
+.set-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:16px;align-items:center;padding:12px 0;border-bottom:1px solid var(--line)}
+.set-pane > :last-child,#custom-timings > :last-child{border-bottom:0}
+.set-row.sub{padding-left:22px}
+.set-row .h{font-weight:600}
+.set-row .d,.set-pane .d{font-size:12.5px;color:var(--muted)}
+.set-row.off .h{color:var(--muted)}
+.set-row input[type=text]{width:220px}
+.secret{display:flex;gap:6px;align-items:center}
+.secret input{width:220px}
+.secret .btn{min-width:52px}
+.set-row select{font-size:13.5px;padding:6px 8px;min-width:220px}
+.set-head{padding:16px 0 2px}
+.rng{display:flex;align-items:center;gap:10px}
+.rng input{width:190px;accent-color:var(--cyan)}
+.rng span{min-width:44px;text-align:right;font-size:13px}
+.tim{width:100%;border-collapse:collapse;margin:6px 0 4px;font-size:13px}
+.tim th{font-family:var(--f-mono);font-size:10.5px;font-weight:400;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);text-align:right;padding:4px 0 6px 12px}
+.tim th:first-child{text-align:left;padding-left:0}
+.tim td{padding:3px 0 3px 12px;text-align:right;font-family:var(--f-mono);color:var(--muted);white-space:nowrap}
+.tim td:first-child{text-align:left;padding-left:0;font-family:var(--f-body);color:var(--text)}
+.tim td input{width:92px;text-align:right}
+.tim tbody tr{border-top:1px solid var(--line)}
+
+/* tab highlight: loadsheet ready and not seen yet (no blinking, Etienne's choice) */
+.tab.attn{border-color:var(--ok);color:var(--ok)}
+.tab.attn::after{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--ok);margin-left:7px;vertical-align:2px}
+
+/* loadsheet */
+#v-ls{display:flex;flex-direction:column}
+#ls-doc{display:flex;flex-direction:column;gap:14px}
+.ls-head{display:flex;flex-wrap:wrap;gap:12px 24px;justify-content:space-between;align-items:flex-start;padding-bottom:12px;border-bottom:1px solid var(--line)}
+.ls-head h2{font-size:24px}
+.ls-id{font-size:15px;font-weight:600}
+.ls-sub{font-size:13px;color:var(--muted);white-space:pre-line}
+.ls-people{display:grid;grid-template-columns:auto auto;gap:3px 12px;margin:0;font-size:13px}
+.ls-people dt{color:var(--muted)} .ls-people dd{margin:0}
+.ls-people small{color:var(--faint);margin-left:5px}
+.ls-body{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:16px;align-items:start}
+.ls-table-box{padding:4px 16px 8px}
+.ls-table{width:100%;border-collapse:collapse;font-size:13.5px}
+.ls-table th{font-family:var(--f-mono);font-size:10.5px;font-weight:400;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);text-align:right;padding:8px 0 6px 14px}
+.ls-table td{padding:5px 0 5px 14px;text-align:right;font-family:var(--f-mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+.ls-table td:first-child,.ls-table th:first-child{text-align:left;padding-left:0}
+.ls-table td:first-child{font-family:var(--f-body)}
+.ls-table tr.sec td{padding-top:14px;font-family:var(--f-mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--accent);border-bottom:1px solid var(--line)}
+.ls-table tr.tot td{font-weight:600}
+.ls-table td small{color:var(--muted);margin-left:6px}
+.ls-table tr.note td{font-size:12px;color:var(--muted);text-align:left;white-space:normal;padding-top:2px}
+.ls-cg{display:flex;align-items:baseline;gap:10px}
+.ls-cg b{font-size:26px}
+.ls-cg span{color:var(--muted);font-size:13px}
+.ls-cg b.out{color:var(--crit)}
+.ls-tot{font-size:12.5px;color:var(--muted)}
+.tanks{display:flex;flex-direction:column;gap:12px}
+.tank-row{display:flex;justify-content:center;gap:8px}
+.tank{flex:1;max-width:64px;display:flex;flex-direction:column;align-items:center;gap:4px;min-width:0}
+.tank .tb{width:100%;height:84px;border:1px solid var(--line2);border-radius:5px;background:var(--track);position:relative;overflow:hidden}
+.tank .tb i{position:absolute;left:0;right:0;bottom:0;background:var(--cyan)}
+.tank.C .tb i{background:color-mix(in srgb,var(--cyan) 70%,var(--ok))}
+.tank.aft .tb i{background:var(--accent)}
+.tank b{font-family:var(--f-mono);font-size:11.5px;font-weight:600}
+.tank small{font-size:10.5px;color:var(--muted);text-align:center;line-height:1.2}
+.tanks.compact .tank .tb{height:60px}
+.tanks.compact .tank b{font-size:10.5px}
+/* load distribution: fuselage side view (nose left), one section per zone SLM fills */
+.dist{display:flex;flex-direction:column;gap:8px}
+.dist-sub{font-size:12px;color:var(--muted)}
+.fus{display:flex;gap:2px;height:40px;padding:3px;border:1px solid var(--line2);border-radius:20px 7px 7px 20px;background:var(--bg)}
+.fus .zone{position:relative;overflow:hidden;background:var(--track);border-radius:2px;flex-basis:0}
+.fus .zone:first-child{border-radius:16px 2px 2px 16px}
+.fus .zone:last-child{border-radius:2px 4px 4px 2px}
+.fus .zone.plain{background:var(--panel2)}
+.fus .zone i{position:absolute;left:0;right:0;bottom:0;background:var(--cyan)}
+.zlabels{display:flex;gap:2px;padding:0 4px}
+.zlabels div{display:flex;flex-direction:column;align-items:center;min-width:0;flex-basis:0}
+.zlabels b{font-family:var(--f-mono);font-size:11.5px;font-weight:600}
+.zlabels small{font-family:var(--f-mono);font-size:10.5px;color:var(--muted)}
+.holds{display:grid;gap:8px}
+.hold{border:1px solid var(--line2);border-radius:6px;padding:6px 10px;display:flex;flex-direction:column;gap:1px;min-width:0}
+.hold small{font-size:11px;color:var(--muted)}
+.hold b{font-family:var(--f-mono);font-size:14px;font-weight:600;color:var(--accent)}
+.ls-foot{display:flex;flex-direction:column;gap:6px;align-items:center;padding-top:10px;border-top:1px solid var(--line);font-size:13px;color:var(--muted);text-align:center}
+.ls-foot .ls-wish{color:var(--accent);font-family:var(--f-disp);font-size:15px;letter-spacing:.03em}
+.ls-foot .ls-end{font-family:var(--f-mono);font-size:11px;letter-spacing:.2em;color:var(--faint)}
+
+.soon{max-width:520px;margin:40px auto;text-align:center;color:var(--muted);display:flex;flex-direction:column;gap:10px;align-items:center}
+
+@media (max-width:860px){
+  .body{grid-template-columns:1fr}
+  .flight{grid-template-columns:1fr auto}
+  .route{grid-column:1/-1;order:3;justify-content:flex-start}
+  .times{grid-column:2}
+  .op{grid-template-columns:16px 130px 210px minmax(0,1fr)}
+  .set-grid{grid-template-columns:1fr}
+  .set-nav{flex-direction:row;flex-wrap:wrap;border-right:0;border-bottom:1px solid var(--line)}
+  .set-pane{padding:4px 14px 10px}
+  .ls-body{grid-template-columns:1fr}
+}
+/* Phone, tablet in portrait, AviTab: Ground Ops in one column. */
+@media (max-width:600px){
+  main{padding:10px}
+  .top{padding:8px 10px;gap:8px}
+  .brand{font-size:15px}
+  .flight{grid-template-columns:1fr;gap:12px}
+  .times{grid-column:1}
+  .cs{font-size:26px}
+  .apt{font-size:22px}
+  .cmd{padding:10px 12px;gap:10px 14px}
+  .cmd .vsep{display:none}
+  .op{grid-template-columns:16px minmax(0,1fr);gap:6px 10px;padding:9px 12px}
+  .op > :nth-child(n+3),.op .wide{grid-column:2}
+  .ls-table-box{overflow-x:auto;padding:4px 10px 8px}
+}
+/* No prefers-reduced-motion override: Windows "show animations" off (common on
+   sim PCs for performance) would disable them, and Etienne wants them. */
+</style>
+</head>
+<body>
+<header class="top">
+  <span class="brand" data-i18n="app.title"></span>
+  <span class="pill" id="pill"></span>
+  <span class="sp"></span>
+  <nav class="tabs" role="tablist">
+    <button class="tab" role="tab" data-tab="ops" aria-selected="true" data-i18n="tab.ground_ops"></button>
+    <button class="tab" role="tab" data-tab="loadsheet" aria-selected="false" data-i18n="tab.loadsheet"></button>
+    <button class="tab" role="tab" data-tab="settings" aria-selected="false" data-i18n="tab.settings"></button>
+  </nav>
+  <span class="wctl">
+    <button class="wbtn close" data-win="close" data-i18n-title="win.close">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 3l10 10M13 3 3 13"/></svg>
+    </button>
+  </span>
+</header>
+
+<main>
+  <div class="banner info" id="waiting" data-i18n="app.waiting"></div>
+  <div class="banner crit" id="stopped" hidden data-i18n="app.script_stopped"></div>
+  <div class="banner crit" id="web-lost" hidden data-i18n="web.lost"></div>
+
+  <!-- GROUND OPS -->
+  <section id="v-ops" hidden>
+    <!-- Flight header, with the data source and its load buttons -->
+    <div class="flight">
+      <div class="who">
+        <div class="cs" id="f-cs"></div>
+        <div class="ac" id="f-ac"></div>
+        <div class="src">
+          <span class="src-tag" id="f-src"></span>
+          <button class="btn xs ghost" id="btn-load"></button>
+          <button class="btn xs ghost" data-act="open_dispatch" id="btn-dispatch" data-i18n="data.dispatch"></button>
+          <button class="btn xs ghost" data-act="open_last_flight" id="btn-lf" data-i18n="data.load_last_flight"></button>
+        </div>
+      </div>
+      <div class="route" id="f-route">
+        <div class="apt"><span id="f-orig"></span><small id="f-orig-name"></small></div><div class="line"></div><div class="apt"><span id="f-dest"></span><small id="f-dest-name"></small></div>
+      </div>
+      <table class="times">
+        <thead><tr><th style="text-align:left"><span data-i18n="times.zulu"></span> <span id="t-now" style="color:var(--text)"></span></th>
+          <th data-i18n="times.sched"></th><th data-i18n="times.act"></th></tr></thead>
+        <tbody id="t-rows"></tbody>
+      </table>
+    </div>
+
+    <!-- Notices: only when they apply -->
+    <div class="banner warn" id="b-beacon" hidden data-i18n="seq.beacon_hold"></div>
+    <div class="banner warn" id="b-exclusion" hidden></div>
+    <div class="banner warn" id="fsd-missing" hidden data-i18n="data.fsd_missing"></div>
+    <div id="lf" class="banner warn" hidden>
+      <strong data-i18n="lf.title"></strong>
+      <div class="lf-lines" id="lf-lines"></div>
+      <div class="row">
+        <button class="btn primary small" data-act="confirm_last_flight" data-i18n="lf.confirm"></button>
+        <button class="btn small" data-act="cancel_last_flight" data-i18n="lf.cancel"></button>
+      </div>
+    </div>
+    <div id="d-manual" class="form" hidden>
+      <label class="field"><span data-i18n="manual.pax"></span><input type="number" min="0" data-set="manual_pax"></label>
+      <label class="field"><span data-i18n="manual.max_pax"></span><input type="number" min="0" data-set="manual_max_pax"></label>
+      <label class="field"><span data-i18n="manual.cargo"></span><input type="number" min="0" step="10" data-set="manual_cargo"></label>
+      <label class="field"><span data-i18n="manual.fuel"></span><input type="number" min="0" step="100" data-set="manual_fuel"></label>
+      <label class="field"><span data-i18n="manual.fltnum"></span><input type="text" maxlength="11" data-set="manual_fltnum"></label>
+      <label class="field"><span data-i18n="manual.orig"></span><input type="text" maxlength="4" data-set="manual_orig"></label>
+      <label class="field"><span data-i18n="manual.dest"></span><input type="text" maxlength="4" data-set="manual_dest"></label>
+      <label class="field"><span data-i18n="manual.std"></span><input type="text" maxlength="7" data-set="manual_std"></label>
+      <label class="field"><span data-i18n="manual.sta"></span><input type="text" maxlength="7" data-set="manual_sta"></label>
+    </div>
+
+    <!-- Command strip: progress | stand | sequence buttons -->
+    <div class="cmd">
+      <div class="prog">
+        <div class="ring-box" id="ring-box">
+          <svg width="56" height="56" viewBox="0 0 84 84" aria-hidden="true">
+            <circle cx="42" cy="42" r="34" fill="none" stroke="var(--track)" stroke-width="9"/>
+            <circle id="ring" cx="42" cy="42" r="34" fill="none" stroke="var(--cyan)" stroke-width="9" stroke-linecap="round"
+              stroke-dasharray="213.6" stroke-dashoffset="213.6" transform="rotate(-90 42 42)"/>
+          </svg>
+          <svg class="ring-check" id="ring-check" hidden width="56" height="56" viewBox="0 0 84 84" aria-hidden="true">
+            <rect x="26" y="26" width="32" height="32" rx="7" fill="var(--ok)"/>
+            <path d="M33 42.5l6 6 12-13" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
+        <div><div class="pct" id="pct">0%</div><div class="rem" id="remain"></div></div>
+      </div>
+      <span class="vsep"></span>
+      <div class="stack" style="gap:6px">
+        <span class="label" data-i18n="stand.title"></span>
+        <div class="row" style="gap:14px">
+          <div class="seg" id="stand">
+            <button data-loc="remote" data-i18n="stand.remote"></button>
+            <button data-loc="terminal" data-i18n="stand.terminal"></button>
+            <button data-loc="jetway" data-i18n="stand.jetway"></button>
+          </div>
+          <label class="check"><button class="sw" role="switch" id="own-stairs" aria-checked="false"></button><span data-i18n="stand.own_stairs"></span></label>
+        </div>
+      </div>
+      <span class="sp"></span>
+      <span class="hint" id="in-flight-note" hidden data-i18n="seq.in_flight"></span>
+      <button class="btn primary big" data-act="start_loading" id="btn-start" data-i18n="seq.start_loading"></button>
+      <button class="btn primary big" data-act="start_turnaround" id="btn-turn" data-i18n="seq.turnaround"></button>
+      <button class="btn primary big" data-act="start_ron" id="btn-ron" data-i18n="seq.ron"></button>
+      <button class="btn ghost" style="margin-left:16px" data-act="reset" data-i18n="seq.reset"></button>
+    </div>
+
+    <!-- Operations (steps and their figures) | ground services -->
+    <div class="body">
+      <div class="ops" id="ops"></div>
+
+      <div class="stack">
+        <div class="card">
+          <span class="label" data-i18n="services.title"></span>
+          <button class="btn wide" data-act="toggle_topup" id="btn-topup" data-i18n="tools.topup"></button>
+          <div id="topup" class="stack" style="gap:8px" hidden>
+            <dl class="topup">
+              <dt data-i18n="topup.current"></dt><dd id="tu-cur"></dd>
+              <dt data-i18n="topup.plan"></dt><dd id="tu-plan"></dd>
+            </dl>
+            <label class="field"><span id="tu-label"></span><input type="number" min="0" step="100" id="tu-target"></label>
+            <div class="row">
+              <button class="btn primary small" id="tu-apply" data-i18n="topup.apply"></button>
+              <button class="btn small" data-act="cancel_topup" data-i18n="topup.cancel"></button>
+            </div>
+          </div>
+          <button class="btn wide" data-act="toggle_sges" data-i18n="tools.sges"></button>
+          <div class="status" id="acars" hidden></div>
+        </div>
+
+        <div class="card dev" id="dev" hidden>
+          <span class="label" data-i18n="dev.title"></span>
+          <button class="btn small" data-act="dev_cycle" id="dev-cycle"></button>
+          <button class="btn small" data-act="dev_force_load" id="dev-force-load"></button>
+          <select id="dev-ev"></select>
+          <button class="btn small" id="dev-force" data-i18n="dev.force"></button>
+        </div>
+      </div>
+    </div>
+
+    <div class="foot">
+      <span class="status" id="update"></span>
+      <span class="sp"></span>
+      <span class="status t-muted" id="version"></span>
+      <button class="link" data-act="open_simchecklist" data-i18n="tools.simchecklist"></button>
+      <button class="link" data-act="open_kofi" data-i18n="tools.kofi"></button>
+    </div>
+  </section>
+
+  <!-- SETTINGS: one row per SLM_State.settings key, changed with the "set" action.
+       Rows are enabled from SLM_State.settings_enabled (rules live in the Lua). -->
+  <section id="v-settings" hidden>
+    <div class="banner warn" id="set-locked" hidden data-i18n="set.locked"></div>
+    <div class="set-grid">
+      <nav class="set-nav" role="tablist">
+        <button role="tab" data-pane="p-ui" aria-selected="true" data-i18n="set.cat.interface"></button>
+        <button role="tab" data-pane="p-data" aria-selected="false" data-i18n="set.cat.data"></button>
+        <button role="tab" data-pane="p-ops" aria-selected="false" data-i18n="set.cat.ops"></button>
+        <button role="tab" data-pane="p-time" aria-selected="false" data-i18n="set.cat.timings"></button>
+        <button role="tab" data-pane="p-snd" aria-selected="false" data-i18n="set.cat.sound"></button>
+        <button role="tab" data-pane="p-acars" aria-selected="false" data-i18n="set.cat.acars"></button>
+        <button role="tab" data-pane="p-web" aria-selected="false" data-i18n="set.cat.web"></button>
+        <button role="tab" data-pane="p-dev" aria-selected="false" data-i18n="set.cat.dev"></button>
+      </nav>
+      <div class="set-panes">
+        <div class="set-pane" id="p-ui">
+          <div class="set-row"><div><div class="h" data-i18n="set.language"></div><div class="d" id="lang-note"></div></div>
+            <select id="lang-sel" data-set="language"></select></div>
+          <div class="set-row"><div><div class="h" data-i18n="set.text_size"></div><div class="d" data-i18n="set.text_size.d"></div></div>
+            <div class="seg" data-key="ui_scale">
+              <button data-val="90" data-num="1">90%</button><button data-val="100" data-num="1">100%</button><button data-val="110" data-num="1">110%</button><button data-val="125" data-num="1">125%</button>
+            </div></div>
+        </div>
+
+        <div class="set-pane" id="p-data" hidden>
+          <div class="set-row"><div><div class="h" data-i18n="set.source"></div><div class="d" data-i18n="set.source.d"></div></div>
+            <div class="seg" data-key="data_source">
+              <button data-val="simbrief" data-i18n="set.source.simbrief"></button><button data-val="manual" data-i18n="set.source.manual"></button><button data-val="fsd" id="src-fsd" data-i18n="set.source.fsd"></button>
+            </div></div>
+          <div class="set-row"><div><div class="h" data-i18n="set.simbrief_id"></div><div class="d" data-i18n="set.simbrief_id.d"></div></div>
+            <div class="secret"><input type="password" autocomplete="off" spellcheck="false" maxlength="100" data-set="simbrief_id" data-secret="1"><button class="btn xs ghost" data-reveal="1" data-i18n="set.show"></button></div></div>
+          <div class="set-row"><div><div class="h" data-i18n="set.captain"></div><div class="d" data-i18n="set.captain.d"></div></div>
+            <input type="text" maxlength="100" data-set="captain"></div>
+          <div class="set-row"><div><div class="h" data-i18n="set.units"></div><div class="d" data-i18n="set.units.d"></div></div>
+            <div class="seg" data-key="unit_system">
+              <button data-val="kg" data-i18n="set.units.kg"></button><button data-val="lbs" data-i18n="set.units.lbs"></button>
+            </div></div>
+        </div>
+
+        <div class="set-pane" id="p-ops" hidden>
+          <div class="set-row"><div><div class="h" data-i18n="set.lowcost"></div><div class="d" data-i18n="set.lowcost.d"></div></div>
+            <button class="sw" role="switch" data-key="lowcost"></button></div>
+          <div class="set-row sub"><div><div class="h" data-i18n="set.tankering"></div><div class="d" data-i18n="set.tankering.d"></div></div>
+            <button class="sw" role="switch" data-key="tankering"></button></div>
+          <div class="set-row"><div><div class="h" data-i18n="set.fuel_first"></div><div class="d" data-i18n="set.fuel_first.d"></div></div>
+            <button class="sw" role="switch" data-key="fuel_first"></button></div>
+          <div class="set-row"><div><div class="h" data-i18n="set.rf"></div><div class="d"><span data-i18n="set.rf.d"></span> <span class="t-warn" data-excluded="1" data-i18n="set.real_fill.excluded"></span></div></div>
+            <button class="sw" role="switch" data-key="rf_enabled"></button></div>
+          <div class="set-row"><div><div class="h" data-i18n="set.rp"></div><div class="d"><span data-i18n="set.rp.d"></span> <span class="t-warn" data-excluded="1" data-i18n="set.real_fill.excluded"></span></div></div>
+            <button class="sw" role="switch" data-key="rp_enabled"></button></div>
+          <div class="set-row"><div><div class="h" data-i18n="set.skip_briefing"></div><div class="d" data-i18n="set.skip_briefing.d"></div></div>
+            <button class="sw" role="switch" data-key="skip_crew_briefing"></button></div>
+          <div class="set-head label" data-i18n="set.chocks"></div>
+          <div class="set-row"><div><div class="h" data-i18n="set.manual_chocks"></div><div class="d" data-i18n="set.manual_chocks.d"></div></div>
+            <button class="sw" role="switch" data-key="manual_chocks"></button></div>
+          <div class="set-row sub" id="row-bpb"><div><div class="h" data-i18n="set.bpb_chocks"></div><div class="d" data-i18n="set.bpb_chocks.d"></div></div>
+            <button class="sw" role="switch" data-key="bpb_remove_chocks"></button></div>
+          <div class="set-row"><div><div class="h" data-i18n="set.no_chocks"></div><div class="d" data-i18n="set.no_chocks.d"></div></div>
+            <button class="sw" role="switch" data-key="no_chocks"></button></div>
+        </div>
+
+        <div class="set-pane" id="p-time" hidden>
+          <div class="set-row"><div><div class="h" data-i18n="set.preset"></div><div class="d" data-i18n="set.preset.d"></div></div>
+            <div class="seg" data-key="timing_preset">
+              <button data-val="realistic" data-i18n="set.preset.realistic"></button><button data-val="fast" data-i18n="set.preset.fast"></button><button data-val="veryfast" data-i18n="set.preset.veryfast"></button><button data-val="custom" data-i18n="set.preset.custom"></button>
+            </div></div>
+          <div id="custom-timings" hidden>
+            <table class="tim">
+              <thead><tr><th data-i18n="set.tim.param"></th><th data-i18n="set.preset.custom"></th>
+                <th data-i18n="set.preset.realistic"></th><th data-i18n="set.preset.fast"></th><th data-i18n="set.preset.veryfast"></th></tr></thead>
+              <tbody id="tim-rows"></tbody>
+            </table>
+            <div class="set-row"><div><div class="h" data-i18n="set.event_factor"></div><div class="d" id="ef-d"></div></div>
+              <div class="rng"><input type="range" min="0.1" max="1" step="0.01" data-set="custom_event_duration_factor"><span class="mono" data-out="custom_event_duration_factor"></span></div></div>
+          </div>
+          <div class="set-row"><div><div class="h" data-i18n="set.event_chance"></div><div class="d" data-i18n="set.event_chance.d"></div></div>
+            <div class="rng"><input type="range" min="0" max="100" step="1" data-set="event_chance" data-pct="1"><span class="mono" data-out="event_chance"></span></div></div>
+          <div class="set-row"><div><div class="h" data-i18n="set.pax_var"></div><div class="d" data-i18n="set.pax_var.d"></div></div>
+            <button class="sw" role="switch" data-key="pax_variability"></button></div>
+        </div>
+
+        <div class="set-pane" id="p-snd" hidden>
+          <div class="set-row"><div><div class="h" data-i18n="set.volume"></div><div class="d" data-i18n="set.volume.d"></div></div>
+            <div class="rng"><input type="range" min="0" max="1" step="0.01" data-set="volume"><span class="mono" data-out="volume"></span></div></div>
+          <div class="set-row"><div><div class="h" data-i18n="set.mute"></div><div class="d" data-i18n="set.mute.d"></div></div>
+            <button class="sw" role="switch" data-key="muted"></button></div>
+          <div class="set-row"><div><div class="h" data-i18n="set.music"></div><div class="d" data-i18n="set.music.d"></div></div>
+            <button class="sw" role="switch" data-key="boarding_music"></button></div>
+          <div class="set-row sub"><div><div class="h" data-i18n="set.music_vol"></div></div>
+            <div class="rng"><input type="range" min="0" max="1" step="0.01" data-set="boarding_music_vol"><span class="mono" data-out="boarding_music_vol"></span></div></div>
+        </div>
+
+        <div class="set-pane" id="p-acars" hidden>
+          <div class="set-row"><div><div class="h" data-i18n="set.acars"></div><div class="d" data-i18n="set.acars.d"></div></div>
+            <div class="seg" data-key="acars_output">
+              <button data-val="none" data-i18n="set.acars.none"></button><button data-val="hoppie" data-i18n="set.acars.hoppie"></button><button data-val="si" data-i18n="set.acars.si"></button>
+            </div></div>
+          <div class="set-row" id="row-hoppie-logon"><div><div class="h" data-i18n="set.hoppie_logon"></div><div class="d" data-i18n="set.hoppie_logon.d"></div></div>
+            <div class="secret"><input type="password" autocomplete="off" spellcheck="false" maxlength="32" data-set="hoppie_logon" data-secret="1"><button class="btn xs ghost" data-reveal="1" data-i18n="set.show"></button></div></div>
+          <div class="set-row" id="row-hoppie-type"><div><div class="h" data-i18n="set.hoppie_type"></div><div class="d" data-i18n="set.hoppie_type.d"></div></div>
+            <div class="seg" data-key="hoppie_msgtype">
+              <button data-val="telex" data-i18n="set.hoppie_type.telex"></button><button data-val="cpdlc" data-i18n="set.hoppie_type.cpdlc"></button>
+            </div></div>
+          <div class="set-row" id="row-si-key"><div><div class="h" data-i18n="set.si_key"></div><div class="d" data-i18n="set.si_key.d"></div></div>
+            <div class="secret"><input type="password" autocomplete="off" spellcheck="false" maxlength="64" data-set="si_key" data-secret="1"><button class="btn xs ghost" data-reveal="1" data-i18n="set.show"></button></div></div>
+        </div>
+
+        <div class="set-pane" id="p-web" hidden>
+          <div class="set-row"><div><div class="h" data-i18n="set.web"></div><div class="d" data-i18n="set.web.d"></div></div>
+            <button class="sw" role="switch" data-key="web_enabled"></button></div>
+          <div class="set-row"><div><div class="h" data-i18n="set.web_port"></div><div class="d" data-i18n="set.web_port.d"></div></div>
+            <input type="number" min="1024" max="65535" step="1" data-set="web_port" style="width:100px"></div>
+          <div class="set-row"><div><div class="h" data-i18n="set.web_status"></div><div class="d" id="web-status"></div></div></div>
+          <div class="set-row" id="row-web-urls"><div class="web-urls" id="web-urls"></div>
+            <div class="web-qr" id="web-qr-box" hidden><div id="web-qr"></div><div data-i18n="web.qr"></div></div></div>
+        </div>
+
+        <div class="set-pane" id="p-dev" hidden>
+          <div class="set-row"><div><div class="h" data-i18n="set.dev_mode"></div><div class="d" data-i18n="set.dev_mode.d"></div></div>
+            <button class="sw" role="switch" data-key="dev_mode"></button></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- LOADSHEET: SLM_State.loadsheet (figures planned vs actual, tanks) -->
+  <section id="v-ls" hidden>
+    <div class="soon" id="ls-none"><h2 data-i18n="tab.loadsheet"></h2><p data-i18n="ls.no_flight"></p></div>
+    <div id="ls-doc" hidden>
+      <div class="ls-head">
+        <div class="stack" style="gap:4px">
+          <h2 data-i18n="ls.title"></h2>
+          <div class="ls-id mono" id="ls-id"></div>
+          <div class="ls-sub" id="ls-sub"></div>
+        </div>
+        <dl class="ls-people" id="ls-people"></dl>
+      </div>
+      <div class="ls-body">
+        <div class="ops ls-table-box">
+          <table class="ls-table">
+            <thead><tr><th></th><th data-i18n="ls.planned"></th><th data-i18n="ls.actual"></th><th data-i18n="ls.diff"></th></tr></thead>
+            <tbody id="ls-rows"></tbody>
+          </table>
+        </div>
+        <div class="stack">
+          <div class="card" id="ls-cg-card" hidden>
+            <span class="label" data-i18n="ls.cg"></span>
+            <div class="ls-cg"><b class="mono" id="ls-zfwcg"></b><span data-i18n="ls.zfwcg"></span></div>
+            <div class="ls-cg" id="ls-towcg-row" hidden><b class="mono" id="ls-towcg"></b><span data-i18n="ls.towcg"></span></div>
+            <div class="ls-tot" id="ls-cg-lim" hidden></div>
+          </div>
+          <div class="card" id="ls-dist-card" hidden>
+            <span class="label" data-i18n="ls.distrib"></span>
+            <div class="dist" id="ls-cabin" hidden>
+              <div class="dist-sub" data-i18n="ls.distrib.cabin"></div>
+              <div class="fus" id="ls-fus"></div>
+              <div class="zlabels" id="ls-zl"></div>
+            </div>
+            <div class="dist" id="ls-holds-box" hidden>
+              <div class="dist-sub" data-i18n="ls.distrib.holds"></div>
+              <div class="holds" id="ls-holds"></div>
+            </div>
+          </div>
+          <div class="card" id="ls-tanks-card" hidden>
+            <div class="row"><span class="label" data-i18n="ls.tanks"></span><span class="sp"></span><span class="mono ls-tot" id="ls-tank-tot"></span></div>
+            <div class="tanks" id="ls-tanks"></div>
+          </div>
+        </div>
+      </div>
+      <div class="ls-foot">
+        <div class="ls-wish" id="ls-wish"></div>
+        <div class="ls-end" data-i18n="ls.end"></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  var slm = window.slm = {};
+  var L = {};            // language strings
+  var S = null;          // last SLM_State
+  var WS = null;         // web version server status (X-Plane window only)
+  var running = false;
+  var received = false;  // a first state arrived from the plugin
+  var tab = "ops";
+  var opsKey = null;     // structure of the rendered operations list
+  var shownChips = null; // names on the done line, as last rendered
+  var folding = false;   // a finished row is folding away
+  var popNames = [];     // chips to animate on the next rebuild
+
+  var $ = function (id) { return document.getElementById(id); };
+
+  function t(key, vars) {
+    var s = Object.prototype.hasOwnProperty.call(L, key) ? L[key] : key;
+    if (vars) Object.keys(vars).forEach(function (k) { s = s.split("{" + k + "}").join(String(vars[k])); });
+    return s;
+  }
+  // Texts built by the Lua carry their key (#SL17): { key, vars }, plus the
+  // English text for lines. Shown translated when the language file has the key.
+  function tr(x, fallback) {
+    return x && x.key && Object.prototype.hasOwnProperty.call(L, x.key) ? t(x.key, x.vars) : fallback;
+  }
+  function trimLines(s) {
+    return String(s == null ? "" : s).split("\n").map(function (l) { return l.trim(); }).join("\n");
+  }
+  function trLines(lines, parts) {
+    if (Array.isArray(parts) && parts.length) {
+      return parts.map(function (p) { return tr(p, trimLines(p.text)); }).join("\n");
+    }
+    return (lines || []).map(function (l) { return l.trim(); }).join("\n");
+  }
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+    });
+  }
+  function num(v) {
+    return Math.round(Number(v) || 0).toLocaleString("en-US").replace(/,/g, " ");
+  }
+  function clamp01(v) { return Math.max(0, Math.min(1, Number(v) || 0)); }
+  function text(id, s) { var e = $(id); if (e.textContent !== s) e.textContent = s; }
+  function html(el, s) { if (el.innerHTML !== s) el.innerHTML = s; }
+  // One-shot effects: the class is dropped once played (longest effect 1.5 s),
+  // otherwise Chromium replays the animation when the tab is shown again.
+  function popOnce(el) {
+    el.classList.add("pop");
+    setTimeout(function () { el.classList.remove("pop"); }, 1700);
+  }
+  function show(id, on) { $(id).toggleAttribute("hidden", !on); }  // attribute: also works on SVG
+  function enable(id, on) { $(id).disabled = !on; }
+
+  // ---- Web version (local network) -----------------------------
+  // Served by the plugin over HTTP (file:// inside X-Plane): window.xplane is
+  // replaced by the same calls over /api/*. Lost answers show a banner.
+  var WEB = location.protocol === "http:" || location.protocol === "https:";
+  var WEB_LINKS = {
+    open_simchecklist: "https://simchecklist.eu",
+    open_kofi: "https://ko-fi.com/rackhamrpl",
+    open_dispatch: "https://dispatch.simbrief.com/options/new"
+  };
+  var webLang = null, webLangLoading = false, webLastOk = Date.now();
+  function webLoadLang() {
+    if (webLangLoading) return;
+    webLangLoading = true;
+    fetch("/api/lang").then(function (r) { return r.json(); }).then(function (r) {
+      webLangLoading = false;
+      if (!r || !r.code) return;
+      webLang = r.code;
+      slm.onLang(r.dict);
+    }, function () { webLangLoading = false; });
+  }
+  if (WEB) {
+    document.documentElement.classList.add("web");
+    window.xplane = {
+      slmGetState: function (msg) {
+        return fetch("/api/state?v=" + msg.v).then(function (r) { return r.json(); }).then(function (r) {
+          webLastOk = Date.now();
+          show("web-lost", false);
+          if (r && r.lang && r.lang !== webLang) webLoadLang();
+          return r;
+        });
+      },
+      slmAction: function (msg) {
+        fetch("/api/action", {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(msg)
+        }).catch(function () { /* the next state poll shows the lost connection */ });
+        return true;
+      },
+      slmFit: function () { return true; },
+      slmWindow: function () { return true; }
+    };
+    // No answer for 3 s (a refused connection alone takes ~2 s on Windows).
+    setInterval(function () { if (Date.now() - webLastOk > 3000) show("web-lost", true); }, 1000);
+  }
+
+  function action(name, arg) {
+    if (window.xplane && typeof xplane.slmAction === "function") {
+      var msg = { name: name };
+      if (arg !== undefined) msg.arg = arg;
+      xplane.slmAction(msg);
+    }
+  }
+
+  // ---- Language ------------------------------------------------
+  function applyLang() {
+    document.querySelectorAll("[data-i18n]").forEach(function (e) { e.textContent = t(e.dataset.i18n); });
+    document.querySelectorAll("[data-i18n-title]").forEach(function (e) {
+      e.title = t(e.dataset.i18nTitle);
+      e.setAttribute("aria-label", e.title);
+    });
+    opsKey = null;
+    langKey = null;
+    tanksKey = null;
+    if (S) render();
+  }
+  slm.onLang = function (dict) {
+    L = (typeof dict === "string") ? JSON.parse(dict) : (dict || {});
+    applyLang();
+  };
+
+  // ---- State ---------------------------------------------------
+  slm.onState = function (msg) {
+    if (typeof msg === "string") msg = JSON.parse(msg);
+    received = true;
+    running = !!msg.running;
+    S = msg.state || null;
+    WS = msg.web || null;
+    render();
+  };
+
+  function render() {
+    if (!received) return;
+    show("waiting", false);
+    show("stopped", !running);
+    if (!S) return;
+    applyScale();
+    applyDocLang();
+    renderPill();
+    followTabRequest();
+    renderLsAttention();
+    if (tab === "ops") renderOps();
+    else if (tab === "settings") renderSettings();
+    else if (tab === "loadsheet") renderLoadsheet();
+  }
+
+  function renderPill() {
+    var p = $("pill"), cls = "pill", key;
+    if (!S.has_data)                 { key = "pill.no_data"; }
+    else if (S.mode === "in_flight") { key = "pill.in_flight"; cls += " ok"; }
+    else if (S.beacon_hold)          { key = "pill.beacon"; cls += " warn"; }
+    else if (S.busy)                 { key = "pill.running"; cls += " live"; }
+    else                             { key = "pill.standby"; }
+    p.className = cls;
+    text("pill", t(key) + " · " + t("mode." + S.mode));
+  }
+
+  // ---- Flight header -------------------------------------------
+  var TIME_KEYS = ["times.out", "times.off", "times.on", "times.in"];
+  var LOAD_ACTION = { simbrief: "load_simbrief", manual: "load_manual", fsd: "load_fsd" };
+  var LOAD_LABEL = { simbrief: "data.load_simbrief", manual: "data.load_manual", fsd: "data.load_fsd" };
+
+  // Full name in the tooltip, as a long one is cut short.
+  function airportName(id, name) {
+    text(id, name || "");
+    $(id).title = name || "";
+  }
+
+  function renderFlight() {
+    var f = S.flight, C = S.settings || {}, src = C.data_source || "simbrief";
+    if (f) {
+      text("f-cs", f.callsign || t("flight.no_callsign"));
+      text("f-ac", [f.aircraft_icao, f.reg].filter(function (x) { return x && x !== "?"; }).join(" · "));
+      text("f-orig", f.orig || "?");
+      text("f-dest", f.dest || "?");
+      airportName("f-orig-name", f.orig_name);
+      airportName("f-dest-name", f.dest_name);
+    } else {
+      text("f-cs", t("flight.none"));
+      text("f-ac", "");
+    }
+    show("f-route", !!f);
+
+    // Source and load buttons: a prominent load button when nothing is loaded.
+    show("f-src", !!f);
+    if (f) text("f-src", t("source." + src, { time: f.load_time || "" }));
+    var load = $("btn-load");
+    load.dataset.act = LOAD_ACTION[src] || "load_simbrief";
+    text("btn-load", t(LOAD_LABEL[src] || "data.load_simbrief"));
+    load.className = f ? "btn xs ghost" : "btn small primary";
+    load.hidden = (src === "fsd" && !S.fsd_available);
+    load.disabled = !!(S.ops_running || S.load_blocked);
+    show("btn-dispatch", src === "simbrief");
+    $("btn-dispatch").className = f ? "btn xs ghost" : "btn small ghost";
+    $("btn-lf").className = f ? "btn xs ghost" : "btn small ghost";
+    enable("btn-lf", S.can_load_last_flight && !S.ops_running);
+
+    var T = S.times || { rows: [] };
+    text("t-now", T.now || "");
+    var rows = "";
+    (T.rows || []).forEach(function (r, i) {
+      rows += "<tr><td>" + esc(t(TIME_KEYS[i] || "")) + "</td><td>" + esc(r.sched || "--:--Z") +
+              "</td><td class=\"" + (r.tone ? "t-" + r.tone : "") + "\">" + esc(r.act || "--:--Z") + "</td></tr>";
+    });
+    html($("t-rows"), rows);
+  }
+
+  function setInput(input, value) {
+    if (document.activeElement === input) return;  // never fight the user's typing
+    var v = (value == null) ? "" : String(value);
+    if (input.value !== v) input.value = v;
+  }
+
+  function renderNotices() {
+    var C = S.settings || {}, src = C.data_source;
+    show("b-beacon", !!S.beacon_hold);
+    show("b-exclusion", !!S.exclusion_message);
+    if (S.exclusion_message) text("b-exclusion", tr(S.exclusion_tr, S.exclusion_message));
+    show("fsd-missing", src === "fsd" && !S.fsd_available);
+
+    show("lf", !!S.last_flight_confirm);
+    if (S.last_flight) text("lf-lines", trLines(S.last_flight.lines, S.last_flight.tr));
+
+    var manual = src === "manual" && !S.ops_running && !S.load_blocked;
+    show("d-manual", manual);
+    if (manual) {
+      document.querySelectorAll("#d-manual input").forEach(function (inp) { setInput(inp, C[inp.dataset.set]); });
+    }
+  }
+
+  // ---- Command strip -------------------------------------------
+  function allSteps() {
+    return (S.steps_visible && S.steps) ? S.steps : [];
+  }
+
+  // Progress of the sequence, by time: 1 - remaining / initial estimate
+  // (SLM_State.total_eta). Short steps (briefing, catering) no longer weigh as
+  // much as boarding. Never goes back, and 100 % only once every step is done.
+  // Starts again from zero with a new sequence (fewer finished steps than before,
+  // or an empty list in between). Kept across page reloads for 10 minutes.
+  var PROG_EMPTY = { key: null, t0: 0, best: 0, done: 0, at: 0 };
+  var prog = PROG_EMPTY;
+  function saveProgress() {
+    try { localStorage.setItem("slm.progress", JSON.stringify(prog)); } catch (e) { /* not needed to work */ }
+  }
+  function sequenceProgress(steps, complete) {
+    if (!steps.length) {
+      if (prog.key !== null) { prog = PROG_EMPTY; saveProgress(); }
+      return 0;
+    }
+    var doneCount = steps.filter(function (it) { return it.status === "done"; }).length;
+    var key = ((S.flight && S.flight.callsign) || "") + "|" + S.mode;
+    var now = Date.now();
+    if (prog.key !== key) {
+      prog = { key: key, t0: 0, best: 0, done: 0, at: now };
+      try {
+        var saved = JSON.parse(localStorage.getItem("slm.progress") || "null");
+        if (saved && saved.key === key && now - (saved.at || 0) < 600000 && doneCount >= (saved.done || 0)) prog = saved;
+      } catch (e) { /* storage unavailable: start from the current estimate */ }
+    } else if (doneCount < prog.done) {
+      prog = { key: key, t0: 0, best: 0, done: 0, at: now };  // a new sequence started
+    }
+    prog.done = doneCount;
+    prog.at = now;
+    if (complete) { saveProgress(); return 1; }
+    var p;
+    var eta = Number(S.total_eta) || 0;
+    if (eta > 0) {
+      if (eta > prog.t0) prog.t0 = eta;  // estimate grew (event, late pax...): new reference
+      p = 1 - eta / prog.t0;
+    } else {
+      // No estimate (waiting on something): share of steps done.
+      var done = 0;
+      steps.forEach(function (it) {
+        if (it.status === "done") done += 1;
+        else if (it.status === "active" && it.bar) done += clamp01(it.bar.frac);
+      });
+      p = done / steps.length;
+    }
+    prog.best = Math.min(0.99, Math.max(prog.best, p));
+    saveProgress();
+    return prog.best;
+  }
+
+  function renderCommand() {
+    var steps = allSteps().filter(function (it) { return it.kind === "step"; });
+    var complete = steps.length > 0 && steps.every(function (it) { return it.status === "done"; });
+    var frac = sequenceProgress(steps, complete);
+    $("ring").setAttribute("stroke-dashoffset", (213.6 * (1 - frac)).toFixed(1));
+    if (complete && !$("ring-box").classList.contains("complete")) popOnce($("ring-check"));
+    $("ring-box").classList.toggle("complete", complete);
+    show("ring-check", complete);
+    text("pct", Math.floor(frac * 100) + "%");
+    var rem = "";
+    if (S.total_eta && S.total_eta > 0) rem = t("progress.remaining", { min: Math.ceil(S.total_eta / 60) });
+    else if (steps.length && frac >= 1) rem = t("progress.done");
+    text("remain", rem);
+
+    var locked = !S.can_change_location;
+    $("stand").classList.toggle("locked", locked);
+    document.querySelectorAll("#stand button").forEach(function (b) {
+      b.setAttribute("aria-pressed", String(S.location === b.dataset.loc));
+      b.disabled = locked;
+    });
+    var sw = $("own-stairs");
+    sw.setAttribute("aria-checked", String(!!S.own_stairs));
+    sw.disabled = locked;
+
+    show("btn-start", S.mode === "departure");
+    show("btn-turn", S.mode === "arrival");
+    show("btn-ron", S.mode === "arrival");
+    enable("btn-start", S.can_start);
+    enable("btn-turn", S.can_start);
+    enable("btn-ron", S.can_start);
+    show("in-flight-note", S.mode === "in_flight");
+  }
+
+  // ---- Operations list (SLM_State.steps) -------------------------
+  function stepName(it) {
+    return tr(it.name_tr, it.title || (it.label || it.header || "").replace(/^>>\s*/, ""));
+  }
+  function blocksHtml(blocks) {
+    return (blocks || []).map(function (b) {
+      if (b.segments) {
+        return "<div>" + b.segments.map(function (sg) {
+          return "<span class=\"" + (sg.tone ? "t-" + sg.tone : "") + "\">" + esc(tr(sg.tr, sg.text.trim()) + " ") + "</span>";
+        }).join("") + "</div>";
+      }
+      return "<div class=\"" + (b.tone ? "t-" + b.tone : "") + "\">" +
+             esc(trLines(b.lines, b.tr)) + "</div>";
+    }).join("");
+  }
+  // Dynamic parts of a row, refreshed in place (see renderOpsList).
+  function figHtml(it) {
+    if (!it.figure) return "";
+    var f = it.figure, unit = f.unit === "pax" ? t("unit.pax") : f.unit;
+    return "<span>" + esc(t("kpi.actual")) + "</span><b>" + esc(num(f.actual)) + "</b><span>" + esc(t("kpi.scheduled", { value: num(f.schd) + " " + unit })) + "</span>";
+  }
+  function subHtml(it) { return it.status === "active" ? blocksHtml(it.blocks) : ""; }
+  function hasBar(it) { return !!(it.figure || it.bar); }
+
+  function opHtml(it, i) {
+    var btns = (it.buttons || []).map(function (b) {
+      return "<button class=\"btn small\" data-act=\"" + esc(b.action) + "\">" + esc(tr(b.tr, b.label)) + "</button>";
+    }).join("");
+    return "<div class=\"op " + esc(it.status) + "\" data-i=\"" + i + "\" data-name=\"" + esc(stepName(it)) +
+           "\"><span class=\"dot\"></span>" +
+           // Without figures, the name and status also take the figure column.
+           "<div" + (it.figure ? "" : " class=\"wide\"") + "><div class=\"nm\">" + esc(stepName(it)) +
+           "</div><div class=\"sub\"></div></div>" + (it.figure ? "<div class=\"v\"></div>" : "") +
+           "<div class=\"fig\">" + (hasBar(it) ? "<div class=\"bar\"><i></i></div>" : "") +
+           (btns ? "<div class=\"row\">" + btns + "</div>" : "") + "</div></div>";
+  }
+  function renderOpsList() {
+    var box = $("ops");
+    var items = allSteps().filter(function (it) {
+      // The total ETA line is shown in the command strip.
+      return it.kind !== "newline" && !(it.kind === "text" && it.tone === "eta");
+    });
+    if (!items.length) {
+      if (opsKey !== "") { box.innerHTML = "<div class=\"empty\">" + esc(t("seq.empty")) + "</div>"; opsKey = ""; }
+      shownChips = null;
+      return;
+    }
+    // Finished steps share one compact line; the others get a row.
+    var chips = items.filter(function (it) { return it.kind === "step" && it.status === "done"; });
+    var rows = items.filter(function (it) { return it.kind === "text" || it.status !== "done"; });
+    var key = JSON.stringify([chips.map(stepName), rows.map(function (it) {
+      return [it.kind, it.status, it.tone, stepName(it), !!it.figure, hasBar(it),
+              (it.buttons || []).map(function (b) { return b.label + "/" + b.action; })];
+    })]);
+    if (folding) return;  // the rebuild waits for the fold to finish
+    if (key !== opsKey) {
+      var chipNames = chips.map(stepName);
+      // Rows of steps that just finished fold away first, then the list is rebuilt.
+      var finished = shownChips === null ? [] : chipNames.filter(function (n) { return shownChips.indexOf(n) < 0; });
+      var toFold = [];
+      box.querySelectorAll(".op[data-name]").forEach(function (el) {
+        if (finished.indexOf(el.dataset.name) >= 0) toFold.push(el);
+      });
+      if (toFold.length) {
+        folding = true;
+        toFold.forEach(function (el) { el.style.height = el.offsetHeight + "px"; el.classList.add("folding"); });
+        void box.offsetHeight;  // commit the start height before folding
+        toFold.forEach(function (el) { el.classList.add("folded"); });
+        setTimeout(function () {
+          folding = false;
+          popNames = finished;
+          shownChips = (shownChips || []).concat(finished);  // folded once, not again
+          opsKey = null;
+          if (S && tab === "ops") renderOpsList();
+        }, 530);
+        return;
+      }
+      // Rebuilt only when the structure changes, so the buttons keep their clicks.
+      opsKey = key;
+      shownChips = chipNames;
+      var pops = popNames.length ? popNames : finished;
+      popNames = [];
+      var out = "";
+      if (chips.length) {
+        out += "<div class=\"done-line\">" + chips.map(function (it) {
+          var pop = pops.indexOf(stepName(it)) >= 0 ? " data-pop=\"1\"" : "";
+          return "<span class=\"chip\"" + pop + "><i></i>" + esc(stepName(it)) + "</span>";
+        }).join("") + "</div>";
+      }
+      rows.forEach(function (it, i) {
+        out += it.kind === "text" ? "<div class=\"note\" data-i=\"" + i + "\"></div>" : opHtml(it, i);
+      });
+      box.innerHTML = out;
+      box.querySelectorAll(".chip[data-pop]").forEach(popOnce);
+    }
+    rows.forEach(function (it, i) {
+      var el = box.querySelector("[data-i=\"" + i + "\"]");
+      if (!el) return;
+      if (it.kind === "text") {
+        el.className = "note" + (it.tone ? " t-" + it.tone : "");
+        var s = trLines(it.lines, it.tr);
+        if (el.textContent !== s) el.textContent = s;
+        return;
+      }
+      html(el.querySelector(".sub"), subHtml(it));
+      var v = el.querySelector(".v");
+      if (v) html(v, figHtml(it));
+      var bar = el.querySelector(".bar");
+      if (bar) {
+        var frac = it.bar ? clamp01(it.bar.frac) : (it.status === "done" ? 1 : 0);
+        bar.className = "bar" + (it.bar && it.bar.tone ? " b-" + it.bar.tone : "");
+        bar.firstChild.style.width = (frac * 100).toFixed(1) + "%";
+      }
+    });
+  }
+
+  // ---- Side rail and footer --------------------------------------
+  function renderServices() {
+    var tu = S.topup || {};
+    enable("btn-topup", S.can_topup);
+    $("btn-topup").classList.toggle("on", !!tu.active);
+    show("topup", !!tu.active);
+    if (tu.active) {
+      text("tu-cur", num(tu.current) + " " + S.unit);
+      text("tu-plan", num(tu.plan) + " " + S.unit);
+      text("tu-label", t("topup.target", { unit: S.unit }));
+      setInput($("tu-target"), Math.round(tu.target || 0));
+    }
+    var ac = S.acars_status;
+    show("acars", !!ac);
+    if (ac) { $("acars").className = "status" + (ac.tone ? " t-" + ac.tone : ""); text("acars", tr(ac.tr, ac.text)); }
+
+    show("dev", !!S.dev_mode);
+    if (S.dev_mode) {
+      text("dev-cycle", tr(S.dev_cycle_tr, S.dev_cycle_label || ""));
+      text("dev-force-load", tr(S.dev_force_load_tr, S.dev_force_load_label || ""));
+      enable("dev-force-load", S.can_force_load);
+      var sel = $("dev-ev"), evtr = S.dev_events_tr || [];
+      var evs = (S.dev_events || []).map(function (e, i) {
+        var x = evtr[i];
+        return x && x.vars ? "[" + x.vars.category + "] " + tr(x, e.replace(/^\[[^\]]*\]\s*/, "")) : e;
+      });
+      if (sel.dataset.key !== evs.join("|")) {
+        sel.dataset.key = evs.join("|");
+        sel.innerHTML = evs.map(function (e, i) { return "<option value=\"" + i + "\">" + esc(e) + "</option>"; }).join("");
+      }
+      enable("dev-force", S.can_force_event);
+    }
+
+    var up = S.update_status;
+    $("update").className = "status" + (up && up.tone ? " t-" + up.tone : "");
+    text("update", up ? tr(up.tr, up.text) : "");
+    text("version", S.version ? "v" + S.version : "");
+  }
+
+  function renderOps() {
+    renderFlight();
+    renderNotices();
+    renderCommand();
+    renderOpsList();
+    renderServices();
+  }
+
+  // ---- Loadsheet (SLM_State.loadsheet) ---------------------------
+  // The plugin asks for a tab (view_loadsheet action) with SLM_State.show_tab;
+  // a request already there when the page loads is not replayed.
+  var tabSeq = null;
+  function followTabRequest() {
+    var r = S.show_tab;
+    var seq = r ? r.seq : 0;
+    if (tabSeq === null) { tabSeq = seq; return; }
+    if (seq !== tabSeq) {
+      tabSeq = seq;
+      if (r && r.name && r.name !== tab) selectTab(r.name);
+    }
+  }
+
+  // The Loadsheet tab calls for attention once the loadsheet is final, until
+  // it is opened. Remembered per flight, so a page reload does not replay it.
+  function lsKey() {
+    var L = S && S.loadsheet;
+    if (!L) return null;
+    var f = L.flight || {};
+    return [f.airline, f.fltnum, f.orig, f.dest, f.date, f.prepared_by].join("|");
+  }
+  function lsSeenKey() {
+    try { return localStorage.getItem("slm.lsSeen"); } catch (e) { return null; }
+  }
+  var lsSeenMem = null;
+  function lsSeen() {
+    var k = lsKey();
+    if (!k) return;
+    lsSeenMem = k;
+    try { localStorage.setItem("slm.lsSeen", k); } catch (e) { /* kept in memory */ }
+  }
+  function renderLsAttention() {
+    var k = lsKey();
+    if (k && tab === "loadsheet") lsSeen();
+    var call = !!k && k !== lsSeenMem && k !== lsSeenKey();
+    var tb = document.querySelector('.tab[data-tab="loadsheet"]');
+    tb.classList.toggle("attn", call);
+    // Only once issued (operations finished); back to Ground Ops if it goes away.
+    tb.disabled = !S.loadsheet;
+    if (!S.loadsheet && tab === "loadsheet") selectTab("ops");
+  }
+
+  function signed(v) { return (v > 0 ? "+" : v < 0 ? "−" : "±") + num(Math.abs(v)); }
+  function pctText(p) { return (p > 0 ? "+" : p < 0 ? "−" : "±") + Math.abs(p).toFixed(1) + "%"; }
+
+  function lsRow(label, r, unit, cls) {
+    if (!r) return "";
+    var u = unit ? " " + esc(unit) : "";
+    return "<tr" + (cls ? " class=\"" + cls + "\"" : "") + "><td>" + esc(label) + "</td><td>" + num(r.planned) + u +
+           "</td><td>" + num(r.actual) + u + "</td><td class=\"t-" + esc(r.tone) + "\">" + signed(r.diff) + u +
+           "<small>" + pctText(r.pct) + "</small></td></tr>";
+  }
+  function lsWeightRow(label, r, unit) {
+    if (!r) return "";
+    var u = " " + esc(unit);
+    // Remaining margin to the structural limit (not a weight difference):
+    // "3 322 kg margin", or "120 kg over limit" in red when exceeded.
+    var lim = "";
+    if (r.max > 0) {
+      var over = r.margin < 0;
+      lim = "<span class=\"t-" + esc(r.tone || "muted") + "\">" + num(Math.abs(r.margin)) + u + " " +
+            esc(t(over ? "ls.over_limit" : "ls.margin")) + "</span><small>" +
+            esc(t("ls.max", { value: num(r.max) + u })) + "</small>";
+    }
+    return "<tr><td>" + esc(label) + "</td><td>" + num(r.planned) + u + "</td><td>" + num(r.actual) + u + "</td><td>" + lim + "</td></tr>";
+  }
+  function lsSection(key) { return "<tr class=\"sec\"><td colspan=\"4\">" + esc(t(key)) + "</td></tr>"; }
+
+  function tankName(tk) {
+    var side = { L: "left", R: "right", C: "center" }[tk.side];
+    if (tk.row === 2) return tk.count > 1 ? t("tank.aft_n", { n: tk.rank }) : t("tank.aft");
+    if (tk.count === 1) return t("tank." + side);
+    if (tk.side !== "C" && tk.count === 2) return t("tank." + side + (tk.rank === 1 ? "_inner" : "_outer"));
+    return t("tank." + side + "_n", { n: tk.rank });
+  }
+
+  var tanksKey = null;
+  function renderTanks(T, unit) {
+    show("ls-tanks-card", !!(T && T.list && T.list.length));
+    if (!T || !T.list || !T.list.length) { tanksKey = null; return; }
+    text("ls-tank-tot", num(T.total) + (T.capacity ? " / " + num(T.capacity) : "") + " " + unit);
+    var box = $("ls-tanks");
+    var key = JSON.stringify(T.list.map(function (k) { return [k.index, k.side, k.row, k.rank, k.count, !!k.capacity]; }));
+    if (key !== tanksKey) {
+      tanksKey = key;
+      var rows = {};
+      T.list.forEach(function (k) { (rows[k.row] = rows[k.row] || []).push(k); });
+      box.className = "tanks" + (T.list.length > 6 ? " compact" : "");
+      box.innerHTML = Object.keys(rows).sort().map(function (r) {
+        return "<div class=\"tank-row\">" + rows[r].map(function (k) {
+          return "<div class=\"tank " + esc(k.side) + (k.row === 2 ? " aft" : "") + "\" data-tank=\"" + k.index +
+                 "\">" + (k.capacity ? "<div class=\"tb\"><i></i></div>" : "") +
+                 "<b></b><small>" + esc(tankName(k)) + "</small></div>";
+        }).join("") + "</div>";
+      }).join("");
+    }
+    T.list.forEach(function (k) {
+      var el = box.querySelector("[data-tank=\"" + k.index + "\"]");
+      if (!el) return;
+      var gauge = el.querySelector("i");
+      if (gauge) gauge.style.height = (clamp01(k.fuel / k.capacity) * 100).toFixed(1) + "%";
+      var s = num(k.fuel);
+      if (el.querySelector("b").textContent !== s) el.querySelector("b").textContent = s;
+      el.title = num(k.fuel) + (k.capacity ? " / " + num(k.capacity) : "") + " " + unit;
+    });
+  }
+
+  // Load distribution (SLM_State.loadsheet.distrib): one fuselage section per
+  // cabin zone SLM fills, width and gauge from its seats when known.
+  function zoneName(id) { return id === "fwd" || id === "aft" ? t("ls.zone." + id) : String(id); }
+  function holdName(id) {
+    if (id === "fwd" || id === "aft" || id === "hold") return t("ls.hold." + id);
+    return t("ls.hold.n", { n: id });
+  }
+  function renderDistrib(D, unit) {
+    var cabin = D && D.cabin, holds = D && D.holds;
+    show("ls-dist-card", !!(cabin || holds));
+    show("ls-cabin", !!cabin);
+    show("ls-holds-box", !!holds);
+    if (cabin) {
+      var fus = "", lab = "";
+      cabin.forEach(function (s) {
+        var grow = "flex-grow:" + (s.seats || 1);
+        fus += "<div class=\"zone" + (s.seats ? "" : " plain") + "\" style=\"" + grow + "\">" +
+               (s.seats ? "<i style=\"height:" + (clamp01(s.pax / s.seats) * 100).toFixed(1) + "%\"></i>" : "") + "</div>";
+        lab += "<div style=\"" + grow + "\"><b>" + num(s.pax) + "</b><small>" + esc(zoneName(s.id)) + "</small></div>";
+      });
+      html($("ls-fus"), fus);
+      html($("ls-zl"), lab);
+    }
+    if (holds) {
+      var box = $("ls-holds");
+      box.style.gridTemplateColumns = "repeat(" + Math.min(holds.length, 3) + ",minmax(0,1fr))";
+      html(box, holds.map(function (h) {
+        return "<div class=\"hold\"><small>" + esc(holdName(h.id)) + "</small><b>" + num(h.w) + " " + esc(unit) + "</b></div>";
+      }).join(""));
+    }
+  }
+
+  function renderLoadsheet() {
+    var L = S.loadsheet, unit = S.unit || "kg";
+    show("ls-none", !L);
+    show("ls-doc", !!L);
+    if (!L) return;
+    var f = L.flight || {};
+
+    var id = [((f.airline || "") + (f.fltnum || "")).replace(/N\/A/g, ""), f.date].filter(Boolean).join(" · ");
+    text("ls-id", id);
+    var sub = [];
+    var ac = [f.aircraft_name, f.aircraft_icao && "(" + f.aircraft_icao + ")", f.reg && f.reg !== "?" ? f.reg : ""]
+      .filter(function (x) { return x && x !== "?"; }).join(" ");
+    if (ac) sub.push(ac);
+    var route = (f.orig && f.orig !== "???") || (f.dest && f.dest !== "???") ? (f.orig || "?") + " → " + (f.dest || "?") : "";
+    if (route && f.altn && f.altn !== "?") route += "  " + t("ls.altn", { icao: f.altn });
+    if (route) sub.push(route);
+    var times = [];
+    if (f.std) times.push(t("ls.block_off", { time: f.std }));
+    if (f.sta) times.push(t("ls.block_on", { time: f.sta }));
+    if (times.length) sub.push(times.join("   "));
+    text("ls-sub", sub.join("\n"));
+
+    var kofi = "<small>" + esc(t("ls.kofi")) + "</small>";
+    html($("ls-people"),
+      "<dt>" + esc(t("ls.dispatcher")) + "</dt><dd>" + esc(f.dispatcher || "?") + (L.manual ? kofi : "") + "</dd>" +
+      "<dt>" + esc(t("ls.captain")) + "</dt><dd>" + esc(f.captain || "?") + "</dd>" +
+      "<dt>" + esc(t("ls.prepared_by")) + "</dt><dd>" + esc(f.prepared_by || "SLM") + kofi + "</dd>");
+
+    var out = lsSection("ls.sec.pax") +
+      lsRow(t("ls.pax"), L.pax, "") +
+      lsRow(t("ls.body"), L.body, unit) +
+      lsSection("ls.sec.cargo") +
+      lsRow(t("ls.baggage"), L.baggage, unit) +
+      lsRow(t("ls.freight"), L.freight, unit) +
+      lsRow(t("ls.total"), L.cargo, unit, "tot") +
+      lsSection("ls.sec.payload") +
+      lsRow(t("ls.payload"), L.payload, unit, "tot");
+    if (L.zfw) {
+      out += lsSection("ls.sec.weights") +
+        "<tr><td>" + esc(t("ls.oew")) + "</td><td></td><td>" + num(L.oew) + " " + esc(unit) + "</td><td></td></tr>" +
+        lsWeightRow(t("ls.zfw"), L.zfw, unit) + lsWeightRow(t("ls.tow"), L.tow, unit) + lsWeightRow(t("ls.ldw"), L.ldw, unit);
+    }
+    out += lsSection("ls.sec.fuel") + lsRow(t("ls.block"), L.fuel, unit, "tot");
+    var fp = L.fuel_plan;
+    if (fp) {
+      var parts = [["taxi", fp.taxi], ["trip", fp.trip], ["cont", fp.cont], ["altn", fp.altn], ["reserve", fp.reserve]]
+        .filter(function (x) { return x[1] != null; })
+        .map(function (x) { return t("ls.fuel." + x[0]) + " " + num(x[1]); });
+      if (parts.length) out += "<tr class=\"note\"><td colspan=\"4\">" + esc(parts.join(" · ")) + "</td></tr>";
+    }
+    html($("ls-rows"), out);
+
+    show("ls-cg-card", L.zfwcg != null);
+    // CG out of the aircraft limits in red (limits known on E-Jets, #SL19)
+    var lim = L.cg_limits;
+    function cg(id, v) {
+      text(id, Number(v).toFixed(1) + "%");
+      $(id).classList.toggle("out", !!lim && (v < lim.fwd || v > lim.aft));
+    }
+    if (L.zfwcg != null) cg("ls-zfwcg", L.zfwcg);
+    show("ls-towcg-row", L.towcg != null);
+    if (L.towcg != null) cg("ls-towcg", L.towcg);
+    show("ls-cg-lim", !!lim);
+    if (lim) text("ls-cg-lim", t("ls.cg_limits", { fwd: Number(lim.fwd).toFixed(1), aft: Number(lim.aft).toFixed(1) }));
+    renderDistrib(L.distrib, unit);
+    renderTanks(L.tanks, unit);
+
+    text("ls-wish", L.manual || !f.orig || f.orig === "?" ? t("ls.wish_airport") : t("ls.wish", { airport: f.orig_name || f.orig }));
+  }
+
+  // ---- Settings (SLM_State.settings / settings_enabled) ------------
+  // Languages offered in the selector; their files arrive with the translations.
+  // A language without a file shows the English texts (the plugin falls back).
+  var LANGS = ["en", "fr", "de", "it", "es"];
+  var langFiles = ["en"];  // codes of ui/lang/*.json, sent by the plugin
+  slm.onLangs = function (list) {
+    langFiles = (typeof list === "string") ? JSON.parse(list) : (list || ["en"]);
+    langKey = null;
+    if (S) render();
+  };
+  var langKey = null;
+
+  // Custom timing parameters: setting "custom_<name>", reference value in
+  // SLM_State.preset_values.<preset>[ref], shown with <dec> decimals.
+  var TIMINGS = [
+    ["pax_time_per_passenger", null, 2, 0.1, 1],
+    ["pax_time_variation", null, 2, 0.1, 1, true],
+    ["disembark_pax_time_per_passenger", null, 2, 0.1, 1],
+    ["disembark_pax_time_variation", null, 2, 0.1, 1, true],
+    ["cargo_time_per_kg_min", null, 3, 0.01, 3],
+    ["cargo_time_per_kg_max", null, 3, 0.01, 3],
+    ["disembark_cargo_time_per_kg_min", null, 3, 0.01, 3],
+    ["disembark_cargo_time_per_kg_max", null, 3, 0.01, 3],
+    ["fuel_time_per_kg", null, 3, 0.001, 3],
+    ["catering_time_per_pax", null, 1, 0.5, 1],
+    ["cleaning_time_per_pax", null, 1, 0.5, 1],
+    ["crew_briefing_min", "crew_briefing_time_min", 0, 10, 0],
+    ["crew_briefing_max", "crew_briefing_time_max", 0, 10, 0]
+  ];
+  var timingsBuilt = false;
+  function buildTimings() {
+    if (timingsBuilt) return;
+    timingsBuilt = true;
+    $("tim-rows").innerHTML = TIMINGS.map(function (r) {
+      return "<tr><td data-i18n=\"set.tim." + r[0] + "\">" + esc(t("set.tim." + r[0])) + "</td>" +
+             "<td><input type=\"number\" min=\"0\" step=\"" + r[3] + "\" data-set=\"custom_" + r[0] + "\" data-dec=\"" + r[2] + "\"></td>" +
+             "<td data-ref=\"realistic\"></td><td data-ref=\"fast\"></td><td data-ref=\"veryfast\"></td></tr>";
+    }).join("");
+  }
+  function fixed(v, dec) { return (Number(v) || 0).toFixed(dec); }
+
+  function setRowOff(el, off) {
+    var row = el.closest(".set-row");
+    if (row) row.classList.toggle("off", off);
+  }
+
+  function renderSettings() {
+    var C = S.settings || {}, E = S.settings_enabled || {};
+    var on = function (k) { return E[k] !== false; };
+    show("set-locked", !!S.busy);
+
+    // Switches and segmented choices
+    document.querySelectorAll("#v-settings .sw[data-key]").forEach(function (b) {
+      b.setAttribute("aria-checked", String(!!C[b.dataset.key]));
+      b.disabled = !on(b.dataset.key);
+      setRowOff(b, b.disabled);
+    });
+    document.querySelectorAll("#v-settings .seg[data-key]").forEach(function (g) {
+      var k = g.dataset.key, off = !on(k);
+      g.classList.toggle("locked", off);
+      g.querySelectorAll("button").forEach(function (b) {
+        b.setAttribute("aria-pressed", String(String(C[k]) === b.dataset.val));
+        b.disabled = off;
+      });
+      setRowOff(g, off);
+    });
+    show("src-fsd", !!S.fsd_available || C.data_source === "fsd");
+    show("row-bpb", !!S.bpb_option_available);
+    document.querySelectorAll("#v-settings [data-excluded]").forEach(function (e) { e.hidden = !S.real_fill_excluded; });
+    show("row-hoppie-logon", C.acars_output === "hoppie");
+    show("row-hoppie-type", C.acars_output === "hoppie");
+    show("row-si-key", C.acars_output === "si");
+    renderWebStatus();
+
+    // Text and number fields (IDs and keys: masked, with a Show/Hide button)
+    document.querySelectorAll("#v-settings input[data-set]").forEach(function (inp) {
+      var k = inp.dataset.set, v = C[k];
+      inp.disabled = !on(k);
+      if (inp.type === "range") {
+        var n = Number(v) || 0;
+        if (document.activeElement !== inp) inp.value = String(inp.dataset.pct ? Math.round(n * 100) : n);
+        rangeOut(inp);
+      } else if (inp.dataset.dec) {
+        setInput(inp, fixed(v, Number(inp.dataset.dec)));
+      } else {
+        setInput(inp, v);
+      }
+      setRowOff(inp, inp.disabled);
+    });
+
+    // Custom timings, with the three presets for reference
+    var custom = C.timing_preset === "custom";
+    show("custom-timings", custom);
+    if (custom) {
+      var P = S.preset_values || {};
+      $("tim-rows").querySelectorAll("tr").forEach(function (tr, i) {
+        var r = TIMINGS[i];
+        tr.querySelectorAll("[data-ref]").forEach(function (td) {
+          var p = P[td.dataset.ref] || {};
+          var s = (r[5] ? "±" : "") + fixed(p[r[1] || r[0]], r[4]);
+          if (td.textContent !== s) td.textContent = s;
+        });
+      });
+      var f = Number(C.custom_event_duration_factor) || 0.7;
+      text("ef-d", t("set.event_factor.d", { min: Math.round(600 * f / 60) }));
+    }
+
+    // Language
+    var key = JSON.stringify([C.language, langFiles]);
+    if (key !== langKey) {
+      langKey = key;
+      var codes = LANGS.slice();
+      langFiles.forEach(function (c) { if (codes.indexOf(c) < 0) codes.push(c); });
+      if (C.language && codes.indexOf(C.language) < 0) codes.push(C.language);
+      $("lang-sel").innerHTML = codes.map(function (c) {
+        var name = t("lang." + c) === "lang." + c ? c.toUpperCase() : t("lang." + c);
+        if (langFiles.indexOf(c) < 0) name += " — " + t("set.language.pending");
+        return "<option value=\"" + esc(c) + "\"" + (c === C.language ? " selected" : "") + ">" + esc(name) + "</option>";
+      }).join("");
+      text("lang-note", langFiles.indexOf(C.language) < 0 ? t("set.language.fallback") : t("set.language.d"));
+    }
+  }
+
+  function rangeOut(inp) {
+    var out = document.querySelector("[data-out=\"" + inp.dataset.set + "\"]");
+    if (!out) return;
+    var v = Number(inp.value);
+    out.textContent = inp.dataset.pct ? Math.round(v) + "%" : v.toFixed(2);
+  }
+
+  // Web version: server state and the addresses to type on the device.
+  function renderWebStatus() {
+    var w = WS || {}, st;
+    if (!w.enabled)           st = t("web.off");
+    else if (w.error)         st = t("web.port_busy", { port: w.port });
+    else if (!w.running)      st = t("web.starting");
+    else if (w.clients > 0)   st = t("web.running_clients", { n: w.clients });
+    else                      st = t("web.running");
+    text("web-status", st);
+    show("row-web-urls", !!w.running);
+    var rows = "";
+    if (w.running) {
+      if ((w.urls || []).length) rows += "<span>" + esc(t("web.network")) + "</span>";
+      (w.urls || []).forEach(function (u) { rows += "<div>" + esc(u) + "</div>"; });
+      if (!(w.urls || []).length) rows += "<span>" + esc(t("web.no_network")) + "</span>";
+      rows += "<span>" + esc(t("web.local")) + "</span><div>" + esc(w.local || "") + "</div>";
+      rows += "<span>" + esc(t("web.firewall")) + "</span>";
+    }
+    html($("web-urls"), rows);
+    renderWebQr(w.running && w.qr);
+  }
+
+  // QR code of the network address, from the plugin's module grid ("1" = dark).
+  var qrKey = null;
+  function renderWebQr(qr) {
+    show("web-qr-box", !!qr);
+    var key = qr ? qr.url : null;
+    if (key === qrKey) return;
+    qrKey = key;
+    if (!qr) { html($("web-qr"), ""); return; }
+    var n = qr.size, q = 4, d = "";
+    for (var y = 0; y < n; y++)
+      for (var x = 0; x < n; x++)
+        if (qr.bits.charAt(y * n + x) === "1") d += "M" + (x + q) + " " + (y + q) + "h1v1h-1z";
+    html($("web-qr"), "<svg viewBox=\"0 0 " + (n + 2 * q) + " " + (n + 2 * q) + "\" shape-rendering=\"crispEdges\" role=\"img\" aria-label=\"" +
+         esc(qr.url) + "\"><rect width=\"100%\" height=\"100%\" fill=\"#fff\"/><path fill=\"#000\" d=\"" + d + "\"/></svg>");
+  }
+
+  function selectPane(id) {
+    document.querySelectorAll(".set-nav button").forEach(function (b) {
+      b.setAttribute("aria-selected", String(b.dataset.pane === id));
+    });
+    document.querySelectorAll(".set-pane").forEach(function (p) { p.hidden = p.id !== id; });
+    try { localStorage.setItem("slm.settingsPane", id); } catch (e) { /* not needed to work */ }
+  }
+
+  // Text size of the window (setting ui_scale, in percent).
+  var scale = 1;
+  function applyScale() {
+    var s = Math.max(0.8, Math.min(1.5, (Number(S.settings && S.settings.ui_scale) || 100) / 100));
+    if (s === scale) return;
+    scale = s;
+    document.body.style.zoom = String(s);
+    reportHeight();
+  }
+  function applyDocLang() {
+    var c = S.settings && S.settings.language;
+    if (c && document.documentElement.lang !== c) document.documentElement.lang = c;
+  }
+
+  // ---- Window height follows the content -----------------------
+  // The plugin resizes the window to this height. A height set by the user is
+  // kept until the next tab change, which sends reset to fit again.
+  var lastFit = 0, fitReset = false;
+  function reportHeight() {
+    // Rendered height (after the text size zoom), whatever the Chromium zoom model.
+    var top = document.querySelector(".top"), main = document.querySelector("main");
+    var h = top.getBoundingClientRect().height + main.getBoundingClientRect().height;
+    if (scale !== 1 && Math.abs(top.getBoundingClientRect().height - top.offsetHeight) < 0.5) h *= scale;
+    h += 2;  // window border (html)
+    h = Math.ceil(h);
+    if ((!fitReset && Math.abs(h - lastFit) < 3) || !window.xplane || typeof xplane.slmFit !== "function") return;
+    lastFit = h;
+    xplane.slmFit(fitReset ? { h: h, reset: true } : { h: h });
+    fitReset = false;
+  }
+  if (window.ResizeObserver) {
+    var ro = new ResizeObserver(reportHeight);
+    ro.observe(document.querySelector(".top"));
+    ro.observe(document.querySelector("main"));
+  }
+
+  // ---- Tabs ----------------------------------------------------
+  function selectTab(name) {
+    if (WEB && name === "settings") return;  // settings stay in X-Plane
+    tab = name;
+    document.querySelectorAll(".tab").forEach(function (b) {
+      b.setAttribute("aria-selected", String(b.dataset.tab === name));
+    });
+    show("v-ops", name === "ops");
+    show("v-settings", name === "settings");
+    show("v-ls", name === "loadsheet");
+    if (name === "loadsheet") lsSeen();
+    render();
+    fitReset = true;
+    requestAnimationFrame(reportHeight);  // once the new tab is laid out
+  }
+
+  // ---- Window (no X-Plane frame) -------------------------------
+  // Pressing the top bar outside its buttons moves the window: the plugin
+  // follows the mouse until "drop". A release outside the page is caught by
+  // the next move without a pressed button.
+  var dragging = false;
+  function win(op) {
+    if (window.xplane && typeof xplane.slmWindow === "function") xplane.slmWindow({ op: op });
+  }
+  function drop() {
+    if (!dragging) return;
+    dragging = false;
+    win("drop");
+  }
+  document.querySelector(".top").addEventListener("mousedown", function (e) {
+    if (WEB || e.button !== 0 || e.target.closest("button, input, select")) return;
+    e.preventDefault();
+    dragging = true;
+    win("drag");
+  });
+  document.addEventListener("mouseup", drop);
+  document.addEventListener("mousemove", function (e) { if (dragging && !(e.buttons & 1)) drop(); });
+  window.addEventListener("blur", drop);
+
+  // ---- Events --------------------------------------------------
+  document.addEventListener("click", function (e) {
+    var tb = e.target.closest(".tab");
+    if (tb) { if (!tb.disabled) selectTab(tb.dataset.tab); return; }
+    var b = e.target.closest("button");
+    if (!b || b.disabled) return;
+    if (b.dataset.win) { win(b.dataset.win); return; }
+    if (b.dataset.act) {
+      if (WEB && WEB_LINKS[b.dataset.act]) { window.open(WEB_LINKS[b.dataset.act], "_blank", "noopener"); return; }
+      action(b.dataset.act);
+      return;
+    }
+    if (b.dataset.pane) { selectPane(b.dataset.pane); return; }
+    if (b.dataset.reveal) {
+      var inp = b.parentNode.querySelector("input");
+      var shown = inp.type === "password";
+      inp.type = shown ? "text" : "password";
+      b.dataset.i18n = shown ? "set.hide" : "set.show";
+      b.textContent = t(b.dataset.i18n);
+      return;
+    }
+    var seg = b.closest(".seg[data-key]");
+    if (seg && b.dataset.val) {
+      action("set", { key: seg.dataset.key, value: b.dataset.num ? Number(b.dataset.val) : b.dataset.val });
+      return;
+    }
+    if (b.classList.contains("sw") && b.dataset.key) {
+      action("set", { key: b.dataset.key, value: b.getAttribute("aria-checked") !== "true" });
+      return;
+    }
+    if (b.dataset.loc) { action("set_location", b.dataset.loc); return; }
+    if (b.id === "own-stairs") { action("set_own_stairs", b.getAttribute("aria-checked") !== "true"); return; }
+    if (b.id === "tu-apply") {
+      var v = Number($("tu-target").value);
+      if (isFinite(v)) action("apply_topup", Math.floor(v));
+      return;
+    }
+    if (b.id === "dev-force") { action("dev_force_event", Number($("dev-ev").value) || 0); return; }
+  });
+
+  // Inputs: sent when committed (Enter or leaving the field), not on every key.
+  document.addEventListener("change", function (e) {
+    var inp = e.target;
+    if (inp.dataset && inp.dataset.set) {
+      var numeric = inp.type === "number" || inp.type === "range";
+      var v = numeric ? Number(inp.value) : inp.value;
+      if (numeric && (inp.value === "" || !isFinite(v))) return;
+      if (inp.dataset.pct) v = v / 100;
+      action("set", { key: inp.dataset.set, value: v });
+    } else if (inp.id === "tu-target") {
+      var n = Number(inp.value);
+      if (isFinite(n)) action("set_topup_target", n);
+    }
+  });
+  // Sliders: the value shown follows the thumb; it is sent on release.
+  document.addEventListener("input", function (e) {
+    if (e.target.type === "range" && e.target.dataset.set) rangeOut(e.target);
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" && e.target.tagName === "INPUT") e.target.blur();
+  });
+
+  // ---- State polling -------------------------------------------
+  // The page asks the plugin for SLM_State (the plugin no longer injects it).
+  var stateVersion = -1, polling = false;
+  function poll() {
+    if (polling || !window.xplane || typeof xplane.slmGetState !== "function") return;
+    polling = true;
+    Promise.resolve(xplane.slmGetState({ v: stateVersion })).then(function (r) {
+      polling = false;
+      if (typeof r === "string") r = JSON.parse(r);
+      if (!r || r.v === undefined || r.v === stateVersion) return;
+      stateVersion = r.v;
+      if (r.running !== undefined) slm.onState(r);
+    }, function () { polling = false; });
+  }
+  setInterval(poll, 250);
+
+  // ---- Start ---------------------------------------------------
+  buildTimings();
+  applyLang();
+  var pane = null;
+  try { pane = localStorage.getItem("slm.settingsPane"); } catch (e) { /* first pane */ }
+  selectPane(pane && $(pane) ? pane : "p-ui");
+  selectTab("ops");
+  // The plugin sends the language once the page has loaded; the state is polled.
+  if (WEB) webLoadLang();
+  poll();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SimLoad Manager Compact</title>
+<!--
+  SimLoad Manager - compact window (CEF, X-Plane only, #SL15).
+  Display only: no sequence button. Same contract as ui/index.html for the state
+  (xplane.slmGetState({ v }) -> { v, running, state = SLM_State }) and the language
+  (slm.onLang). Window: xplane.slmWindow({ op }) with "drag" / "drop" / "close" and
+  { op: "opacity", v: 30..100 } and { op: "scale", v: 100..200 } (kept by the plugin in
+  SimLoadManager.prf with the position, sent back on load with slm.onOpacity(v) and
+  slm.onScale(v)); xplane.slmFit({ w, h }) sizes the window to the content.
+  The size is its own (preset buttons under the top bar), not the main window text size.
+  Kept out of ui/ on purpose: the local network version serves that folder.
+  No text in this file: every label comes from ui/lang/<code>.json.
+-->
+<style>
+:root{
+  color-scheme:dark;
+  --bg:#0d131a; --line:#26364a; --line2:#32465e;
+  --text:#e4ebf2; --muted:#8a9cb0; --faint:#5b6d82;
+  --cyan:#58d0e3; --ok:#3fd68b; --warn:#f2b544; --crit:#ff6a5f; --track:#223041;
+  --f-body:"Segoe UI",system-ui,sans-serif;
+  --f-mono:"Cascadia Mono","Consolas",ui-monospace,monospace;
+  --op:.9;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:transparent;overflow:hidden}
+body{color:var(--text);font-family:var(--f-body);font-size:12px;line-height:1.3;-webkit-user-select:none;user-select:none}
+[hidden]{display:none!important}
+button:focus-visible,input:focus-visible{outline:1px solid var(--cyan);outline-offset:1px}
+
+/* The whole window, text included, follows the opacity setting. */
+.cw{width:236px;background:var(--bg);border:1px solid var(--line2);border-radius:6px;opacity:var(--op);overflow:hidden}
+.tb{display:flex;align-items:center;gap:6px;height:22px;padding:0 3px 0 8px;cursor:grab;border-bottom:1px solid var(--line)}
+.flt{font-family:var(--f-mono);font-size:11px;letter-spacing:.04em;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.eta{font-family:var(--f-mono);font-size:11px;color:var(--cyan);white-space:nowrap}
+.eta.ok{color:var(--ok)}
+.sp{flex:1}
+.op{display:inline-flex;align-items:center;gap:4px}
+.op .ic{width:14px;height:16px;display:grid;place-items:center;color:var(--faint)}
+.op .ic svg{display:block}
+/* Discreet: the slider only shows while the mouse is over the window. */
+.op input{-webkit-appearance:none;appearance:none;width:0;height:2px;margin:0;background:var(--line2);border-radius:1px;opacity:0;cursor:pointer;transition:width .15s ease,opacity .15s ease}
+.op input::-webkit-slider-thumb{-webkit-appearance:none;width:8px;height:8px;border-radius:50%;background:var(--muted);border:0}
+.cw:hover .op input,.op input:focus-visible{width:46px;opacity:1}
+.cw:hover .op .ic{color:var(--muted)}
+.sz{height:18px;padding:0 3px;border:0;background:transparent;color:var(--faint);border-radius:3px;cursor:pointer;font-family:var(--f-body);font-size:10.5px;font-weight:600;line-height:1}
+.sz:hover,.sz[aria-expanded="true"]{color:var(--text);background:rgba(255,255,255,.06)}
+.sizes{display:flex;gap:3px;padding:4px 6px;border-bottom:1px solid var(--line)}
+.sizes button{flex:1;font-family:var(--f-mono);font-size:10.5px;padding:2px 0;border:1px solid var(--line2);border-radius:3px;background:transparent;color:var(--muted);cursor:pointer}
+.sizes button:hover{color:var(--text)}
+.sizes button[aria-pressed="true"]{border-color:var(--cyan);color:var(--cyan)}
+.x{width:18px;height:18px;border:0;padding:0;background:transparent;color:var(--faint);border-radius:3px;cursor:pointer;font-size:14px;line-height:1;display:grid;place-items:center}
+.x:hover{color:var(--text);background:rgba(255,255,255,.06)}
+
+.body{padding:6px 8px 8px;display:flex;flex-direction:column;gap:6px}
+.msg{color:var(--muted);font-size:11.5px}
+.msg.warn{color:var(--warn)}
+.done-line{display:flex;flex-wrap:wrap;gap:2px 8px;font-size:11px;color:var(--muted)}
+.done-line span{display:inline-flex;align-items:center;gap:4px}
+.done-line span::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--ok)}
+.row{display:flex;flex-direction:column;gap:2px}
+.row .t{display:flex;justify-content:space-between;gap:8px}
+.row .n{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.row.pending .n{color:var(--faint)}
+.row .f{font-family:var(--f-mono);font-size:11px;color:var(--muted);white-space:nowrap}
+.row .b{display:flex;align-items:center;gap:6px}
+.row .b .bar{flex:1}
+.row .a{font-family:var(--f-mono);font-size:11px;color:var(--text);white-space:nowrap}
+.row .a:empty{display:none}
+.bar{height:3px;border-radius:2px;background:var(--track);overflow:hidden}
+.bar i{display:block;height:100%;width:0;background:var(--cyan)}
+/* Tone sent by the Lua (bar.tone), as in Ground Ops: defuel = warn (yellow). */
+.bar.b-ok i{background:var(--ok)} .bar.b-warn i,.bar.b-event i{background:var(--warn)} .bar.b-bad i{background:var(--crit)}
+</style>
+</head>
+<body>
+<div class="cw" id="cw">
+  <div class="tb" id="tb">
+    <span class="flt" id="flt"></span><span class="sp"></span><span class="eta" id="eta"></span>
+    <button class="sz" id="sz" aria-expanded="false" data-i18n-title="compact.size">Aa</button>
+    <span class="op"><span class="ic" data-i18n-title="compact.opacity"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><circle cx="5" cy="5" r="4" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M5 1a4 4 0 0 1 0 8z" fill="currentColor"/></svg></span><input type="range" id="opacity" min="30" max="100" step="5" value="90" data-i18n-title="compact.opacity"></span>
+    <button class="x" data-win="close" data-i18n-title="win.close">×</button>
+  </div>
+  <div class="sizes" id="sizes" hidden>
+    <button data-scale="100">100%</button><button data-scale="125">125%</button><button data-scale="150">150%</button><button data-scale="175">175%</button><button data-scale="200">200%</button>
+  </div>
+  <div class="body" id="body"></div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var slm = window.slm = {};
+  var L = {};
+  var S = null, running = false, received = false;
+  var bodyKey = null, scale = 1;
+  var $ = function (id) { return document.getElementById(id); };
+
+  function t(key, vars) {
+    var s = Object.prototype.hasOwnProperty.call(L, key) ? L[key] : key;
+    if (vars) Object.keys(vars).forEach(function (k) { s = s.split("{" + k + "}").join(String(vars[k])); });
+    return s;
+  }
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+    });
+  }
+  function num(v) { return Math.round(Number(v) || 0).toLocaleString("en-US").replace(/,/g, " "); }
+  function clamp01(v) { return Math.max(0, Math.min(1, Number(v) || 0)); }
+  function text(el, s) { if (el.textContent !== s) el.textContent = s; }
+
+  // ---- Language ------------------------------------------------
+  slm.onLang = function (dict) {
+    L = (typeof dict === "string") ? JSON.parse(dict) : (dict || {});
+    document.querySelectorAll("[data-i18n-title]").forEach(function (e) {
+      e.title = t(e.dataset.i18nTitle);
+      e.setAttribute("aria-label", e.title);
+    });
+    bodyKey = null;
+    render();
+  };
+  slm.onLangs = function () { /* no language picker here */ };
+
+  // ---- Opacity (whole window) ------------------------------------
+  function applyOpacity(v) {
+    v = Math.max(30, Math.min(100, Number(v) || 90));
+    document.documentElement.style.setProperty("--op", String(v / 100));
+    return v;
+  }
+  slm.onOpacity = function (v) { $("opacity").value = applyOpacity(v); };
+  $("opacity").addEventListener("input", function () { applyOpacity(this.value); });
+  $("opacity").addEventListener("change", function () { win("opacity", applyOpacity(this.value)); });
+
+  // ---- State ---------------------------------------------------
+  slm.onState = function (msg) {
+    if (typeof msg === "string") msg = JSON.parse(msg);
+    received = true;
+    running = !!msg.running;
+    S = msg.state || null;
+    render();
+  };
+
+  // Step names carry their language-file key (#SL17).
+  function stepName(it) {
+    var name = it.title || (it.label || it.header || "").replace(/^>>\s*/, "");
+    var k = it.name_tr && it.name_tr.key;
+    return k && Object.prototype.hasOwnProperty.call(L, k) ? t(k) : name;
+  }
+  function steps() {
+    return (S && S.steps_visible && S.steps ? S.steps : []).filter(function (it) { return it.kind === "step"; });
+  }
+  // Line 1, right: the scheduled figure ("Schd 4 790 kg"), as in Ground Ops,
+  // or the % of a running step without figures (catering, briefing...).
+  function headText(it) {
+    if (it.figure) {
+      var f = it.figure, unit = f.unit === "pax" ? t("unit.pax") : f.unit;
+      return t("kpi.scheduled", { value: num(f.schd) + " " + unit });
+    }
+    if (it.status === "active" && it.bar) return Math.floor(clamp01(it.bar.frac) * 100) + "%";
+    return "";
+  }
+  // End of the bar: the actual figure, once the step has started.
+  function nowText(it) {
+    return it.status === "active" && it.figure ? num(it.figure.actual) : "";
+  }
+
+  function renderHead(list, complete) {
+    var f = S && S.flight;
+    text($("flt"), f ? (f.callsign || t("flight.no_callsign")) : t("app.title"));
+    var e = "", ok = false;
+    if (S && S.total_eta > 0) {
+      e = S.total_eta < 60 ? t("compact.eta_short") : t("compact.eta", { min: Math.ceil(S.total_eta / 60) });
+    } else if (complete) {
+      e = t("compact.ready");
+      ok = true;
+    }
+    text($("eta"), e);
+    $("eta").classList.toggle("ok", ok);
+  }
+
+  // Message shown instead of the steps (nothing running).
+  function idleMessage() {
+    if (!S.has_data) return t("flight.none");
+    var f = S.flight || {};
+    var line = num(f.pax_total) + " " + t("unit.pax") + " · " + num(f.fuel_total) + " " + (S.unit || "");
+    if (S.mode === "in_flight") return t("mode.in_flight");
+    return line;
+  }
+
+  function renderBody(list) {
+    var box = $("body");
+    var warn = S.beacon_hold ? t("seq.beacon_hold") : "";
+    var done = list.filter(function (it) { return it.status === "done"; });
+    var rest = list.filter(function (it) { return it.status !== "done"; });
+    var key = JSON.stringify([warn, done.map(stepName), rest.map(function (it) { return [stepName(it), it.status, !!(it.figure || it.bar)]; }),
+                              list.length ? "" : idleMessage()]);
+    if (key !== bodyKey) {
+      bodyKey = key;
+      var out = "";
+      if (warn) out += "<div class=\"msg warn\">" + esc(warn) + "</div>";
+      if (!list.length) out += "<div class=\"msg\">" + esc(idleMessage()) + "</div>";
+      if (done.length) out += "<div class=\"done-line\">" + done.map(function (it) { return "<span>" + esc(stepName(it)) + "</span>"; }).join("") + "</div>";
+      rest.forEach(function (it, i) {
+        out += "<div class=\"row " + esc(it.status) + "\" data-i=\"" + i + "\"><div class=\"t\"><span class=\"n\">" + esc(stepName(it)) +
+               "</span><span class=\"f\"></span></div>" +
+               (it.figure || it.bar ? "<div class=\"b\"><div class=\"bar\"><i></i></div><span class=\"a\"></span></div>" : "") + "</div>";
+      });
+      box.innerHTML = out;
+    }
+    // Figures and bars refreshed in place.
+    rest.forEach(function (it, i) {
+      var el = box.querySelector("[data-i=\"" + i + "\"]");
+      if (!el) return;
+      text(el.querySelector(".f"), headText(it));
+      var a = el.querySelector(".a");
+      if (a) text(a, nowText(it));
+      var bar = el.querySelector(".bar");
+      if (bar) {
+        var cls = "bar" + (it.bar && it.bar.tone ? " b-" + it.bar.tone : "");
+        if (bar.className !== cls) bar.className = cls;
+        var w = ((it.bar ? clamp01(it.bar.frac) : 0) * 100).toFixed(1) + "%";
+        if (bar.firstChild.style.width !== w) bar.firstChild.style.width = w;
+      }
+    });
+  }
+
+  function render() {
+    if (!received) {
+      text($("flt"), t("app.title"));
+      $("body").innerHTML = "<div class=\"msg\">" + esc(t("app.waiting")) + "</div>";
+      bodyKey = null;
+      return;
+    }
+    if (!running || !S) {
+      renderHead([], false);
+      var m = "<div class=\"msg warn\">" + esc(t("compact.stopped")) + "</div>";
+      if ($("body").innerHTML !== m) $("body").innerHTML = m;
+      bodyKey = null;
+      return;
+    }
+    var list = steps();
+    var complete = list.length > 0 && list.every(function (it) { return it.status === "done"; });
+    renderHead(list, complete);
+    renderBody(list);
+  }
+
+  // ---- Size: preset chosen in the page, the window follows the content ----
+  function applyScale(v) {
+    v = Math.max(100, Math.min(200, Number(v) || 100));
+    document.querySelectorAll("#sizes button").forEach(function (b) {
+      b.setAttribute("aria-pressed", String(Number(b.dataset.scale) === v));
+    });
+    if (v / 100 !== scale) {
+      scale = v / 100;
+      document.body.style.zoom = String(scale);
+      reportSize();
+    }
+    return v;
+  }
+  slm.onScale = applyScale;
+  function showSizes(on) {
+    $("sizes").hidden = !on;
+    $("sz").setAttribute("aria-expanded", String(on));
+  }
+  var lastW = 0, lastH = 0;
+  function reportSize() {
+    var cw = $("cw"), r = cw.getBoundingClientRect();
+    var w = r.width, h = r.height;
+    // Rendered size (after the text size zoom), whatever the Chromium zoom model.
+    if (scale !== 1 && Math.abs(h - cw.offsetHeight) < 0.5) { w *= scale; h *= scale; }
+    w = Math.ceil(w); h = Math.ceil(h);
+    if ((Math.abs(w - lastW) < 2 && Math.abs(h - lastH) < 2) || !window.xplane || typeof xplane.slmFit !== "function") return;
+    lastW = w; lastH = h;
+    xplane.slmFit({ w: w, h: h });
+  }
+  if (window.ResizeObserver) new ResizeObserver(reportSize).observe($("cw"));
+
+  // ---- Window (no X-Plane frame) -------------------------------
+  var dragging = false;
+  function win(op, v) {
+    if (!window.xplane || typeof xplane.slmWindow !== "function") return;
+    var msg = { op: op };
+    if (v !== undefined) msg.v = v;
+    xplane.slmWindow(msg);
+  }
+  function drop() {
+    if (!dragging) return;
+    dragging = false;
+    win("drop");
+  }
+  $("tb").addEventListener("mousedown", function (e) {
+    if (e.button !== 0 || e.target.closest("button, input")) return;
+    e.preventDefault();
+    dragging = true;
+    win("drag");
+  });
+  document.addEventListener("mouseup", drop);
+  document.addEventListener("mousemove", function (e) { if (dragging && !(e.buttons & 1)) drop(); });
+  window.addEventListener("blur", drop);
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest("button");
+    if (!b) return;
+    if (b.dataset.win) { win(b.dataset.win); return; }
+    if (b.id === "sz") { showSizes($("sizes").hidden); return; }
+    if (b.dataset.scale) { win("scale", applyScale(b.dataset.scale)); showSizes(false); }
+  });
+
+  // ---- State polling -------------------------------------------
+  var stateVersion = -1, polling = false;
+  function poll() {
+    if (polling || !window.xplane || typeof xplane.slmGetState !== "function") return;
+    polling = true;
+    Promise.resolve(xplane.slmGetState({ v: stateVersion })).then(function (r) {
+      polling = false;
+      if (typeof r === "string") r = JSON.parse(r);
+      if (!r || r.v === undefined || r.v === stateVersion) return;
+      stateVersion = r.v;
+      if (r.running !== undefined) slm.onState(r);
+    }, function () { polling = false; });
+  }
+  setInterval(poll, 250);
+
+  applyScale(100);
+  render();
+  reportSize();
+  poll();
+})();
+</script>
+</body>
+</html>

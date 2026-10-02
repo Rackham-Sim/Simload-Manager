@@ -1,0 +1,6 @@
+name|SimLoad Manager
+version|5.0
+module|https://raw.githubusercontent.com/Rackham-Sim/Simload-Manager/refs/heads/main
+zone|custom
+locked|false
+disabled|false

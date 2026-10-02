@@ -1,0 +1,8141 @@
+--SIMLOAD MANAGER V5.0 (branche slm-5.0, base 4.8)
+
+--------------------------------------------------------------------------------
+-- IMGUI CHECK
+--------------------------------------------------------------------------------
+if not SUPPORTS_FLOATING_WINDOWS then
+    logMsg("imgui not supported by your FlyWithLua version")
+    return
+end
+
+
+--------------------------------------------------------------------------------
+-- UPDATE CHECK
+--------------------------------------------------------------------------------
+SLM_VERSION = "4.8"
+logMsg("[SLM] SimLoad Manager v" .. SLM_VERSION .. " loaded")
+
+-- Developer tools (Settings > Dev > Activate Dev mode), saved in the settings file.
+slm_dev_mode = false
+
+-- Translations of the texts built by the logic (SLM 5 web UI, #SL17).
+-- slm_tr returns the English text unchanged (ImGui shows it) and remembers its
+-- language-file key: SLM_TR[text] = { key = "...", vars = {...} }. The web page
+-- shows the translated key, or the English text when the language lacks it.
+SLM_TR = {}
+function slm_tr(key, vars, text)
+    SLM_TR[text] = { key = key, vars = vars }
+    return text
+end
+-- Lines as SLM_State sends them: { key, vars, text } per line ({ text } alone
+-- when the line has no key).
+function slm_tr_lines(lines)
+    local out = {}
+    for i, line in ipairs(lines) do
+        local e = SLM_TR[line]
+        out[i] = { key = e and e.key, vars = e and e.vars, text = line }
+    end
+    return out
+end
+
+local SLM_UPDATE_URL =
+    "http://raw.githack.com/Rackham-Sim/Simload-Manager/main/version.txt"
+
+local slm_update_checked = false
+local slm_update_status  = slm_tr("upd.unknown", nil, "Unable to verify update at this time")
+local slm_latest_version = nil
+
+local function version_to_table(v)
+    local t = {}
+    for num in string.gmatch(v or "", "%d+") do
+        t[#t + 1] = tonumber(num)
+    end
+    return t
+end
+
+local function is_version_newer(remote, localv)
+    local r = version_to_table(remote)
+    local l = version_to_table(localv)
+
+    local max_len = math.max(#r, #l)
+    for i = 1, max_len do
+        local rv = r[i] or 0
+        local lv = l[i] or 0
+        if rv > lv then return true end
+        if rv < lv then return false end
+    end
+    return false
+end
+
+local function slm_extract_remote_version(body)
+    if not body or body == "" then return nil end
+
+    local lines = {}
+    for line in tostring(body):gmatch("([^\r\n]+)") do
+        line = line:gsub("\r", "")
+        if line ~= "" then
+            lines[#lines + 1] = line
+        end
+    end
+
+    if #lines < 2 then return nil end
+
+    local remote_version = (lines[2] or ""):match("[Vv]%s*(%d+[%d%.]*)")
+    return remote_version
+end
+
+function slm_check_update()
+    if slm_update_checked then return end
+    slm_update_checked = true
+    slm_update_available = false
+
+    slm_update_status = slm_tr("upd.unknown", nil, "Unable to verify update at this time")
+    logMsg("[SLM] Update check started...")
+
+    local ok_http, http = pcall(require, "socket.http")
+    if not ok_http or not http or not http.request then
+        logMsg("[SLM] Unable to verify update (socket.http not available)")
+        return
+    end
+
+    if http.TIMEOUT ~= nil then
+        http.TIMEOUT = 5
+    end
+
+    local body, code = http.request(SLM_UPDATE_URL)
+    if not body or code ~= 200 then
+        logMsg("[SLM] Unable to verify update (HTTP " .. tostring(code) .. ")")
+        return
+    end
+
+    local remote_version = slm_extract_remote_version(body)
+    if not remote_version then
+        logMsg("[SLM] Unable to verify update (parse failed)")
+        return
+    end
+
+    slm_latest_version = remote_version
+
+    -- SLM5_VERSION: set by the SLM 5 plugin (SLM_VERSION stays the 4.x number)
+    if is_version_newer(remote_version, SLM5_VERSION or SLM_VERSION) then
+        slm_update_available = true
+        slm_update_status = slm_tr("upd.available", { version = remote_version },
+            "New update available: " .. remote_version)
+        logMsg("[SLM] New update available: " .. remote_version)
+    else
+        slm_update_available = false
+        slm_update_status = slm_tr("upd.latest", nil, "Latest version installed")
+        logMsg("[SLM] Latest version installed (Local " .. (SLM5_VERSION or SLM_VERSION) .. " / Remote " .. remote_version .. ")")
+    end
+end
+
+local slm_update_init_done = false
+local slm_update_init_start = os.clock()
+function slm_update_init_once()
+    if slm_update_init_done then return end
+    if os.clock() - slm_update_init_start < 60 then return end
+    slm_update_init_done = true
+    slm_check_update()
+end
+
+
+--------------------------------------------------------------------------------
+-- VARIABLES
+--------------------------------------------------------------------------------
+embark_wnd = nil
+unit_system = "kg"
+-- Plugin UI font size: 0 = default (no custom font), 1-9 = FlyWithLua custom font slot
+-- (imgui_push_font, requires FlyWithLua NG 2.8.15+ with fonts installed in Custom_Fonts/)
+slm_font_choice = 0
+SLM_FONT_LABELS = {
+    [1] = "ProFontWindows 13", [2] = "ProFontWindows 16", [3] = "ProFontWindows 20",
+    [4] = "Roboto-Light 13",   [5] = "Roboto-Light 16",   [6] = "Roboto-Light 20",
+    [7] = "Roboto-Regular 13", [8] = "Roboto-Regular 16", [9] = "Roboto-Regular 20",
+}
+-- SLM 5 web window: interface language (code of a lang/<code>.json file) and
+-- text size in percent. The FlyWithLua 4.x version reads and saves them unused.
+slm_language = "en"
+slm_ui_scale = 100
+-- SLM 5 web version on the local network (server in the plugin), off by default.
+slm_web_enabled = false
+slm_web_port = 8074
+-- true once the 3 custom font files are confirmed present in FlyWithLua's Custom_Fonts folder
+-- (auto-copied from X-Plane's own Resources/fonts by slm_ensure_custom_fonts() below)
+slm_custom_fonts_ready = false
+
+local SLM_CUSTOM_FONT_FILES = {"ProFontWindows.ttf", "Roboto-Light.ttf", "Roboto-Regular.ttf"}
+
+local function slm_file_exists(path)
+    local f = io.open(path, "rb")
+    if f then f:close(); return true end
+    return false
+end
+
+local function slm_copy_file(src, dst)
+    local sf = io.open(src, "rb")
+    if not sf then return false end
+    local data = sf:read("*a")
+    sf:close()
+    if not data or data == "" then return false end
+    local df = io.open(dst, "wb")
+    if not df then return false end
+    df:write(data)
+    df:close()
+    return true
+end
+
+-- X-Plane already ships ProFontWindows.ttf / Roboto-Light.ttf / Roboto-Regular.ttf in
+-- Resources/fonts; FlyWithLua NG 2.8.15+ just needs them mirrored into its own
+-- Custom_Fonts/ folder to make them selectable via imgui_push_font(). Files that
+-- merely sit in that folder are inert until a script explicitly pushes one, so this
+-- is safe to run automatically (idempotent: skips files already present).
+function slm_ensure_custom_fonts()
+    if not imgui_push_font then
+        slm_custom_fonts_ready = false
+        return
+    end
+    local fonts_src_dir = SYSTEM_DIRECTORY .. "Resources" .. DIRECTORY_SEPARATOR .. "fonts" .. DIRECTORY_SEPARATOR
+    local fonts_dst_dir = SYSTEM_DIRECTORY .. "Resources" .. DIRECTORY_SEPARATOR .. "plugins" .. DIRECTORY_SEPARATOR
+        .. "FlyWithLua" .. DIRECTORY_SEPARATOR .. "Custom_Fonts" .. DIRECTORY_SEPARATOR
+    local all_ready = true
+    for _, fname in ipairs(SLM_CUSTOM_FONT_FILES) do
+        local dst = fonts_dst_dir .. fname
+        if not slm_file_exists(dst) then
+            if slm_copy_file(fonts_src_dir .. fname, dst) then
+                logMsg("[SLM] Custom font installed: " .. fname)
+            else
+                logMsg("[SLM] Could not install custom font " .. fname .. " (source or destination unavailable)")
+                all_ready = false
+            end
+        end
+    end
+    slm_custom_fonts_ready = all_ready
+end
+
+local function to_kg(v)   return (unit_system == "lbs") and ((v or 0) * 0.453592) or (v or 0) end
+local function from_kg(v) return (unit_system == "lbs") and ((v or 0) * 2.20462)  or (v or 0) end
+simbrief_id = ""
+slm_captain_name = ""
+slm_data_source = "simbrief"
+local slm_fsd_available = false
+local slm_walkaround_available = false
+settings_file = "Resources/plugins/FlyWithLua/Modules/simload_settings.txt"
+-- SLM 5 runs without FlyWithLua: settings go to X-Plane's preferences folder.
+if SLM5_VERSION then
+    settings_file = SYSTEM_DIRECTORY .. "Output/preferences/simload_settings.txt"
+end
+
+load_controllers = {
+    "Xavier24", "james.C", "Furax84", "Dudley.B", "Jugac64",
+    "Mark", "Othmar", "Pea", "Christy.D", "Guilb'Air", "Sydney.M",
+	"bagolu", "Gritsch", "N. Reichel", "Feliciano", "JF.Caviglioli"
+}
+
+--------------------------------------------------------------------------------
+-- JSON PARSER (minimal, no external dependencies)
+--------------------------------------------------------------------------------
+local function slm_parse_json(s)
+    local pos = 1
+    local parse_value
+
+    local function skip_ws()
+        while pos <= #s and s:sub(pos, pos):match("%s") do pos = pos + 1 end
+    end
+
+    local function parse_string()
+        pos = pos + 1
+        local result = {}
+        while pos <= #s do
+            local c = s:sub(pos, pos)
+            if c == '"' then
+                pos = pos + 1
+                return table.concat(result)
+            elseif c == '\\' then
+                pos = pos + 1
+                local e = s:sub(pos, pos)
+                if     e == 'n'  then result[#result+1] = '\n'
+                elseif e == 't'  then result[#result+1] = '\t'
+                elseif e == 'r'  then result[#result+1] = '\r'
+                elseif e == '"'  then result[#result+1] = '"'
+                elseif e == '\\' then result[#result+1] = '\\'
+                else                  result[#result+1] = e
+                end
+                pos = pos + 1
+            else
+                result[#result+1] = c
+                pos = pos + 1
+            end
+        end
+        return table.concat(result)
+    end
+
+    local function parse_number()
+        local start = pos
+        while pos <= #s and s:sub(pos, pos):match("[%-%.%deE%+]") do pos = pos + 1 end
+        return tonumber(s:sub(start, pos - 1))
+    end
+
+    local function parse_object()
+        local obj = {}
+        pos = pos + 1; skip_ws()
+        if s:sub(pos, pos) == "}" then pos = pos + 1; return obj end
+        while true do
+            skip_ws()
+            local key = parse_string()
+            skip_ws()
+            pos = pos + 1
+            local val = parse_value()
+            obj[key] = val
+            skip_ws()
+            local c = s:sub(pos, pos)
+            if c == "," then pos = pos + 1
+            elseif c == "}" then pos = pos + 1; break end
+        end
+        return obj
+    end
+
+    local function parse_array()
+        local arr = {}
+        pos = pos + 1; skip_ws()
+        if s:sub(pos, pos) == "]" then pos = pos + 1; return arr end
+        while true do
+            local val = parse_value()
+            arr[#arr+1] = val
+            skip_ws()
+            local c = s:sub(pos, pos)
+            if c == "," then pos = pos + 1
+            elseif c == "]" then pos = pos + 1; break end
+        end
+        return arr
+    end
+
+    parse_value = function()
+        skip_ws()
+        local c = s:sub(pos, pos)
+        if     c == "{"  then return parse_object()
+        elseif c == "["  then return parse_array()
+        elseif c == '"'  then return parse_string()
+        elseif c == "t"  then pos = pos + 4; return true
+        elseif c == "f"  then pos = pos + 5; return false
+        elseif c == "n"  then pos = pos + 4; return nil
+        else                   return parse_number()
+        end
+    end
+
+    return parse_value()
+end
+
+--------------------------------------------------------------------------------
+-- AIRCRAFT DATA (loaded from SLM-Data/aircraft.json)
+--------------------------------------------------------------------------------
+local slm_aircraft_data = {}
+
+local function slm_load_aircraft_data()
+    local path = SCRIPT_DIRECTORY .. "SLM-Data/aircraft.json"
+    local f = io.open(path, "r")
+    if not f then
+        logMsg("[SLM] aircraft.json not found: " .. path)
+        return
+    end
+    local content = f:read("*all")
+    f:close()
+    slm_aircraft_data = slm_parse_json(content) or {}
+    if slm_aircraft_data.tank_max then
+        for icao, tanks in pairs(slm_aircraft_data.tank_max) do
+            local fixed = {}
+            for k, v in pairs(tanks) do fixed[tonumber(k)] = v end
+            slm_aircraft_data.tank_max[icao] = fixed
+        end
+    end
+    logMsg("[SLM] aircraft.json loaded")
+end
+
+--------------------------------------------------------------------------------
+-- TOLISS ZFWCG
+--------------------------------------------------------------------------------
+-- ToLiss doesn't expose a live ZFWCG dataref: "toliss_airbus/init/ZFWCG" mirrors
+-- the MCDU INIT B input field (what the pilot types), not a computed value, and
+-- "AirbusFBW/CGLocationPercent" is the gross weight CG (fuel included), not ZFW.
+-- We interpolate it ourselves from reference curves in aircraft.json
+-- ("toliss_cg"), sampled from the ToLiss EFB Weight & Balance page at three
+-- fwd/aft passenger-distribution settings (35/50/60%), blended by the live
+-- PaxDistrib dataref, then combined with cargo as a mass-weighted average of
+-- %MAC arms (valid because %MAC is an affine transform of the physical arm,
+-- so it can be averaged directly without converting back to meters).
+
+-- FlyWithLua's PLANE_ICAO is snapshotted once at aircraft load; some ToLiss
+-- aircraft only settle their real sim/aircraft/view/acf_ICAO a bit later, so
+-- this reads it live instead (falls back to PLANE_ICAO if unset).
+function slm_get_live_icao()
+    local raw = slm_live_icao_dr or PLANE_ICAO or ""
+    return raw:match("^([^%z]*)") or raw
+end
+
+local function slm_toliss_cg_profile()
+    local db = slm_aircraft_data.toliss_cg
+    if not db then return nil end
+    local icao = slm_get_live_icao()
+    local key  = icao
+
+    if icao == "A21N" then
+        local ref = XPLMFindDataRef("AirbusFBW/A321ExitConfig")
+        if ref and XPLMGetDatai(ref) == 3 then
+            key = "A21N_200"
+        end
+    elseif icao == "A319" then
+        local max_pax = slm_max_passengers
+        if not max_pax and SLM_Loadsheet_Data then
+            max_pax = tonumber(SLM_Loadsheet_Data.pax_total)
+        end
+        if max_pax == 160 then key = "A319_160" end
+    end
+
+    return db[key]
+end
+
+-- Stepwise-linear interpolation of a reference curve at a given pax count.
+local function slm_toliss_curve_at(pax_tab, curve, pax_no)
+    if not pax_tab or not curve or #pax_tab == 0 then return nil end
+    local last = #pax_tab
+    if pax_no <= pax_tab[1] then return curve[1] end
+    if pax_no >= pax_tab[last] then return curve[last] end
+    for i = 1, last - 1 do
+        local lo, hi = pax_tab[i], pax_tab[i + 1]
+        if pax_no >= lo and pax_no <= hi then
+            local t = (hi > lo) and (pax_no - lo) / (hi - lo) or 0
+            return curve[i] + t * (curve[i + 1] - curve[i])
+        end
+    end
+    return curve[last]
+end
+
+-- %MAC of DOW+pax alone (no cargo yet), blending the 35/50/60 reference
+-- curves by the current fwd/aft passenger distribution (0.35-0.60 -- the
+-- Simulation Manual warns the slider's full extremes "throw the CG
+-- completely out of bounds").
+local function slm_toliss_pax_pct(profile, pax_no, distrib)
+    local c = profile.curves
+    distrib = math.max(0.35, math.min(0.60, distrib or 0.5))
+    local pct_050 = slm_toliss_curve_at(c.pax_tab, c.zfwcg_050, pax_no)
+    if not pct_050 then return nil end
+    if distrib < 0.5 then
+        local pct_035 = slm_toliss_curve_at(c.pax_tab, c.zfwcg_035, pax_no)
+        local t = (0.5 - distrib) / 0.15
+        return pct_050 + t * ((pct_035 or pct_050) - pct_050)
+    elseif distrib > 0.5 then
+        local pct_060 = slm_toliss_curve_at(c.pax_tab, c.zfwcg_060, pax_no)
+        local t = (distrib - 0.5) / 0.10
+        return pct_050 + t * ((pct_060 or pct_050) - pct_050)
+    end
+    return pct_050
+end
+
+-- Final ZFWCG (%MAC) for the current ToLiss aircraft, or nil if unsupported
+-- (aircraft not ToLiss, or variant not in aircraft.json).
+function slm_toliss_zfwcg(pax_no, fwd_cargo_kg, aft_cargo_kg, distrib)
+    local profile = slm_toliss_cg_profile()
+    if not profile then return nil end
+
+    local pax_pct = slm_toliss_pax_pct(profile, pax_no or 0, distrib)
+    if not pax_pct then return nil end
+
+    local dow_kg = tonumber(profile.oew) or 0
+    local mass   = dow_kg + (pax_no or 0) * 100 -- ToLiss assumes 100kg/pax
+    local moment = mass * pax_pct
+
+    local geo = profile.geometry
+    fwd_cargo_kg = fwd_cargo_kg or 0
+    aft_cargo_kg = aft_cargo_kg or 0
+    if geo and fwd_cargo_kg > 0 then
+        local fwd_pct = (geo.fwd_cargo_arm - geo.lemac) / geo.mac * 100
+        moment = moment + fwd_cargo_kg * fwd_pct
+        mass   = mass + fwd_cargo_kg
+    end
+    if geo and aft_cargo_kg > 0 then
+        local aft_pct = (geo.aft_cargo_arm - geo.lemac) / geo.mac * 100
+        moment = moment + aft_cargo_kg * aft_pct
+        mass   = mass + aft_cargo_kg
+    end
+
+    if mass <= 0 then return nil end
+    return moment / mass
+end
+
+local simbrief_data_loaded = false
+
+local slm_manual_pax    = 0
+local slm_manual_max_pax = 0
+local slm_manual_cargo  = 0.0
+local slm_manual_fuel   = 0.0
+local slm_manual_fltnum        = ""
+local slm_manual_orig          = ""
+local slm_manual_dest   = ""
+local slm_manual_std    = ""
+local slm_manual_sta    = ""
+
+local slm_fsd_pax_dr     = nil
+local slm_fsd_baggage_dr = nil
+local slm_fsd_fuel_dr    = nil
+
+local passengers_total = 0
+local cargo_total = 0
+local arr_passengers_total = 0
+local arr_cargo_total      = 0
+
+local embark_started = false
+local embark_done = false
+local disembark_started = false
+local disembark_done = false
+
+local selected_location_group = "remote"
+local aircraft_has_own_stairs = false
+local cargo_loaded = 0
+local passengers_loaded = 0
+local cargo_unloaded = 0
+local passengers_unloaded = 0
+
+local start_time = 0
+local last_update_time = 0
+local pax_load_started = false
+local pax_start_time = 0
+
+local disembark_start_time = 0
+local disembark_last_update_time = 0
+local pax_unload_started = false
+local pax_unload_start_time = 0
+
+local estimated_time_cargo = nil
+local estimated_time_pax = nil
+local cargo_start_reference_time = nil
+
+local cargo_loop_playing     = false
+local pax_loop_playing       = false
+local fuel_loop_playing      = false
+local briefing_playing       = false
+local catering_loop_playing  = false
+local cleaning_loop_playing  = false
+local is_muted = false
+local slm_music_handle  = nil
+local slm_music_playing = false
+
+
+local sound_dir = SCRIPT_DIRECTORY .. "SLM-Data/SimLoad-Manager-Sounds/"
+local Volume = 1.0
+
+local fuel_total = 0
+local fuel_loaded = 0
+local fuel_unit = "kg"
+local fuel_loading = false
+local fuel_done = false
+local fuel_ready_time = nil
+local estimated_time_fuel = nil
+local fuel_first = false
+local fuel_wait_finished = false
+local fuel_done_time = nil
+local fuel_post_delay = 25
+
+local slm_rf_enabled   = true
+local slm_rf_active    = false
+local slm_rf_target_kg = 0
+local slm_rf_last_t    = 0
+local slm_rf_interval  = 2.0   -- ToLiss: seconds between m_fuel total updates
+local slm_rf_step_kg   = 10.0
+local slm_rf_group_idx = 1
+local slm_rf_groups    = {}
+local SLM_RF_SAT_WINDOW    = 10
+local SLM_RF_SAT_THRESHOLD = 0.5
+local slm_rf_history   = {}
+local slm_rf_tank_dr          = nil
+local slm_rf_last_fuel_loaded = nil
+local slm_rf_initial_real_kg  = 0
+local slm_rf_group_dr_override   = {}
+local slm_rf_tolerance_checked   = false
+local slm_rf_skipped             = false
+
+local slm_aircraft_type   = "default"
+local slm_exclusion_message = nil
+local slm_rf_excluded     = false
+local slm_rp_excluded     = false
+
+local slm_rp_enabled           = true
+local slm_rp_active            = false
+local slm_rp_target_pax_kg     = 0
+local slm_rp_target_cargo_kg   = 0
+local slm_rp_last_pax_loaded   = nil
+local slm_rp_last_cargo_loaded = nil
+local slm_rp_last_pax_unloaded   = nil
+local slm_rp_last_cargo_unloaded = nil
+local slm_rp_station_dr        = nil
+local slm_rp_station_map       = nil
+-- kg written per category (default stations): pax and cargo may share stations
+slm_rp_pax_written_kg    = 0   -- global: main chunk is at the 200-local limit
+slm_rp_cargo_written_kg  = 0
+-- default stations, pax only (#SL16): kg written per station, and the
+-- per-station kg when unloading began
+slm_rp_st_pax          = nil
+slm_rp_st_pax_unload0  = nil
+-- E-Jets (#SL19): balance model (nil = not read yet, false = none), this
+-- flight's seating shares and hold split
+slm_ejet_perf, slm_rp_ejet_shares, slm_rp_ejet_cw = nil, nil, nil
+local slm_rp_toliss_nopax_dr       = nil
+local slm_rp_toliss_fwdcargo_dr    = nil
+local slm_rp_toliss_aftcargo_dr    = nil
+local slm_rp_toliss_last_setweight = 0
+local slm_toliss_chocks_dr         = nil
+local slm_toliss_paxdistrib_ro_dr  = nil
+local slm_rp_zibo_zone_dr        = {}
+local slm_rp_zibo_cargo1_dr      = nil
+local slm_rp_zibo_cargo2_dr      = nil
+local slm_rp_zibo_paxwt_dr       = nil
+
+-- Cabin seating distribution (ToLiss PaxDistrib slider / Zibo per-zone quotas).
+-- One longitudinal bias is drawn per boarding: <0 = pax lean forward,
+-- >0 = pax lean aft, 0 = even. Magnitude is capped by the load factor so a
+-- near-full cabin stays balanced. No CG guard-rail -- the draw itself is bounded.
+-- Globals (the file-scope local budget is already near Lua's 200 limit).
+slm_pax_bias        = nil
+slm_zibo_caps       = nil   -- {z1..z5} seat caps for the active pax_layout
+slm_zibo_cabin_max  = nil
+SLM_ZIBO_ZONE_CAPS  = {
+    [0] = {16, 36, 36, 36, 36},   -- 160-seat layout
+    [1] = {36, 36, 36, 36, 36},   -- 180
+    [2] = {27, 42, 34, 42, 42},   -- 187
+    [3] = {27, 42, 36, 42, 42},   -- 189
+}
+
+local slm_beacon_on = false
+
+
+local end_time = nil
+local FINISHED_ALL_DELAY = 5
+
+local sched_out = 0
+local sched_off = 0
+local sched_on  = 0
+local sched_in  = 0
+
+local block_off_time = "--:--Z"
+local beacon_prev = 0
+local takeoff_time = "--:--Z"
+local onground_prev = 1
+local landing_time = "--:--Z"
+local block_on_time = "--:--Z"
+local passed_500ft = false
+local slm_landing_confirm_time = nil
+local slm_airborne_since = nil
+
+slm_acars_output    = "none"    -- "none" | "hoppie" | "si"
+slm_hoppie_logon    = ""
+slm_hoppie_msgtype  = "telex"   -- "telex" | "cpdlc"
+slm_si_key          = ""
+local slm_acars_status_msg   = nil
+local slm_acars_status_color = 0xFF00FF00
+local slm_acars_status_time  = 0
+local SLM_HOPPIE_STATUS_DURATION = 8
+slm_load_controller           = nil
+
+slm_loadsheet_shown = false
+slm_initial_fuel_kg = nil
+slm_initial_fuel_captured = false
+slm_topup_active     = false
+slm_topup_new_target = 0
+
+SB_pax_weight = 0
+SB_bag_weight = 0
+SB_pax_count  = 0
+SB_bag_count  = 0
+SB_pax_mass_planned = 0
+SB_bag_mass_planned = 0
+
+dataref("view_is_external", "sim/graphics/view/view_is_external", "readonly")
+dataref("beacon", "sim/cockpit/electrical/beacon_lights_on", "readonly")
+dataref("onground", "sim/flightmodel/failures/onground_any", "readonly")
+dataref("zulu_hours", "sim/cockpit2/clock_timer/zulu_time_hours", "readonly")
+dataref("slm_flight_id_dr",    "sim/cockpit2/radios/actuators/flight_id", "readonly")
+-- FlyWithLua's PLANE_ICAO is snapshotted once at aircraft load. Some ToLiss
+-- aircraft (e.g. a single A321 model covering both ceo/neo) only settle
+-- their real ICAO (sim/aircraft/view/acf_ICAO) a bit later, after PLANE_ICAO
+-- was already cached -- so for CG variant resolution we read this live
+-- instead of trusting PLANE_ICAO.
+dataref("slm_live_icao_dr",    "sim/aircraft/view/acf_ICAO",              "readonly")
+slm_zibo_fmc_line_dr = nil
+if XPLMFindDataRef("laminar/B738/fmc1/Line02_L") then
+    dataref("slm_zibo_fmc_line_dr", "laminar/B738/fmc1/Line02_L", "readonly")
+end
+dataref("slm_total_weight_kg", "sim/flightmodel/weight/m_total",          "readonly")
+dataref("zulu_minutes", "sim/cockpit2/clock_timer/zulu_time_minutes", "readonly")
+dataref("sim_fuel_total_kg", "sim/flightmodel/weight/m_fuel_total", "readonly")
+dataref("slm_date_days",    "sim/time/local_date_days",            "readonly")
+
+opensam_jetway_status = 0
+
+local function slm_opensam_jetway_check()
+    -- Lazy detection: OpenSAM may load after SLM, so check at use time.
+    -- opensam/jetway/status: 0 = no jetway(s), 1 = available for docking,
+    -- 2 = docked, -1 = can't dock / jetway(s) in transit.
+    -- Only 0 (no jetway detected, or OpenSAM absent) still fires our own
+    -- command_once as a safety fallback; any other value means OpenSAM
+    -- already has the jetway situation handled, so we stay hands-off.
+    local dr = XPLMFindDataRef("opensam/jetway/status")
+    if dr then
+        pcall(function()
+            dataref("opensam_jetway_status", "opensam/jetway/status", "readonly")
+        end)
+        return (opensam_jetway_status ~= 0)
+    end
+    return false
+end
+
+
+sound_played = {
+    start_loading_cargo         = false,
+    start_boarding_passengers   = false,
+    finished_loading_cargo      = false,
+    finished_loading_pax        = false,
+    finished_loading_all        = false,
+    start_unloading_cargo       = false,
+    start_unboarding_passengers = false,
+    finished_unloading_cargo    = false,
+    finished_unboarding_passengers = false,
+	start_fuel_loading = false,
+	finished_fuel_loading = false
+}
+
+--------------------------------------------------------------------------------
+-- TURNAROUND VARIABLES
+--------------------------------------------------------------------------------
+last_ofp_timestamp    = nil
+skip_crew_briefing    = false
+slm_lowcost_mode          = false
+slm_tankering_mode        = false
+slm_manual_chocks         = false
+slm_no_chocks             = false   -- SLM never places chocks (independent of slm_manual_chocks, which governs removal)
+slm_bpb_remove_chocks     = false   -- with slm_manual_chocks: remove chocks when BetterPushback starts (#SL05)
+slm_lc_cleaning_required  = false
+slm_boarding_music_enabled = false
+slm_boarding_music_vol     = 0.5
+slm_sequence_mode     = nil
+slm_sequence_phase    = nil
+
+--------------------------------------------------------------------------------
+-- RANDOM EVENTS
+--------------------------------------------------------------------------------
+slm_events_db            = {}
+slm_event_chance         = 0.20
+slm_event_dep_pending     = nil   -- event pre-selected at phase start, not yet applied
+slm_event_arr_pending     = nil
+slm_event_dep_active      = nil   -- event currently active (for UI display)
+slm_event_arr_active      = nil
+slm_event_dep_triggered   = false -- lock: max 1 event per departure
+slm_event_arr_triggered   = false -- lock: max 1 event per arrival
+slm_event_delay_until     = nil
+slm_event_fuel_delay_until = nil
+slm_event_pause_until     = nil
+slm_event_slow_until      = nil
+slm_event_slow_factor     = 1.0
+slm_effective_pax         = nil
+slm_effective_cargo       = nil
+slm_max_passengers        = nil   -- from SimBrief <max_passengers> or manual entry
+slm_pax_variability_enabled = true
+slm_pax_var_applied       = false
+slm_planned_cargo_display = nil   -- pre-variability cargo_total, for UI concealment
+slm_cargo_penalty_until   = nil   -- cargo bag-search deadline (no-show events)
+slm_cargo_penalty_start   = nil   -- start time, used to interpolate bar during penalty
+slm_dev_event_idx         = 0     -- dev: index into slm_events_db (0-based)
+slm_catering_elapsed_at_pause = nil
+
+crew_briefing_started    = false
+crew_briefing_done       = false
+crew_briefing_start_time = nil
+crew_briefing_duration   = nil
+estimated_time_crew      = nil
+
+catering_started        = false
+catering_done           = false
+catering_start_time     = nil
+catering_duration       = nil
+estimated_time_catering = nil
+
+cleaning_started        = false
+cleaning_done           = false
+cleaning_start_time     = nil
+cleaning_duration       = nil
+estimated_time_cleaning = nil
+
+crew_deplane_started         = false
+crew_deplane_done            = false
+crew_deplane_start_time      = nil
+crew_deplane_duration        = nil
+estimated_time_crew_deplane  = nil
+
+slm_auto_import_done    = false
+slm_auto_import_message = nil
+slm_new_plan_imported   = false
+
+slm_last_sequence_mode = nil
+slm_steps_visible      = false
+slm_lc_forced_fast     = false
+
+--------------------------------------------------------------------------------
+-- LAST FLIGHT STATE
+--------------------------------------------------------------------------------
+local slm_lf_mode         = nil   -- "in_flight" or "arrival"
+local slm_lf_airline      = ""
+local slm_lf_fltnum       = ""
+local slm_lf_orig         = "?"
+local slm_lf_dest         = "?"
+local slm_lf_block_off    = "--:--Z"
+local slm_lf_takeoff      = "--:--Z"
+local slm_lf_landing      = "--:--Z"
+local slm_lf_block_on     = "--:--Z"
+local slm_lf_pax          = 0
+local slm_lf_cargo        = 0
+local slm_lf_sched_out    = 0
+local slm_lf_sched_off    = 0
+local slm_lf_sched_on     = 0
+local slm_lf_sched_in     = 0
+local slm_lf_confirm_open = false
+
+--------------------------------------------------------------------------------
+-- FLIGHT FACTOR A320 BEACON
+--------------------------------------------------------------------------------
+local slm_ff_a320       = false
+local slm_ff_beacon_dr  = nil
+
+show_Catering   = false
+Catering_chg    = true
+show_Cleaning   = false
+Cleaning_chg    = true
+show_StairsXPJ2 = false
+StairsXPJ2_chg  = true
+
+
+custom_catering_time_per_pax  = 4.0
+custom_cleaning_time_per_pax  = 4.0
+custom_crew_briefing_min      = 120
+custom_crew_briefing_max      = 300
+
+catering_time_per_pax   = 4.0
+cleaning_time_per_pax   = 4.0
+crew_briefing_time_min  = 480
+crew_briefing_time_max  = 900
+
+--------------------------------------------------------------------------------
+-- SLM DATAREFS (API v1.1)
+--------------------------------------------------------------------------------
+
+SLM_boarding_active       = create_dataref_table("SimLoadManager/boarding_active",    "Int")
+SLM_deboarding_active     = create_dataref_table("SimLoadManager/deboarding_active",  "Int")
+SLM_boarding_done         = create_dataref_table("SimLoadManager/boarding_done",      "Int")
+SLM_deboarding_done       = create_dataref_table("SimLoadManager/deboarding_done",    "Int")
+SLM_crew_briefing_active  = create_dataref_table("SimLoadManager/crew_briefing_active","Int")
+SLM_catering_active       = create_dataref_table("SimLoadManager/catering_active",    "Int")
+SLM_cleaning_active       = create_dataref_table("SimLoadManager/cleaning_active",    "Int")
+SLM_crew_deplane_active   = create_dataref_table("SimLoadManager/crew_deplane_active","Int")
+SLM_sequence_active       = create_dataref_table("SimLoadManager/sequence_active",    "Int")
+SLM_sequence_complete     = create_dataref_table("SimLoadManager/sequence_complete",  "Int")
+SLM_is_busy               = create_dataref_table("SimLoadManager/is_busy", "Int")
+
+SLM_location_mode         = create_dataref_table("SimLoadManager/location_mode", "Int")
+SLM_aircraft_own_stairs   = create_dataref_table("SimLoadManager/aircraft_has_own_stairs", "Int")
+
+SLM_pax_total             = create_dataref_table("SimLoadManager/pax_total", "Int")
+SLM_cargo_total           = create_dataref_table("SimLoadManager/cargo_total", "Float")
+SLM_fuel_total            = create_dataref_table("SimLoadManager/fuel_total", "Float")
+
+-- Writable: set the desired fuel figure (in the active unit_system) here, then fire the
+-- "SimLoadManager/TopFuel" command to apply it (same effect as the "Fuel Top-Up" button).
+SLM_fuel_topup_target     = create_dataref_table("SimLoadManager/fuel_topup_target", "Float")
+
+SLM_pax_done              = create_dataref_table("SimLoadManager/pax_done", "Int")
+SLM_cargo_done            = create_dataref_table("SimLoadManager/cargo_done", "Float")
+SLM_fuel_done             = create_dataref_table("SimLoadManager/fuel_done", "Float")
+
+SLM_pax_fraction          = create_dataref_table("SimLoadManager/pax_fraction", "Float")
+SLM_cargo_fraction        = create_dataref_table("SimLoadManager/cargo_fraction", "Float")
+SLM_fuel_fraction         = create_dataref_table("SimLoadManager/fuel_fraction", "Float")
+
+SLM_eta_pax               = create_dataref_table("SimLoadManager/eta_pax_sec", "Float")
+SLM_eta_cargo             = create_dataref_table("SimLoadManager/eta_cargo_sec", "Float")
+SLM_eta_fuel              = create_dataref_table("SimLoadManager/eta_fuel_sec", "Float")
+SLM_eta_total             = create_dataref_table("SimLoadManager/eta_total_sec", "Float")
+
+SLM_pax_state             = create_dataref_table("SimLoadManager/pax_state", "Int")
+SLM_cargo_state           = create_dataref_table("SimLoadManager/cargo_state", "Int")
+SLM_fuel_state            = create_dataref_table("SimLoadManager/fuel_state", "Int")
+SLM_loadsheet_ready		  = create_dataref_table("SimLoadManager/loadsheet_ready", "Int")
+
+SLM_ls_diff_pax          = create_dataref_table("SimLoadManager/loadsheet/diff_pax", "Int")
+SLM_ls_diff_cargo        = create_dataref_table("SimLoadManager/loadsheet/diff_cargo", "Float")
+SLM_ls_diff_fuel_block   = create_dataref_table("SimLoadManager/loadsheet/diff_fuel_block", "Float")
+SLM_ls_diff_payload      = create_dataref_table("SimLoadManager/loadsheet/diff_payload", "Float")
+
+SLM_ls_actual_pax        = create_dataref_table("SimLoadManager/loadsheet/actual_pax", "Int")
+SLM_ls_actual_cargo      = create_dataref_table("SimLoadManager/loadsheet/actual_cargo", "Float")
+SLM_ls_actual_fuel_block = create_dataref_table("SimLoadManager/loadsheet/actual_fuel_block", "Float")
+SLM_ls_actual_payload    = create_dataref_table("SimLoadManager/loadsheet/actual_payload", "Float")
+
+SLM_mode                   = create_dataref_table("SimLoadManager/mode", "Int")
+SLM_crew_briefing_fraction = create_dataref_table("SimLoadManager/crew_briefing_fraction", "Float")
+SLM_catering_fraction      = create_dataref_table("SimLoadManager/catering_fraction", "Float")
+SLM_cleaning_fraction      = create_dataref_table("SimLoadManager/cleaning_fraction", "Float")
+
+-- state[0..9] flags (multiple can be 1 simultaneously):
+--   0=boarding  1=deboarding  2=boarding_done  3=deboarding_done
+--   4=crew_briefing  5=catering  6=cleaning  7=crew_deplane
+--   8=sequence_active  9=sequence_complete
+-- (replaces the old single-int encoding)
+
+-- event_active: 1 if a random event is currently active
+-- event_category: 0=none 1=pax 2=cargo 3=fuel 4=catering
+-- event_paused:  1 if boarding/deboarding is paused/delayed by an event
+-- event_slowed:  1 if loading is slowed by an event
+SLM_event_active   = create_dataref_table("SimLoadManager/event_active",   "Int")
+SLM_event_category = create_dataref_table("SimLoadManager/event_category", "Int")
+SLM_event_paused   = create_dataref_table("SimLoadManager/event_paused",   "Int")
+SLM_event_slowed   = create_dataref_table("SimLoadManager/event_slowed",   "Int")
+
+--------------------------------------------------------------------------------
+-- DEFAULT TIMING
+--------------------------------------------------------------------------------
+local timing_preset = "realistic"
+local pax_time_per_passenger = 6
+local pax_time_variation = 9
+local cargo_time_per_kg_min = 0.3
+local cargo_time_per_kg_max = 0.5
+
+local disembark_pax_time_per_passenger = 3
+local disembark_pax_time_variation = 5
+local disembark_cargo_time_per_kg_min = 0.2
+local disembark_cargo_time_per_kg_max = 0.4
+
+custom_pax_time_per_passenger = 5
+custom_pax_time_variation = 3
+custom_disembark_pax_time_per_passenger = 4
+custom_disembark_pax_time_variation = 3
+custom_cargo_time_per_kg_min = 0.3
+custom_cargo_time_per_kg_max = 0.6
+custom_disembark_cargo_time_per_kg_min = 0.2
+custom_disembark_cargo_time_per_kg_max = 0.6
+custom_fuel_time_per_kg = 0.053
+custom_event_duration_factor = 0.7
+
+local fuel_time_per_kg = 10
+fuel_time_per_unit = fuel_time_per_kg
+
+function random_range(min, max)
+    return min + math.random() * (max - min)
+end
+
+--------------------------------------------------------------------------------
+-- SOUND
+--------------------------------------------------------------------------------
+local flywithlua_play_sound = play_sound
+
+sounds = {
+    start_loading_cargo            = { path = sound_dir .. "start_loading_cargo.wav", id = nil },
+    start_boarding_passengers      = { path = sound_dir .. "start_boarding_passengers.wav", id = nil },
+    finished_loading_cargo         = { path = sound_dir .. "finished_loading_cargo.wav", id = nil },
+    finished_loading_pax           = { path = sound_dir .. "finished_loading_pax.wav", id = nil },
+    finished_loading_all           = { path = sound_dir .. "finished_loading_all.wav", id = nil },
+    start_unloading_cargo          = { path = sound_dir .. "start_unloading_cargo.wav", id = nil },
+    start_unboarding_passengers    = { path = sound_dir .. "start_unboarding_passengers.wav", id = nil },
+    finished_unloading_cargo       = { path = sound_dir .. "finished_unloading_cargo.wav", id = nil },
+    finished_unboarding_passengers = { path = sound_dir .. "finished_unboarding_passengers.wav", id = nil },
+	finished_fuel_loading = { path = sound_dir .. "finished_fuel_loading.wav", id = nil },
+    cargo_loop                     = { path = sound_dir .. "Exterior-Sound.wav", id = nil },
+    passengers_loop                = { path = sound_dir .. "Cabin-Pax.wav", id = nil },
+	start_fuel_loading			   = { path = sound_dir .. "Start-fuel.wav", id = nil },
+	fuel_loop 					   = { path = sound_dir .. "fuel-Loop.wav", id = nil },
+    briefing                       = { path = sound_dir .. "Briefing.wav", id = nil },
+    catering_loop                  = { path = sound_dir .. "Catering-Loop.wav", id = nil },
+    cleaning_loop                  = { path = sound_dir .. "Cleaning-Loop.wav", id = nil }
+}
+
+local function slm_load_events_db()
+    local path = SCRIPT_DIRECTORY .. "SLM-Data/events.json"
+    local f = io.open(path, "r")
+    if not f then
+        logMsg("[SLM] events.json not found: " .. path)
+        return
+    end
+    local content = f:read("*all")
+    f:close()
+    slm_events_db = slm_parse_json(content) or {}
+    for _, ev in ipairs(slm_events_db) do
+        local key = "event_" .. ev.id
+        sounds[key] = { path = sound_dir .. ev.id .. ".wav", id = nil }
+    end
+    logMsg("[SLM] events.json loaded: " .. #slm_events_db .. " events")
+end
+
+slm_load_events_db()
+
+function init_sounds()
+    for name, sound in pairs(sounds) do
+        local full_path = sound.path
+        sound.id = load_WAV_file(full_path)
+        if sound.id ~= 0 then
+            set_sound_gain(sound.id, Volume)
+        end
+    end
+end
+
+function play_sound_by_key(sound_key)
+    if sounds[sound_key] then
+        local this_id = sounds[sound_key].id
+        if this_id and this_id ~= 0 then
+            flywithlua_play_sound(this_id)
+        end
+    end
+end
+
+function set_all_sounds_gain(gain)
+    local new_gain = (gain > 0) and gain or 0.0001
+
+    for name, snd in pairs(sounds) do
+        if snd.id and snd.id ~= 0 then
+            set_sound_gain(snd.id, new_gain)
+        end
+    end
+end
+
+init_sounds()
+
+function update_loop_volumes()
+    local vol = math.max(0.0001, Volume)
+    if is_muted then
+        set_sound_gain(sounds.cargo_loop.id, 0.0001)
+        set_sound_gain(sounds.fuel_loop.id, 0.0001)
+        set_sound_gain(sounds.passengers_loop.id, 0.0001)
+        if sounds.briefing.id and sounds.briefing.id ~= 0 then
+            set_sound_gain(sounds.briefing.id, 0.0001)
+        end
+        if sounds.catering_loop.id and sounds.catering_loop.id ~= 0 then
+            set_sound_gain(sounds.catering_loop.id, 0.0001)
+        end
+        if sounds.cleaning_loop.id and sounds.cleaning_loop.id ~= 0 then
+            set_sound_gain(sounds.cleaning_loop.id, 0.0001)
+        end
+    else
+        if cargo_loop_playing then
+            set_sound_gain(sounds.cargo_loop.id, (view_is_external == 1 and 1.0 or 0.3) * vol)
+        end
+        if fuel_loop_playing then
+            set_sound_gain(sounds.fuel_loop.id, (view_is_external == 1 and 1.0 or 0.3) * vol)
+        end
+        if pax_loop_playing then
+            set_sound_gain(sounds.passengers_loop.id, (view_is_external == 1 and 0.0001 or 0.9) * vol)
+        end
+        if briefing_playing and sounds.briefing.id and sounds.briefing.id ~= 0 then
+            set_sound_gain(sounds.briefing.id, (view_is_external == 1 and 0.0001 or 0.9) * vol)
+        end
+        if catering_loop_playing and sounds.catering_loop.id and sounds.catering_loop.id ~= 0 then
+            set_sound_gain(sounds.catering_loop.id, (view_is_external == 1 and 0.0001 or 0.5) * vol)
+        end
+        if cleaning_loop_playing and sounds.cleaning_loop.id and sounds.cleaning_loop.id ~= 0 then
+            set_sound_gain(sounds.cleaning_loop.id, (view_is_external == 1 and 0.0001 or 0.9) * vol)
+        end
+    end
+    if slm_music_handle and slm_music_handle ~= 0 and slm_music_playing then
+        local is_event_paused = (slm_event_pause_until and os.clock() < slm_event_pause_until)
+                             or (slm_event_delay_until  and os.clock() < slm_event_delay_until)
+        if is_muted or is_event_paused then
+            set_sound_gain(slm_music_handle, 0.0001)
+        elseif view_is_external == 1 then
+            set_sound_gain(slm_music_handle, math.max(0.0001, 0.08 * vol * slm_boarding_music_vol))
+        else
+            set_sound_gain(slm_music_handle, math.max(0.0001, 0.35 * vol * slm_boarding_music_vol))
+        end
+    end
+end
+
+
+function slm_init_boarding_music()
+    if slm_music_handle and slm_music_handle ~= 0 then
+        stop_sound(slm_music_handle)
+        slm_music_handle = nil
+    end
+    slm_music_playing = false
+    if not slm_boarding_music_enabled then return end
+    local path = SCRIPT_DIRECTORY .. "SLM-Data/boarding_music.wav"
+    slm_music_handle = load_WAV_file(path)
+    if slm_music_handle == 0 then
+        slm_music_handle = nil
+        logMsg("[SLM] Boarding music not found: " .. path)
+    end
+end
+
+function slm_start_boarding_music()
+    if not slm_boarding_music_enabled or not slm_music_handle then return end
+    if slm_music_playing then return end
+    slm_music_playing = true
+    let_sound_loop(slm_music_handle, true)
+    play_sound(slm_music_handle)
+end
+
+function slm_stop_boarding_music()
+    if not slm_music_handle or not slm_music_playing then return end
+    slm_music_playing = false
+    let_sound_loop(slm_music_handle, false)
+    stop_sound(slm_music_handle)
+end
+
+--------------------------------------------------------------------------------
+-- SETTINGS
+--------------------------------------------------------------------------------
+
+
+function load_user_settings()
+    local file_exists = false
+    local file = io.open(settings_file, "r")
+    if file then
+        file_exists = true
+        local current_section = "main"
+        for line in file:lines() do
+            local section = line:match("^%[(.+)%]$")
+            if section then
+                current_section = section
+            elseif current_section == "LastFlight" then
+                local key, value = string.match(line, "([^=]+)=(.+)")
+                if key and value then
+                    if     key == "lf_mode"      then slm_lf_mode      = (value ~= "") and value or nil
+                    elseif key == "lf_airline"   then slm_lf_airline   = value
+                    elseif key == "lf_fltnum"    then slm_lf_fltnum    = value
+                    elseif key == "lf_orig"      then slm_lf_orig      = value
+                    elseif key == "lf_dest"      then slm_lf_dest      = value
+                    elseif key == "lf_block_off" then slm_lf_block_off = value
+                    elseif key == "lf_takeoff"   then slm_lf_takeoff   = value
+                    elseif key == "lf_landing"   then slm_lf_landing   = value
+                    elseif key == "lf_block_on"  then slm_lf_block_on  = value
+                    elseif key == "lf_pax"       then slm_lf_pax       = tonumber(value) or 0
+                    elseif key == "lf_cargo"     then slm_lf_cargo     = tonumber(value) or 0
+                    elseif key == "lf_sched_out" then slm_lf_sched_out = tonumber(value) or 0
+                    elseif key == "lf_sched_off" then slm_lf_sched_off = tonumber(value) or 0
+                    elseif key == "lf_sched_on"  then slm_lf_sched_on  = tonumber(value) or 0
+                    elseif key == "lf_sched_in"  then slm_lf_sched_in  = tonumber(value) or 0
+                    end
+                end
+            else
+            local key, value = string.match(line, "([^=]+)=(.+)")
+            if key == "simbrief_id" then
+                if value ~= "REPLACE_WITH_YOUR_SIMBRIEF_ID" then simbrief_id = value end
+            elseif key == "unit_system" then
+                if value == "kg" or value == "lbs" then
+                    unit_system = value
+                end
+            elseif key == "timing_preset" then
+                if value == "realistic" or value == "fast" or value == "veryfast" or value == "custom" then
+                    timing_preset = value
+                end
+            elseif key == "fuel_first" then
+                fuel_first = (value == "true")
+
+            elseif key == "custom_pax_time_per_passenger" then
+                custom_pax_time_per_passenger = tonumber(value)
+            elseif key == "custom_pax_time_variation" then
+                custom_pax_time_variation = tonumber(value)
+            elseif key == "custom_disembark_pax_time_per_passenger" then
+                custom_disembark_pax_time_per_passenger = tonumber(value)
+            elseif key == "custom_disembark_pax_time_variation" then
+                custom_disembark_pax_time_variation = tonumber(value)
+            elseif key == "custom_cargo_time_per_kg_min" then
+                custom_cargo_time_per_kg_min = tonumber(value)
+            elseif key == "custom_cargo_time_per_kg_max" then
+                custom_cargo_time_per_kg_max = tonumber(value)
+            elseif key == "custom_disembark_cargo_time_per_kg_min" then
+                custom_disembark_cargo_time_per_kg_min = tonumber(value)
+            elseif key == "custom_disembark_cargo_time_per_kg_max" then
+                custom_disembark_cargo_time_per_kg_max = tonumber(value)
+            elseif key == "custom_fuel_time_per_kg" then
+                custom_fuel_time_per_kg = tonumber(value)
+            elseif key == "custom_event_duration_factor" then
+                custom_event_duration_factor = tonumber(value)
+            elseif key == "passed_500ft" then
+                _ = value
+            elseif key == "last_ofp_timestamp" then
+                last_ofp_timestamp = (value ~= "") and value or nil
+            elseif key == "skip_crew_briefing" then
+                skip_crew_briefing = (value == "true")
+            elseif key == "slm_lowcost_mode" then
+                slm_lowcost_mode = (value == "true")
+            elseif key == "slm_tankering_mode" then
+                slm_tankering_mode = (value == "true")
+            elseif key == "slm_manual_chocks" then
+                slm_manual_chocks = (value == "true")
+            elseif key == "slm_no_chocks" then
+                slm_no_chocks = (value == "true")
+            elseif key == "slm_bpb_remove_chocks" then
+                slm_bpb_remove_chocks = (value == "true")
+            elseif key == "slm_boarding_music_enabled" then
+                slm_boarding_music_enabled = (value == "true")
+            elseif key == "slm_boarding_music_vol" then
+                slm_boarding_music_vol = tonumber(value) or 0.5
+            elseif key == "custom_catering_time_per_pax" then
+                custom_catering_time_per_pax = tonumber(value)
+            elseif key == "custom_cleaning_time_per_pax" then
+                custom_cleaning_time_per_pax = tonumber(value)
+            elseif key == "custom_crew_briefing_min" then
+                custom_crew_briefing_min = tonumber(value)
+            elseif key == "custom_crew_briefing_max" then
+                custom_crew_briefing_max = tonumber(value)
+            elseif key == "volume" then
+                Volume = tonumber(value) or 1.0
+            elseif key == "real_fuel_fill" then
+                slm_rf_enabled = (value == "true")
+            elseif key == "real_payload_fill" then
+                slm_rp_enabled = (value == "true")
+            elseif key == "captain_name" then
+                slm_captain_name = value
+            elseif key == "data_source" then
+                if value == "simbrief" or value == "manual" or value == "fsd" then
+                    slm_data_source = value
+                end
+            elseif key == "hoppie_logon" then
+                slm_hoppie_logon = value
+            elseif key == "hoppie_msgtype" then
+                slm_hoppie_msgtype = (value == "cpdlc") and "cpdlc" or "telex"
+            elseif key == "slm_si_key" then
+                slm_si_key = value
+            elseif key == "acars_output" then
+                if value == "hoppie" or value == "si" then slm_acars_output = value else slm_acars_output = "none" end
+            elseif key == "event_chance" then
+                slm_event_chance = math.max(0.0, math.min(1.0, tonumber(value) or 0.20))
+            elseif key == "pax_variability_enabled" then
+                slm_pax_variability_enabled = (value == "true")
+            elseif key == "manual_max_pax" then
+                slm_manual_max_pax = tonumber(value) or 0
+            elseif key == "slm_font_choice" then
+                local n = tonumber(value) or 0
+                slm_font_choice = (n >= 0 and n <= 9) and math.floor(n) or 0
+            elseif key == "language" then
+                if value:match("^%a%a$") then slm_language = value:lower() end
+            elseif key == "ui_scale" then
+                slm_ui_scale = math.max(80, math.min(150, math.floor(tonumber(value) or 100)))
+            elseif key == "dev_mode" then
+                slm_dev_mode = (value == "true")
+            elseif key == "web_enabled" then
+                slm_web_enabled = (value == "true")
+            elseif key == "web_port" then
+                slm_web_port = math.max(1024, math.min(65535, math.floor(tonumber(value) or 8074)))
+            end
+            end  -- end else (main section)
+        end
+        file:close()
+    end
+
+	if not file_exists then
+		save_user_settings()
+    end
+end
+
+
+function save_user_settings()
+    local file = io.open(settings_file, "w")
+    if file then
+        file:write("simbrief_id=" .. simbrief_id .. "\n")
+        file:write("captain_name=" .. slm_captain_name .. "\n")
+        file:write("data_source=" .. slm_data_source .. "\n")
+        file:write("unit_system=" .. unit_system .. "\n")
+        file:write("timing_preset=" .. timing_preset .. "\n")
+        file:write("fuel_first=" .. tostring(fuel_first) .. "\n")
+        file:write("custom_pax_time_per_passenger=" .. tostring(custom_pax_time_per_passenger or 5) .. "\n")
+        file:write("custom_pax_time_variation=" .. tostring(custom_pax_time_variation or 3) .. "\n")
+        file:write("custom_disembark_pax_time_per_passenger=" .. tostring(custom_disembark_pax_time_per_passenger or 4) .. "\n")
+        file:write("custom_disembark_pax_time_variation=" .. tostring(custom_disembark_pax_time_variation or 3) .. "\n")
+        file:write("custom_cargo_time_per_kg_min=" .. tostring(custom_cargo_time_per_kg_min or 0.3) .. "\n")
+        file:write("custom_cargo_time_per_kg_max=" .. tostring(custom_cargo_time_per_kg_max or 0.6) .. "\n")
+        file:write("custom_disembark_cargo_time_per_kg_min=" .. tostring(custom_disembark_cargo_time_per_kg_min or 0.2) .. "\n")
+        file:write("custom_disembark_cargo_time_per_kg_max=" .. tostring(custom_disembark_cargo_time_per_kg_max or 0.6) .. "\n")
+        file:write("custom_fuel_time_per_kg=" .. tostring(custom_fuel_time_per_kg or 0.053) .. "\n")
+        file:write("custom_event_duration_factor=" .. tostring(custom_event_duration_factor or 0.7) .. "\n")
+        file:write("last_ofp_timestamp=" .. tostring(last_ofp_timestamp or "") .. "\n")
+        file:write("skip_crew_briefing=" .. tostring(skip_crew_briefing) .. "\n")
+        file:write("slm_lowcost_mode=" .. tostring(slm_lowcost_mode) .. "\n")
+        file:write("slm_tankering_mode=" .. tostring(slm_tankering_mode) .. "\n")
+        file:write("slm_manual_chocks=" .. tostring(slm_manual_chocks) .. "\n")
+        file:write("slm_no_chocks=" .. tostring(slm_no_chocks) .. "\n")
+        file:write("slm_bpb_remove_chocks=" .. tostring(slm_bpb_remove_chocks) .. "\n")
+        file:write("slm_boarding_music_enabled=" .. tostring(slm_boarding_music_enabled) .. "\n")
+        file:write("slm_boarding_music_vol=" .. tostring(slm_boarding_music_vol or 0.5) .. "\n")
+        file:write("custom_catering_time_per_pax=" .. tostring(custom_catering_time_per_pax or 4.0) .. "\n")
+        file:write("custom_cleaning_time_per_pax=" .. tostring(custom_cleaning_time_per_pax or 4.0) .. "\n")
+        file:write("custom_crew_briefing_min=" .. tostring(custom_crew_briefing_min or 120) .. "\n")
+        file:write("custom_crew_briefing_max=" .. tostring(custom_crew_briefing_max or 300) .. "\n")
+        file:write("volume=" .. tostring(Volume) .. "\n")
+        file:write("real_fuel_fill=" .. tostring(slm_rf_enabled) .. "\n")
+        file:write("real_payload_fill=" .. tostring(slm_rp_enabled) .. "\n")
+        file:write("acars_output="    .. tostring(slm_acars_output)   .. "\n")
+        file:write("hoppie_logon="   .. tostring(slm_hoppie_logon)   .. "\n")
+        file:write("hoppie_msgtype=" .. tostring(slm_hoppie_msgtype)  .. "\n")
+        file:write("slm_si_key="     .. tostring(slm_si_key)          .. "\n")
+        file:write("event_chance=" .. tostring(slm_event_chance) .. "\n")
+        file:write("pax_variability_enabled=" .. tostring(slm_pax_variability_enabled) .. "\n")
+        file:write("manual_max_pax=" .. tostring(slm_manual_max_pax) .. "\n")
+        file:write("slm_font_choice=" .. tostring(slm_font_choice or 0) .. "\n")
+        file:write("language=" .. tostring(slm_language) .. "\n")
+        file:write("ui_scale=" .. tostring(slm_ui_scale) .. "\n")
+        file:write("dev_mode=" .. tostring(slm_dev_mode) .. "\n")
+        file:write("web_enabled=" .. tostring(slm_web_enabled) .. "\n")
+        file:write("web_port=" .. tostring(slm_web_port) .. "\n")
+
+        if slm_lf_mode then
+            file:write("[LastFlight]\n")
+            file:write("lf_mode="      .. tostring(slm_lf_mode)      .. "\n")
+            file:write("lf_airline="   .. tostring(slm_lf_airline)   .. "\n")
+            file:write("lf_fltnum="    .. tostring(slm_lf_fltnum)    .. "\n")
+            file:write("lf_orig="      .. tostring(slm_lf_orig)      .. "\n")
+            file:write("lf_dest="      .. tostring(slm_lf_dest)      .. "\n")
+            file:write("lf_block_off=" .. tostring(slm_lf_block_off) .. "\n")
+            file:write("lf_takeoff="   .. tostring(slm_lf_takeoff)   .. "\n")
+            file:write("lf_landing="   .. tostring(slm_lf_landing)   .. "\n")
+            file:write("lf_block_on="  .. tostring(slm_lf_block_on)  .. "\n")
+            file:write("lf_pax="       .. tostring(slm_lf_pax)       .. "\n")
+            file:write("lf_cargo="     .. tostring(slm_lf_cargo)     .. "\n")
+            file:write("lf_sched_out=" .. tostring(slm_lf_sched_out) .. "\n")
+            file:write("lf_sched_off=" .. tostring(slm_lf_sched_off) .. "\n")
+            file:write("lf_sched_on="  .. tostring(slm_lf_sched_on)  .. "\n")
+            file:write("lf_sched_in="  .. tostring(slm_lf_sched_in)  .. "\n")
+        end
+
+        file:close()
+    end
+end
+
+
+--------------------------------------------------------------------------------
+-- SIMBRIEF
+--------------------------------------------------------------------------------
+
+function fetch_simbrief_data(id)
+    simbrief_data_loaded = true
+    local http = require("socket.http")
+    local body, code = http.request("https://www.simbrief.com/api/xml.fetcher.php?userid=" .. id)
+    if not body or code ~= 200 then
+        logMsg("[SLM] SimBrief request failed or invalid response")
+        return
+    end
+
+    local function val(tag)
+        return string.match(body, "<" .. tag .. ">(.-)</" .. tag .. ">") or ""
+    end
+    local function num(tag)
+        return tonumber(val(tag)) or 0
+    end
+    local function nv(parent, child)
+        return string.match(body, "<" .. parent .. ">.-<" .. child .. ">(.-)</" .. child .. ">.-</" .. parent .. ">") or ""
+    end
+    local function nnum(parent, child)
+        return tonumber(nv(parent, child)) or 0
+    end
+    local function nonempty(s, fallback)
+        return (s ~= nil and s ~= "") and s or fallback
+    end
+    local function fnum(tag)
+        return tonumber(string.match(body, "<fuel>.-<" .. tag .. ">([%d%.]+)</" .. tag .. ">")) or 0
+    end
+
+    local old_ts = last_ofp_timestamp
+    local ofp_time_generated = val("time_generated")
+    last_ofp_timestamp = (ofp_time_generated ~= "") and ofp_time_generated or last_ofp_timestamp
+
+    local sb_unit = val("units")
+    if sb_unit == "kgs" then
+        unit_system = "kg"
+    elseif sb_unit == "lbs" then
+        unit_system = "lbs"
+    end
+
+    local pax_count   = nnum("weights", "pax_count")
+    local bag_count   = nnum("weights", "bag_count")
+    local pax_weight  = nnum("weights", "pax_weight")
+    local bag_weight  = nnum("weights", "bag_weight")
+
+    local freight     = nnum("weights", "freight_added")
+    local cargo_plan  = nnum("weights", "cargo")
+    local payload_plan= nnum("weights", "payload")
+    local oew_plan    = nnum("weights", "oew")
+
+    local est_zfw = nnum("weights", "est_zfw")
+    local max_zfw = nnum("weights", "max_zfw")
+    local est_tow = nnum("weights", "est_tow")
+    local max_tow = nnum("weights", "max_tow")
+    local est_ldw = nnum("weights", "est_ldw")
+    local max_ldw = nnum("weights", "max_ldw")
+
+    local pax_mass_planned = pax_count * pax_weight
+    local bag_mass_planned = bag_count * bag_weight
+
+    passengers_total = pax_count
+    cargo_total      = cargo_plan
+
+	fuel_total = fnum("plan_ramp")
+	local baseline = slm_initial_fuel_kg or sim_fuel_total_kg or 0
+	fuel_loaded = math.floor(from_kg(baseline))
+
+    sched_out = tonumber(val("sched_out")) or 0
+    sched_off = tonumber(val("sched_off")) or 0
+    sched_on  = tonumber(val("sched_on"))  or 0
+    sched_in  = tonumber(val("sched_in"))  or 0
+
+    local airline    = nonempty(nv("general",    "airline"),    val("airline"))
+    local fltnum     = nonempty(nv("general",    "fltnum"),     val("fltnum"))
+    local orig       = nonempty(nv("origin",     "icao_code"),  val("orig"))
+    local dest       = nonempty(nv("destination","icao_code"),  val("dest"))
+    local altn       = nonempty(nv("alternate",  "icao_code"),  val("altn"))
+
+    local ac_icao    = nonempty(nv("aircraft",   "icao_code"),  val("type"))
+    local ac_name    = nonempty(nv("aircraft",   "name"),       val("aircraft_name"))
+    local ac_reg     = nonempty(nv("aircraft",   "reg"),        nonempty(val("reg"), val("registration")))
+    slm_max_passengers = tonumber(nv("aircraft", "max_passengers"))
+
+    local dispatcher = nonempty(nv("crew", "dx"),  nonempty(val("dx"),  val("dispatcher")))
+
+    local fuel_taxi  = fnum("taxi")
+    local fuel_trip  = fnum("enroute_burn")
+    local fuel_cont  = fnum("contingency")
+    local fuel_altn  = fnum("alternate_burn")
+    local fuel_res   = fnum("reserve")
+    local fuel_block = fnum("plan_ramp")
+    local fuel_land  = fnum("plan_landing")
+
+    SB_pax_weight = to_kg(pax_weight)
+    SB_bag_weight = bag_weight
+    SB_pax_count  = pax_count
+    SB_bag_count  = bag_count
+    SB_pax_mass_planned = pax_mass_planned
+    SB_bag_mass_planned = bag_mass_planned
+
+    SLM_Loadsheet_Data = {
+        airline = nonempty(airline, "N/A"),
+        fltnum  = nonempty(fltnum,  "N/A"),
+        date    = os.date("%d%b%y"):upper(),
+
+        aircraft_icao = nonempty(ac_icao, "?"),
+        aircraft_name = nonempty(ac_name, "?"),
+        reg           = nonempty(ac_reg,  "?"),
+
+        orig = nonempty(orig, "?"),
+        dest = nonempty(dest, "?"),
+        altn = nonempty(altn, "?"),
+        orig_name = nonempty(nv("origin",      "name"), nil),
+        dest_name = nonempty(nv("destination", "name"), nil),
+
+        dispatcher = nonempty(dispatcher, "N/A"),
+        captain    = (slm_captain_name ~= "" and slm_captain_name) or "N/A",
+
+        pax_total   = passengers_total or 0,
+        cargo_total = cargo_total or 0,
+
+        payload_planned = payload_plan,
+        oew = oew_plan,
+
+        pax_weight = pax_weight,
+        bag_weight = bag_weight,
+        pax_mass_planned = pax_mass_planned,
+        bag_mass_planned = bag_mass_planned,
+        pax_count_sb = pax_count,
+        bag_count_sb = bag_count,
+
+        freight_added = freight,
+
+        est_zfw = est_zfw,
+        max_zfw = max_zfw,
+        est_tow = est_tow,
+        max_tow = max_tow,
+        est_ldw = est_ldw,
+        max_ldw = max_ldw,
+
+        fuel_taxi    = fuel_taxi,
+        fuel_trip    = fuel_trip,
+        fuel_cont    = fuel_cont,
+        fuel_altn    = fuel_altn,
+        fuel_reserve = fuel_res,
+        fuel_block   = fuel_block,
+        fuel_land    = fuel_land,
+
+        time_generated = ofp_time_generated,
+        load_time_str  = timestamp_to_utc_hhmmz(tonumber(ofp_time_generated) or 0)
+    }
+
+    save_user_settings()
+
+    if slm_sequence_phase == "waiting_for_new_plan" then
+        if last_ofp_timestamp and last_ofp_timestamp ~= (old_ts or "") then
+            slm_new_plan_imported   = true
+            slm_auto_import_message = slm_tr("plan.loaded", {
+                flight = (SLM_Loadsheet_Data and SLM_Loadsheet_Data.airline or "N/A")
+                      .. (SLM_Loadsheet_Data and SLM_Loadsheet_Data.fltnum or ""),
+                dest = SLM_Loadsheet_Data and SLM_Loadsheet_Data.dest or "" },
+            string.format(
+                "New flight plan loaded! -- %s %s -> %s",
+                SLM_Loadsheet_Data and SLM_Loadsheet_Data.airline or "N/A",
+                SLM_Loadsheet_Data and SLM_Loadsheet_Data.fltnum  or "",
+                SLM_Loadsheet_Data and SLM_Loadsheet_Data.dest    or ""))
+            slm_ta_to_departure()
+        else
+            slm_auto_import_message = slm_tr("plan.wait_simbrief", nil,
+                "No new flight plan detected.\nPlease generate your next flight on SimBrief,\nthen click 'Load SimBrief Data'.")
+        end
+    end
+end
+
+
+function apply_realistic_timings()
+    pax_time_per_passenger = 5
+    pax_time_variation = 3
+    disembark_pax_time_per_passenger = 4
+    disembark_pax_time_variation = 3
+    cargo_time_per_kg_min = 0.3
+    cargo_time_per_kg_max = 0.6
+    disembark_cargo_time_per_kg_min = 0.2
+    disembark_cargo_time_per_kg_max = 0.6
+    fuel_time_per_kg = 0.053
+    catering_time_per_pax  = 4.0
+    cleaning_time_per_pax  = 4.0
+    crew_briefing_time_min = 480
+    crew_briefing_time_max = 900
+    timing_preset = "realistic"
+end
+
+
+function apply_fast_timings()
+    pax_time_per_passenger = 3
+    pax_time_variation = 2
+    disembark_pax_time_per_passenger = 2
+    disembark_pax_time_variation = 2
+    cargo_time_per_kg_min = 0.09
+    cargo_time_per_kg_max = 0.11
+    disembark_cargo_time_per_kg_min = 0.05
+    disembark_cargo_time_per_kg_max = 0.07
+    fuel_time_per_kg = 0.043
+    catering_time_per_pax  = 2.0
+    cleaning_time_per_pax  = 2.0
+    crew_briefing_time_min = 120
+    crew_briefing_time_max = 240
+    timing_preset = "fast"
+end
+
+function apply_veryfast_timings()
+
+    pax_time_per_passenger = 1.5
+    pax_time_variation = 0.5
+    disembark_pax_time_per_passenger = 1
+    disembark_pax_time_variation = 0.5
+    cargo_time_per_kg_min = 0.03
+    cargo_time_per_kg_max = 0.05
+    disembark_cargo_time_per_kg_min = 0.02
+    disembark_cargo_time_per_kg_max = 0.04
+    fuel_time_per_kg = 0.020
+    catering_time_per_pax  = 0.8
+    cleaning_time_per_pax  = 0.8
+    crew_briefing_time_min = 30
+    crew_briefing_time_max = 60
+    timing_preset = "veryfast"
+end
+
+function apply_custom_timings()
+    timing_preset = "custom"
+    pax_time_per_passenger = custom_pax_time_per_passenger or 4
+    pax_time_variation = custom_pax_time_variation or 2
+    disembark_pax_time_per_passenger = custom_disembark_pax_time_per_passenger or 3
+    disembark_pax_time_variation = custom_disembark_pax_time_variation or 2
+    cargo_time_per_kg_min = custom_cargo_time_per_kg_min or 0.3
+    cargo_time_per_kg_max = custom_cargo_time_per_kg_max or 0.6
+    disembark_cargo_time_per_kg_min = custom_disembark_cargo_time_per_kg_min or 0.25
+    disembark_cargo_time_per_kg_max = custom_disembark_cargo_time_per_kg_max or 0.5
+    fuel_time_per_kg = custom_fuel_time_per_kg or 0.05
+    catering_time_per_pax  = custom_catering_time_per_pax or 4.0
+    cleaning_time_per_pax  = custom_cleaning_time_per_pax or 4.0
+    crew_briefing_time_min = custom_crew_briefing_min or 120
+    crew_briefing_time_max = custom_crew_briefing_max or 300
+end
+
+
+load_user_settings()
+slm_init_boarding_music()
+
+if timing_preset == "veryfast" then
+    apply_veryfast_timings()
+elseif timing_preset == "fast" then
+    apply_fast_timings()
+elseif timing_preset == "custom" then
+    apply_custom_timings()
+else
+    apply_realistic_timings()
+end
+
+
+function slm_capture_initial_fuel_once()
+
+    if slm_initial_fuel_captured then return end
+
+    if sim_fuel_total_kg then
+        slm_initial_fuel_kg = sim_fuel_total_kg
+        slm_initial_fuel_captured = true
+    end
+
+end
+
+
+--------------------------------------------------------------------------------
+-- EMBARKATION
+--------------------------------------------------------------------------------
+
+function start_embarkation()
+    slm_rp_stop()
+    walking_direction = "boarding"
+    walking_direction_changed_armed = false
+    embark_started = true
+    embark_done = false
+    disembark_started = false
+    disembark_done = false
+    slm_planned_cargo_display = cargo_total
+	pax_load_started = false
+	pax_start_time = 0
+    cargo_loaded = 0
+    passengers_loaded = 0
+    cargo_unloaded = 0
+    passengers_unloaded = 0
+	bus_triggered = false
+    pax_trigger_time = nil
+    if unit_system == "lbs" then
+        cargo_time_per_unit_min = cargo_time_per_kg_min / 2.20462
+        cargo_time_per_unit_max = cargo_time_per_kg_max / 2.20462
+        fuel_time_per_unit      = fuel_time_per_kg / 2.20462
+    else
+        cargo_time_per_unit_min = cargo_time_per_kg_min
+        cargo_time_per_unit_max = cargo_time_per_kg_max
+        fuel_time_per_unit      = fuel_time_per_kg
+    end
+    cargo_time_per_unit = random_range(cargo_time_per_unit_min, cargo_time_per_unit_max)
+	local baseline = slm_initial_fuel_kg or sim_fuel_total_kg or 0
+	fuel_loaded        = math.floor(from_kg(baseline))
+	fuel_done          = false
+	fuel_loading       = false
+	fuel_wait_finished = false
+	fuel_done_time     = nil
+	fuel_last_update_time = nil
+
+	if fuel_total > 0 and fuel_loaded > fuel_total then
+		slm_defuel_performed = true
+	else
+		slm_defuel_performed = false
+	end
+    start_time = os.clock()
+    last_update_time = start_time
+    pax_load_started = false
+    cargo_start_reference_time = os.clock()
+
+    -- Reset departure event state for this new departure phase
+    slm_event_dep_pending    = nil
+    slm_event_dep_active     = nil
+    slm_event_dep_triggered  = false
+    slm_event_delay_until    = nil
+    slm_event_fuel_delay_until = nil
+    slm_event_slow_factor    = 1.0
+    slm_event_slow_until     = nil
+    slm_event_pause_until    = nil
+    slm_cargo_penalty_until  = nil
+    slm_cargo_penalty_start  = nil
+    slm_effective_pax        = nil
+    slm_effective_cargo      = nil
+    slm_catering_elapsed_at_pause = nil
+    -- Roll one departure event (applied lazily when category+pct conditions are met)
+    slm_roll_event("departure")
+
+    if selected_location_group == "remote" or selected_location_group == "terminal" then
+        if not aircraft_has_own_stairs then
+            show_StairsXPJ        = true
+            StairsXPJ_chg         = true
+            show_StairsXPJ2       = true
+            StairsXPJ2_chg        = true
+            option_StairsXPJ_override = true
+            DualBoard = true
+
+        end
+    elseif selected_location_group == "jetway" then
+        if not crew_briefing_done and not crew_briefing_started then
+            if not aircraft_has_own_stairs then
+                command_once("sim/ground_ops/jetway")
+            end
+        end
+    end
+    -- Lowcost turnaround: fuel starts immediately with boarding (not at 15% pax)
+    if slm_lowcost_mode and slm_lc_cleaning_required and (fuel_total or 0) > 0 then
+        if slm_tankering_mode then
+            fuel_done    = true  -- pilot tanked at origin, no refueling on turnaround
+            fuel_loading = false
+        elseif (fuel_total or 0) - (fuel_loaded or 0) == 0 then
+            fuel_done = true
+        else
+            start_fuel_loading()
+        end
+    end
+
+    for k in pairs(sound_played) do sound_played[k] = false end
+    init_sounds()
+end
+
+
+function slm_update_beacon_state()
+    if slm_ff_a320 and slm_ff_beacon_dr then
+        slm_beacon_on = (XPLMGetDataf(slm_ff_beacon_dr) > 0)
+    else
+        slm_beacon_on = (beacon == 1)
+    end
+end
+
+-- Step 1: called once at phase start â€” picks ONE event randomly from all eligible events.
+function slm_roll_event(phase_mode)
+    if math.random() > slm_event_chance then return end
+    local candidates = {}
+    for _, ev in ipairs(slm_events_db) do
+        if ev.mode == phase_mode or ev.mode == "any" then
+            local loc_ok = true
+            if ev.location then
+                loc_ok = false
+                for _, loc in ipairs(ev.location) do
+                    if loc == selected_location_group then loc_ok = true; break end
+                end
+            end
+            if loc_ok then
+                candidates[#candidates + 1] = ev
+            end
+        end
+    end
+    if #candidates == 0 then return end
+    local ev = candidates[math.random(#candidates)]
+    if phase_mode == "departure" then
+        slm_event_dep_pending = ev
+    else
+        slm_event_arr_pending = ev
+    end
+    logMsg("[SLM-EVENT] Rolled for " .. phase_mode .. ": " .. ev.id)
+end
+
+-- Step 2: called every frame from each sub-process â€” applies the pending event when
+-- the category matches and the progress threshold is reached.
+function slm_try_apply_event(category, phase_mode, current_pct)
+    local pending   = (phase_mode == "departure") and slm_event_dep_pending or slm_event_arr_pending
+    local triggered = (phase_mode == "departure") and slm_event_dep_triggered or slm_event_arr_triggered
+    if not pending or triggered then return end
+    if pending.category ~= category then return end
+    if (current_pct or 0) < (pending.trigger_after_pct or 0) then return end
+
+    local span = (pending.duration_max or 0) - (pending.duration_min or 0)
+    local base_dur = (pending.duration_min or 0) + math.random() * (span > 0 and span or 0)
+    local lc = (slm_lowcost_mode and pending.lc_factor) and pending.lc_factor or 1.0
+    local preset_mult
+    if timing_preset == "veryfast" then
+        preset_mult = 0.25
+    elseif timing_preset == "fast" and not slm_lowcost_mode then
+        preset_mult = 0.5
+    elseif timing_preset == "custom" then
+        preset_mult = custom_event_duration_factor or 0.7
+    else
+        preset_mult = 1.0  -- realistic, or fast in lowcost mode
+    end
+    local duration = base_dur * lc * preset_mult
+
+    if phase_mode == "departure" then
+        slm_event_dep_active    = pending
+        slm_event_dep_triggered = true
+        slm_event_dep_pending   = nil
+    else
+        slm_event_arr_active    = pending
+        slm_event_arr_triggered = true
+        slm_event_arr_pending   = nil
+    end
+
+    if pending.effect == "delay_start" then
+        if pending.category == "fuel" then
+            slm_event_fuel_delay_until = os.clock() + duration
+        elseif pending.category == "catering" then
+            -- Push catering start time forward instead of blocking all of manage_embark
+            catering_start_time = (catering_start_time or os.clock()) + duration
+            -- Note: do NOT clear slm_event_dep_active here; manage_catering clears it when delay expires
+        else
+            slm_event_delay_until = os.clock() + duration
+        end
+    elseif pending.effect == "pause" then
+        slm_event_pause_until = os.clock() + duration
+    elseif pending.effect == "cargo_pause" then
+        slm_cargo_penalty_start = os.clock()
+        slm_cargo_penalty_until = slm_cargo_penalty_start + duration
+    elseif pending.effect == "slow" then
+        slm_event_slow_factor = pending.slow_factor or 1.0
+        slm_event_slow_until  = os.clock() + duration
+    end
+
+    -- Mass deltas (for loadsheet)
+    if pending.pax_delta_type == "range" and pending.pax_delta then
+        local lo = pending.pax_delta["min"] or 0
+        local hi = pending.pax_delta["max"] or 0
+        local delta = math.random(math.min(lo, hi), math.max(lo, hi))
+        slm_effective_pax = math.max(0, (slm_effective_pax or passengers_total) + delta)
+    elseif pending.pax_delta_type == "fixed" and pending.pax_delta then
+        slm_effective_pax = math.max(0, (slm_effective_pax or passengers_total) + pending.pax_delta)
+    end
+    if pending.cargo_delta_type == "derived" and slm_effective_pax then
+        local removed = (passengers_total or 0) - slm_effective_pax
+        local bag_kg = (SLM_Loadsheet_Data and SLM_Loadsheet_Data.bag_weight) or 15
+        slm_effective_cargo = math.max(0, (slm_effective_cargo or cargo_total) - removed * bag_kg)
+    elseif pending.cargo_delta_type == "range" and pending.cargo_delta_kg then
+        local lo = pending.cargo_delta_kg["min"] or 0
+        local hi = pending.cargo_delta_kg["max"] or 0
+        local delta = math.random(math.min(lo, hi), math.max(lo, hi))
+        slm_effective_cargo = math.max(0, (slm_effective_cargo or cargo_total) + delta)
+    end
+
+    -- Sync pax delta immediately: boarding ends at the right count
+    if slm_effective_pax and slm_effective_pax < passengers_total then
+        local old_pax_total = passengers_total
+        passengers_total  = slm_effective_pax
+        passengers_loaded = math.min(passengers_loaded, passengers_total)
+        if slm_rp_active and slm_rp_target_pax_kg > 0 and old_pax_total > 0 then
+            slm_rp_target_pax_kg = slm_rp_target_pax_kg * passengers_total / old_pax_total
+        end
+    end
+    -- cargo_pause: delta applied on penalty expiry (see manage_embark)
+    -- all other effects: sync cargo delta now
+    if pending.effect ~= "cargo_pause" then
+        if slm_effective_cargo and slm_effective_cargo < cargo_total then
+            local old_cargo_total = cargo_total
+            cargo_total  = math.floor(slm_effective_cargo)
+            cargo_loaded = math.min(cargo_loaded, cargo_total)
+            if slm_rp_active and slm_rp_target_cargo_kg > 0 and old_cargo_total > 0 then
+                slm_rp_target_cargo_kg = slm_rp_target_cargo_kg * cargo_total / old_cargo_total
+            end
+        end
+    end
+
+    play_sound_by_key("event_" .. pending.id)
+    logMsg("[SLM-EVENT] Applied: " .. pending.id .. " | " .. pending.effect .. " | dur=" .. string.format("%.0f", duration) .. "s")
+end
+
+-- Dev: force-trigger any event regardless of roll chance, mode or pct threshold
+function slm_dev_force_event(ev)
+    if not ev then return end
+    local phase = disembark_started and "arrival" or "departure"
+    if phase == "departure" then
+        slm_event_dep_pending   = ev
+        slm_event_dep_triggered = false
+    else
+        slm_event_arr_pending   = ev
+        slm_event_arr_triggered = false
+    end
+    slm_try_apply_event(ev.category, phase, 1.0)
+end
+
+local function slm_compute_pax_variability()
+    if not slm_pax_variability_enabled then return end
+    local base_pax = SB_pax_count
+    if not base_pax or base_pax <= 0 then return end
+
+    -- Max aircraft capacity
+    local max_cap
+    if slm_data_source == "simbrief" then
+        max_cap = slm_max_passengers
+    else
+        max_cap = (slm_manual_max_pax and slm_manual_max_pax > 0) and slm_manual_max_pax or nil
+    end
+
+    -- Departure hour and month
+    local dep_hour, dep_month
+    if slm_data_source == "simbrief" and sched_out and sched_out > 0 then
+        dep_hour  = tonumber(os.date("!%H", sched_out)) or 12
+        dep_month = tonumber(os.date("!%m", sched_out)) or 6
+    else
+        dep_hour = zulu_hours or 12
+        local day_of_year = slm_date_days or 180
+        local month_days = {31,28,31,30,31,30,31,31,30,31,30,31}
+        dep_month = 12
+        local cumul = 0
+        for m, d in ipairs(month_days) do
+            cumul = cumul + d
+            if day_of_year <= cumul then dep_month = m; break end
+        end
+    end
+
+    local high_season = (dep_month == 6 or dep_month == 7 or dep_month == 8 or dep_month == 12)
+    local low_season  = (dep_month == 1 or dep_month == 2 or dep_month == 11)
+
+    -- Step 1: no-show rate
+    local noshow_max = slm_lowcost_mode and 0.05 or 0.10
+    if dep_hour < 6 then
+        noshow_max = noshow_max + 0.03
+    elseif dep_hour >= 22 then
+        noshow_max = noshow_max + 0.02
+    end
+    if high_season then noshow_max = noshow_max - 0.03
+    elseif low_season then noshow_max = noshow_max + 0.03 end
+    noshow_max = math.max(0.0, math.min(0.10, noshow_max))
+    local noshow_count = math.floor(base_pax * (math.random() * noshow_max))
+
+    -- Step 2: available seats = initial free seats + no-shows
+    local free_seats = max_cap and math.max(0, max_cap - base_pax) or 0
+    local available_seats = free_seats + noshow_count
+
+    -- Step 3: standbys fill a fraction of available seats
+    local standby_count = 0
+    if available_seats > 0 then
+        local sb_max_pct = slm_lowcost_mode and 0.25 or 0.15
+        if dep_hour < 6 then sb_max_pct = math.max(0.0, sb_max_pct - 0.08)
+        elseif dep_hour >= 22 then sb_max_pct = math.max(0.0, sb_max_pct - 0.05) end
+        if high_season then sb_max_pct = math.min(1.0, sb_max_pct + 0.05)
+        elseif low_season then sb_max_pct = math.max(0.0, sb_max_pct - 0.05) end
+        local max_standbys = math.floor(available_seats * sb_max_pct)
+        if max_standbys > 0 then standby_count = math.random(0, max_standbys) end
+    end
+
+    -- Step 3: effective pax
+    local cap_limit = max_cap or base_pax
+    local pax_eff = math.max(1, math.min(cap_limit, base_pax - noshow_count + standby_count))
+    slm_effective_pax = pax_eff
+    passengers_total  = pax_eff
+    passengers_loaded = math.min(passengers_loaded, passengers_total)
+    if slm_rp_active and slm_rp_target_pax_kg > 0 and base_pax > 0 then
+        slm_rp_target_pax_kg = slm_rp_target_pax_kg * pax_eff / base_pax
+    end
+
+    -- Step 4: cargo delta (non-ToLiss)
+    if slm_aircraft_type ~= "toliss" then
+        local delta_pax    = base_pax - pax_eff
+        local bag_kg       = SB_bag_weight or 0
+        local new_cargo    = math.max(0, (cargo_total or 0) - delta_pax * bag_kg)
+        slm_effective_cargo = new_cargo
+        cargo_total  = math.floor(new_cargo)
+        cargo_loaded = math.min(cargo_loaded, cargo_total)
+        if slm_rp_active and slm_rp_target_cargo_kg > 0 and (SB_bag_mass_planned or 0) > 0 then
+            slm_rp_target_cargo_kg = slm_rp_target_cargo_kg * cargo_total / SB_bag_mass_planned
+        end
+    end
+
+    logMsg(string.format("[SLM-VAR] base=%d noshow=%d standby=%d eff=%d", base_pax, noshow_count, standby_count, pax_eff))
+end
+
+function manage_embark()
+    if not embark_started then return end
+    if slm_beacon_on then return end
+
+    -- Event: cargo_pause (no-show bag search) — freeze cargo timer, pax continues
+    if slm_cargo_penalty_until then
+        if os.clock() < slm_cargo_penalty_until then
+            last_update_time = os.clock()
+            -- no return: pax boarding continues normally
+        else
+            if slm_effective_cargo and slm_effective_cargo < cargo_total then
+                local old_cargo_total = cargo_total
+                cargo_total  = math.floor(slm_effective_cargo)
+                cargo_loaded = math.min(cargo_loaded, cargo_total)
+                if slm_rp_active and slm_rp_target_cargo_kg > 0 and old_cargo_total > 0 then
+                    slm_rp_target_cargo_kg = slm_rp_target_cargo_kg * cargo_total / old_cargo_total
+                end
+            end
+            slm_cargo_penalty_until = nil
+            slm_cargo_penalty_start = nil
+        end
+    end
+    -- Event: slow expiry
+    if slm_event_slow_until and os.clock() >= slm_event_slow_until then
+        slm_event_slow_factor = 1.0
+        slm_event_slow_until  = nil
+    end
+    -- Event: pause expiry
+    if slm_event_pause_until and os.clock() >= slm_event_pause_until then
+        slm_event_pause_until  = nil
+        slm_event_dep_active   = nil
+        slm_catering_elapsed_at_pause = nil
+    end
+    -- Event: delay_start or active pause â†’ freeze timers and wait
+    if slm_event_delay_until then
+        if os.clock() < slm_event_delay_until then
+            local ev_cat = slm_event_dep_active and slm_event_dep_active.category
+            if ev_cat == "pax" and (cargo_total or 0) > 0 then
+                -- pax-only delay: freeze pax timers, cargo continues
+                if pax_load_started then pax_start_time = os.clock() end
+            elseif ev_cat == "cargo" and (passengers_total or 0) > 0 then
+                -- cargo-only delay: freeze cargo timer, pax continues
+                last_update_time = os.clock()
+            else
+                last_update_time = os.clock()
+                if pax_load_started then pax_start_time = os.clock() end
+                return
+            end
+        else
+            slm_event_delay_until = nil
+            if slm_event_dep_active and slm_event_dep_active.effect == "delay_start" then
+                slm_event_dep_active = nil
+            end
+        end
+    end
+    if slm_event_pause_until and os.clock() < slm_event_pause_until then
+        local ev_cat = slm_event_dep_active and slm_event_dep_active.category
+        if ev_cat == "pax" and (cargo_total or 0) > 0 then
+            if pax_load_started then pax_start_time = os.clock() end
+        elseif ev_cat == "cargo" and (passengers_total or 0) > 0 then
+            last_update_time = os.clock()
+        else
+            last_update_time = os.clock()
+            if pax_load_started then pax_start_time = os.clock() end
+            return
+        end
+    end
+
+    if fuel_first and not fuel_done then
+        if not fuel_loading then
+            if (fuel_total or 0) - (fuel_loaded or 0) == 0 then
+                fuel_done = true
+                show_FUEL = false
+                FUEL_chg = true
+            else
+                start_fuel_loading()
+            end
+        end
+        manage_fuel_loading()
+        return
+    end
+
+    if fuel_first and fuel_done and not fuel_wait_finished then
+        if not fuel_done_time then
+            fuel_done_time = os.clock()
+            return
+        elseif os.clock() - fuel_done_time < fuel_post_delay then
+            return
+        else
+            fuel_wait_finished = true
+			last_update_time = os.clock()
+			cargo_start_reference_time = os.clock()
+        end
+    end
+
+    if not slm_rp_active and slm_rp_last_pax_loaded == nil then slm_rp_start() end
+
+    local now = os.clock()
+    local elapsed = now - last_update_time
+
+
+if cargo_total == 0 and passengers_total == 0 then
+    if not fuel_loading and not fuel_done then
+        if (fuel_total or 0) - (fuel_loaded or 0) == 0 then
+            fuel_done = true
+        else
+            start_fuel_loading()
+        end
+    end
+    manage_fuel_loading()
+	check_if_all_done()
+    return
+end
+
+if cargo_total == 0 then
+if fuel_first and not fuel_done then return end
+    local pax_load_delay = 20
+    if selected_location_group == "terminal" then
+        pax_load_delay = 2
+    end
+
+    if not bus_triggered then
+        bus_triggered = true
+        pax_trigger_time = os.clock() + pax_load_delay
+    end
+
+    if os.clock() >= pax_trigger_time then
+        if not pax_load_started then
+            pax_load_started = true
+            pax_start_time = os.clock()
+            if not slm_pax_var_applied then
+                slm_pax_var_applied = true
+                slm_compute_pax_variability()
+            end
+            slm_try_apply_event("pax", "departure", 0.0)
+        end
+
+        if not sound_played.start_boarding_passengers
+           and not (slm_event_delay_until and os.clock() < slm_event_delay_until) then
+            if selected_location_group == "remote" then
+                show_Bus = true
+                Bus_chg = true
+            elseif selected_location_group == "terminal" then
+                boarding_from_the_terminal = true
+                show_Pax = true
+                Pax_chg = true
+            end
+            play_sound_by_key("start_boarding_passengers")
+            sound_played.start_boarding_passengers = true
+            slm_start_boarding_music()
+        end
+
+        if pax_load_started and (passengers_loaded < passengers_total) then
+            local pax_frac = (passengers_total > 0) and (passengers_loaded / passengers_total) or 0
+            slm_try_apply_event("pax", "departure", pax_frac)
+            local pax_elapsed = os.clock() - pax_start_time
+            local pax_time = (pax_time_per_passenger + math.random(0, pax_time_variation)) * slm_event_slow_factor
+            if pax_elapsed >= pax_time then
+                local inc = math.floor(pax_elapsed / pax_time)
+                passengers_loaded = math.min(passengers_loaded + inc, passengers_total)
+                pax_start_time = os.clock()
+            end
+
+			if passengers_loaded >= math.floor(passengers_total * 0.15)
+               and not fuel_loading
+               and not fuel_done
+            then
+                if (fuel_total or 0) - (fuel_loaded or 0) == 0 then
+                    fuel_done = true
+                    show_FUEL = false
+                    FUEL_chg = true
+                else
+                    start_fuel_loading()
+                end
+            end
+
+            if not pax_loop_playing then
+                pax_loop_playing = true
+                let_sound_loop(sounds.passengers_loop.id, true)
+                play_sound(sounds.passengers_loop.id)
+            end
+        else
+            if pax_loop_playing then
+                pax_loop_playing = false
+                let_sound_loop(sounds.passengers_loop.id, false)
+                stop_sound(sounds.passengers_loop.id)
+            end
+            if passengers_loaded >= passengers_total then
+                if not sound_played.finished_loading_pax then
+                    slm_stop_boarding_music()
+                    play_sound_by_key("finished_loading_pax")
+                    sound_played.finished_loading_pax = true
+                    show_Bus = false
+                    Bus_chg = true
+                    boarding_from_the_terminal = false
+                    show_Pax = false
+                    Pax_chg = true
+                end
+            end
+        end
+    end
+    manage_fuel_loading()
+	check_if_all_done()
+    return
+end
+
+   if passengers_total == 0 then
+   if fuel_first and not fuel_done then return end
+    local cargo_frac_co = (cargo_total > 0) and (cargo_loaded / cargo_total) or 0
+    slm_try_apply_event("cargo", "departure", cargo_frac_co)
+    local eff_ct_co = cargo_time_per_unit * slm_event_slow_factor
+    if not sound_played.start_loading_cargo
+       and not (slm_event_delay_until and os.clock() < slm_event_delay_until) then
+        play_sound_by_key("start_loading_cargo")
+        sound_played.start_loading_cargo = true
+
+        show_BeltLoader = true
+        BeltLoader_chg = true
+        show_RearBeltLoader = true
+        RearBeltLoader_chg = true
+        show_Cart = true
+        Cart_chg = true
+        show_People4 = true
+        People4_chg = true
+        show_People3 = true
+        People3_chg = true
+        show_People2 = true
+        People2_chg = true
+        show_People1 = true
+        People1_chg = true
+        slm_place_chocks()
+
+        if selected_location_group == "remote" then
+			if not aircraft_has_own_stairs then
+				show_StairsXPJ  = true
+				StairsXPJ_chg   = true
+				show_StairsXPJ2 = true
+				StairsXPJ2_chg  = true
+				option_StairsXPJ_override = true
+			else
+				-- Own stairs / "Don't call jetway / stairs": stay hands-off,
+				-- never retract stairs the user placed manually (e.g. via SGES)
+				option_StairsXPJ_override = false
+			end
+        elseif selected_location_group == "terminal"  then
+			if not aircraft_has_own_stairs then
+				show_StairsXPJ  = true
+				StairsXPJ_chg   = true
+				show_StairsXPJ2 = true
+				StairsXPJ2_chg  = true
+				option_StairsXPJ_override = true
+			else
+				-- Own stairs / "Don't call jetway / stairs": stay hands-off,
+				-- never retract stairs the user placed manually (e.g. via SGES)
+				option_StairsXPJ_override = false
+			end
+        end
+    end
+
+    if cargo_loaded < cargo_total and elapsed >= eff_ct_co then
+        local inc = math.floor(elapsed / eff_ct_co)
+        cargo_loaded = math.min(cargo_loaded + inc, cargo_total)
+        last_update_time = now
+    end
+
+    if cargo_loaded < cargo_total then
+        if not cargo_loop_playing then
+            cargo_loop_playing = true
+            let_sound_loop(sounds.cargo_loop.id, true)
+            play_sound(sounds.cargo_loop.id)
+        end
+    else
+        if cargo_loop_playing then
+            cargo_loop_playing = false
+            let_sound_loop(sounds.cargo_loop.id, false)
+            stop_sound(sounds.cargo_loop.id)
+        end
+        if not sound_played.finished_loading_cargo then
+            play_sound_by_key("finished_loading_cargo")
+            sound_played.finished_loading_cargo = true
+            show_BeltLoader = false
+            BeltLoader_chg = true
+            show_RearBeltLoader = false
+            RearBeltLoader_chg = true
+            show_Cart = false
+            Cart_chg = true
+        end
+
+        if not fuel_loading and not fuel_done then
+            if (fuel_total or 0) - (fuel_loaded or 0) == 0 then
+                fuel_done = true
+            else
+                start_fuel_loading()
+            end
+        end
+    end
+    manage_fuel_loading()
+	check_if_all_done()
+    return
+end
+
+
+if fuel_first and not fuel_done then
+    if (fuel_total or 0) - (fuel_loaded or 0) == 0 then
+        fuel_done = true
+        show_FUEL = false
+        FUEL_chg = true
+    else
+        start_fuel_loading()
+    end
+    manage_fuel_loading()
+    return
+end
+
+if not cargo_start_reference_time then
+    cargo_start_reference_time = os.clock()
+end
+
+local cargo_frac_both = (cargo_total > 0) and (cargo_loaded / cargo_total) or 0
+slm_try_apply_event("cargo", "departure", cargo_frac_both)
+local eff_ct_both = cargo_time_per_unit * slm_event_slow_factor
+
+if not sound_played.start_loading_cargo
+   and not (slm_event_delay_until and os.clock() < slm_event_delay_until) then
+    play_sound_by_key("start_loading_cargo")
+    sound_played.start_loading_cargo = true
+    show_BeltLoader = true
+    BeltLoader_chg = true
+    show_RearBeltLoader = true
+    RearBeltLoader_chg = true
+    show_Cart = true
+    Cart_chg = true
+    show_People4 = true
+    People4_chg = true
+    show_People3 = true
+    People3_chg = true
+    show_People2 = true
+    People2_chg = true
+    show_People1 = true
+    People1_chg = true
+    slm_place_chocks()
+
+    if selected_location_group == "remote" then
+		if not aircraft_has_own_stairs then
+			show_StairsXPJ  = true
+			StairsXPJ_chg   = true
+			show_StairsXPJ2 = true
+			StairsXPJ2_chg  = true
+			option_StairsXPJ_override = true
+			DualBoard = true
+		else
+			-- Own stairs / "Don't call jetway / stairs": stay hands-off,
+			-- never retract stairs the user placed manually (e.g. via SGES)
+			option_StairsXPJ_override = false
+			DualBoard = false
+		end
+    elseif selected_location_group == "terminal" then
+		if not aircraft_has_own_stairs then
+			show_StairsXPJ  = true
+			StairsXPJ_chg   = true
+			show_StairsXPJ2 = true
+			StairsXPJ2_chg  = true
+			option_StairsXPJ_override = true
+			DualBoard = true
+		else
+			-- Own stairs / "Don't call jetway / stairs": stay hands-off,
+			-- never retract stairs the user placed manually (e.g. via SGES)
+			option_StairsXPJ_override = false
+			DualBoard = false
+		end
+    end
+end
+
+if cargo_loaded < cargo_total and elapsed >= eff_ct_both then
+    local inc = math.floor(elapsed / eff_ct_both)
+    cargo_loaded = math.min(cargo_loaded + inc, cargo_total)
+    last_update_time = now
+end
+
+if cargo_loaded < cargo_total then
+    if not cargo_loop_playing then
+        cargo_loop_playing = true
+        let_sound_loop(sounds.cargo_loop.id, true)
+        play_sound(sounds.cargo_loop.id)
+    end
+else
+    if cargo_loop_playing then
+        cargo_loop_playing = false
+        let_sound_loop(sounds.cargo_loop.id, false)
+        stop_sound(sounds.cargo_loop.id)
+    end
+    if not sound_played.finished_loading_cargo then
+        play_sound_by_key("finished_loading_cargo")
+        sound_played.finished_loading_cargo = true
+        show_BeltLoader = false
+        BeltLoader_chg = true
+        show_RearBeltLoader = false
+        RearBeltLoader_chg = true
+        show_Cart = false
+        Cart_chg = true
+    end
+end
+
+local est_cargo = estimated_time_cargo or 0
+local est_pax   = estimated_time_pax or 0
+
+	if not pax_load_started then
+		if not bus_triggered then
+			if est_cargo > 0
+			   and est_pax > 0
+			   and ((est_cargo - est_pax) <= 120)
+			   and (os.clock() - start_time > 3)
+			then
+				bus_triggered = true
+
+				local delay_pax = 0
+				if selected_location_group == "remote" then
+					delay_pax = 20
+				elseif selected_location_group == "terminal" then
+					delay_pax = 4
+				elseif selected_location_group == "jetway" then
+					delay_pax = 4
+				end
+
+				pax_trigger_time = os.clock() + delay_pax
+			end
+		end
+
+		if bus_triggered and pax_trigger_time and os.clock() >= pax_trigger_time then
+			pax_load_started = true
+			pax_start_time = os.clock()
+			if not slm_pax_var_applied then
+				slm_pax_var_applied = true
+				slm_compute_pax_variability()
+			end
+			slm_try_apply_event("pax", "departure", 0.0)
+		end
+	end
+	if pax_load_started and bus_triggered and pax_trigger_time
+	   and os.clock() >= pax_trigger_time
+	   and not sound_played.start_boarding_passengers
+	   and not (slm_event_delay_until and os.clock() < slm_event_delay_until) then
+		if selected_location_group == "remote" then
+			show_Bus = true
+			Bus_chg = true
+		elseif selected_location_group == "terminal" then
+			show_Pax = true
+			Pax_chg = true
+			boarding_from_the_terminal = true
+		end
+		play_sound_by_key("start_boarding_passengers")
+		sound_played.start_boarding_passengers = true
+		slm_start_boarding_music()
+	end
+
+	if pax_load_started and (passengers_loaded < passengers_total) then
+		local now_clock = os.clock()
+		local pax_frac_both = (passengers_total > 0) and (passengers_loaded / passengers_total) or 0
+		slm_try_apply_event("pax", "departure", pax_frac_both)
+		local pax_elapsed = now_clock - pax_start_time
+		local pax_time = (pax_time_per_passenger + math.random(0, pax_time_variation)) * slm_event_slow_factor
+
+		if pax_elapsed >= pax_time then
+			local inc = math.floor(pax_elapsed / pax_time)
+			passengers_loaded = math.min(passengers_loaded + inc, passengers_total)
+			pax_start_time = now_clock
+		end
+
+		if not pax_loop_playing then
+			pax_loop_playing = true
+			let_sound_loop(sounds.passengers_loop.id, true)
+			play_sound(sounds.passengers_loop.id)
+		end
+	else
+		if pax_loop_playing then
+			pax_loop_playing = false
+			let_sound_loop(sounds.passengers_loop.id, false)
+			stop_sound(sounds.passengers_loop.id)
+		end
+		if passengers_loaded >= passengers_total and not sound_played.finished_loading_pax then
+			slm_stop_boarding_music()
+			play_sound_by_key("finished_loading_pax")
+			sound_played.finished_loading_pax = true
+			show_Bus = false
+			Bus_chg = true
+			boarding_from_the_terminal = false
+			show_Pax = false
+			Pax_chg = true
+		end
+	end
+
+		if passengers_loaded >= math.floor(passengers_total * 0.15)
+		   and not fuel_loading
+		   and not fuel_done
+		then
+			if (fuel_total or 0) - (fuel_loaded or 0) == 0 then
+				fuel_done = true
+				show_FUEL = false
+				FUEL_chg = true
+			else
+				start_fuel_loading()
+			end
+		end
+	manage_fuel_loading()
+	check_if_all_done()
+end
+
+
+--------------------------------------------------------------------------------
+-- DISEMBARKATION
+--------------------------------------------------------------------------------
+function start_disembarkation()
+    disembark_started = true
+    disembark_done = false
+    embark_started = false
+    embark_done = false
+	walking_direction = "deboarding"
+	walking_direction_changed_armed = false
+    cargo_unloaded = 0
+    passengers_unloaded = 0
+
+	if unit_system == "lbs" then
+		cargo_time_per_unit_min = disembark_cargo_time_per_kg_min / 2.20462
+		cargo_time_per_unit_max = disembark_cargo_time_per_kg_max / 2.20462
+		fuel_time_per_unit      = fuel_time_per_kg / 2.20462
+	else
+		cargo_time_per_unit_min = disembark_cargo_time_per_kg_min
+		cargo_time_per_unit_max = disembark_cargo_time_per_kg_max
+		fuel_time_per_unit      = fuel_time_per_kg
+	end
+
+	cargo_time_per_unit = random_range(cargo_time_per_unit_min, cargo_time_per_unit_max)
+
+	arr_passengers_total = (SLM_real_pax and SLM_real_pax > 0) and SLM_real_pax or passengers_total
+	arr_cargo_total      = (SLM_real_cargo and SLM_real_cargo > 0) and SLM_real_cargo or cargo_total
+
+	fuel_loaded = math.floor(from_kg(sim_fuel_total_kg or 0))
+    disembark_start_time = os.clock()
+    disembark_last_update_time = disembark_start_time
+    pax_unload_started = false
+    pax_unload_start_time = 0
+    estimated_time_pax = 0
+
+    -- Reset arrival event state for this new arrival phase
+    slm_event_arr_pending   = nil
+    slm_event_arr_active    = nil
+    slm_event_arr_triggered = false
+    slm_event_delay_until   = nil
+    slm_event_slow_factor   = 1.0
+    slm_event_slow_until    = nil
+    slm_event_pause_until   = nil
+    slm_cargo_penalty_until = nil
+    slm_cargo_penalty_start = nil
+    -- Roll one arrival event (applied lazily when category+pct conditions are met)
+    slm_roll_event("arrival")
+
+    init_sounds()
+
+    if cargo_total > 0 and passengers_total > 0 then
+        play_sound_by_key("start_unloading_cargo")
+        sound_played.start_unloading_cargo = true
+		show_BeltLoader = true
+		BeltLoader_chg = true
+		show_RearBeltLoader = true
+		RearBeltLoader_chg = true
+		show_Cart = true
+		Cart_chg = true
+		show_People4 = true
+		People4_chg = true
+		show_People3 = true
+		People3_chg = true
+		show_People2 = true
+		People2_chg = true
+		show_People1 = true
+		People1_chg = true
+		slm_place_chocks()
+		if selected_location_group == "remote" then
+			if not aircraft_has_own_stairs then
+				show_StairsXPJ  = true
+				StairsXPJ_chg   = true
+				show_StairsXPJ2 = true
+				StairsXPJ2_chg  = true
+				option_StairsXPJ_override = true
+				DualBoard = true
+			else
+				-- Own stairs / "Don't call jetway / stairs": stay hands-off,
+				-- never retract stairs the user placed manually (e.g. via SGES)
+				option_StairsXPJ_override = false
+				DualBoard = false
+			end
+			show_Bus = true
+			Bus_chg = true
+			start_disembarkation_pax_delay = os.clock() + 15
+		elseif selected_location_group == "jetway" then
+			if not slm_opensam_jetway_check() then
+				if not aircraft_has_own_stairs then
+					command_once("sim/ground_ops/jetway")
+				end
+			end
+			start_disembarkation_pax_delay = os.clock() + 25
+        elseif selected_location_group == "terminal" then
+			if not aircraft_has_own_stairs then
+				show_StairsXPJ  = true
+				StairsXPJ_chg   = true
+				show_StairsXPJ2 = true
+				StairsXPJ2_chg  = true
+				option_StairsXPJ_override = true
+				DualBoard = true
+			else
+				-- Own stairs / "Don't call jetway / stairs": stay hands-off,
+				-- never retract stairs the user placed manually (e.g. via SGES)
+				option_StairsXPJ_override = false
+				DualBoard = false
+			end
+			start_disembarkation_pax_delay = os.clock() + 8
+        end
+    elseif cargo_total > 0 then
+        play_sound_by_key("start_unloading_cargo")
+        sound_played.start_unloading_cargo = true
+		show_BeltLoader = true
+		BeltLoader_chg = true
+		show_RearBeltLoader = true
+		RearBeltLoader_chg = true
+		show_Cart = true
+		Cart_chg = true
+		show_People4 = true
+		People4_chg = true
+		show_People3 = true
+		People3_chg = true
+		show_People2 = true
+		People2_chg = true
+		show_People1 = true
+		People1_chg = true
+		slm_place_chocks()
+		if selected_location_group == "remote" then
+			if not aircraft_has_own_stairs then
+				show_StairsXPJ  = true
+				StairsXPJ_chg   = true
+				show_StairsXPJ2 = true
+				StairsXPJ2_chg  = true
+				option_StairsXPJ_override = true
+				DualBoard = true
+			else
+				-- Own stairs / "Don't call jetway / stairs": stay hands-off,
+				-- never retract stairs the user placed manually (e.g. via SGES)
+				option_StairsXPJ_override = false
+				DualBoard = false
+			end
+        elseif selected_location_group == "jetway" then
+			if not slm_opensam_jetway_check() then
+				if not aircraft_has_own_stairs then
+					command_once("sim/ground_ops/jetway")
+				end
+			end
+        elseif selected_location_group == "terminal" then
+			if not aircraft_has_own_stairs then
+				show_StairsXPJ  = true
+				StairsXPJ_chg   = true
+				show_StairsXPJ2 = true
+				StairsXPJ2_chg  = true
+				option_StairsXPJ_override = true
+				DualBoard = true
+			else
+				-- Own stairs / "Don't call jetway / stairs": stay hands-off,
+				-- never retract stairs the user placed manually (e.g. via SGES)
+				option_StairsXPJ_override = false
+				DualBoard = false
+			end
+        end
+    elseif passengers_total > 0 then
+        -- vehicles deferred to manage_disembark (guarded by arrival event delay)
+    end
+end
+
+function manage_disembark()
+    if not disembark_started then return end
+    if slm_beacon_on then return end
+
+    -- Event: slow expiry
+    if slm_event_slow_until and os.clock() >= slm_event_slow_until then
+        slm_event_slow_factor = 1.0
+        slm_event_slow_until  = nil
+    end
+    -- Event: pause expiry
+    if slm_event_pause_until and os.clock() >= slm_event_pause_until then
+        slm_event_pause_until = nil
+        slm_event_arr_active  = nil
+    end
+    -- Event: delay_start or active pause â†’ freeze timers and wait
+    if slm_event_delay_until then
+        if os.clock() < slm_event_delay_until then
+            disembark_last_update_time = os.clock()
+            if pax_unload_started then pax_unload_start_time = os.clock() end
+            return
+        else
+            slm_event_delay_until = nil
+            if slm_event_arr_active and slm_event_arr_active.effect == "delay_start" then
+                slm_event_arr_active = nil
+            end
+        end
+    end
+    if slm_event_pause_until and os.clock() < slm_event_pause_until then
+        disembark_last_update_time = os.clock()
+        if pax_unload_started then pax_unload_start_time = os.clock() end
+        return
+    end
+
+    local now = os.clock()
+    local elapsed = now - disembark_last_update_time
+
+    if arr_cargo_total > 0 then
+        local cargo_arr_frac = (arr_cargo_total > 0) and (cargo_unloaded / arr_cargo_total) or 0
+        slm_try_apply_event("cargo", "arrival", cargo_arr_frac)
+        if cargo_unloaded < arr_cargo_total then
+            local eff_ct_arr = cargo_time_per_unit * slm_event_slow_factor
+            if elapsed >= eff_ct_arr then
+				local increment = math.floor(elapsed / eff_ct_arr)
+                cargo_unloaded = math.min(cargo_unloaded + increment, arr_cargo_total)
+                disembark_last_update_time = now
+            end
+        end
+
+        if cargo_unloaded < arr_cargo_total then
+            if not cargo_loop_playing then
+                cargo_loop_playing = true
+                let_sound_loop(sounds.cargo_loop.id, true)
+                play_sound(sounds.cargo_loop.id)
+            end
+        else
+            if cargo_loop_playing then
+                cargo_loop_playing = false
+                let_sound_loop(sounds.cargo_loop.id, false)
+                stop_sound(sounds.cargo_loop.id)
+            end
+            if not sound_played.finished_unloading_cargo then
+                play_sound_by_key("finished_unloading_cargo")
+                sound_played.finished_unloading_cargo = true
+				show_BeltLoader = false
+				BeltLoader_chg = true
+				show_RearBeltLoader = false
+				RearBeltLoader_chg = true
+				show_Cart = false
+				Cart_chg = true
+            end
+        end
+    else
+        cargo_unloaded = 0
+    end
+
+    if arr_passengers_total > 0 then
+        if arr_cargo_total > 0 and now < start_disembarkation_pax_delay then
+        else
+            if not pax_unload_started then
+                pax_unload_started = true
+                pax_unload_start_time = now
+                slm_try_apply_event("pax", "arrival", 0.0)
+            end
+
+			if not sound_played.start_unboarding_passengers
+			   and not (slm_event_delay_until and os.clock() < slm_event_delay_until) then
+				show_People4 = true; People4_chg = true
+				show_People3 = true; People3_chg = true
+				show_People2 = true; People2_chg = true
+				show_People1 = true; People1_chg = true
+				slm_place_chocks()
+				if selected_location_group == "remote" then
+					if not aircraft_has_own_stairs then
+						show_StairsXPJ  = true; StairsXPJ_chg  = true
+						show_StairsXPJ2 = true; StairsXPJ2_chg = true
+						option_StairsXPJ_override = true
+						DualBoard = true
+					else
+						-- Own stairs / "Don't call jetway / stairs": stay hands-off,
+						-- never retract stairs the user placed manually (e.g. via SGES)
+						option_StairsXPJ_override = false
+						DualBoard = false
+					end
+					show_Bus = true; Bus_chg = true
+					show_Pax = true; Pax_chg = true
+				elseif selected_location_group == "jetway" then
+					if not slm_opensam_jetway_check() then
+						if not aircraft_has_own_stairs then
+							command_once("sim/ground_ops/jetway")
+						end
+					end
+				elseif selected_location_group == "terminal" then
+					if not aircraft_has_own_stairs then
+						show_StairsXPJ  = true; StairsXPJ_chg  = true
+						show_StairsXPJ2 = true; StairsXPJ2_chg = true
+						option_StairsXPJ_override = true
+						DualBoard = true
+					else
+						-- Own stairs / "Don't call jetway / stairs": stay hands-off,
+						-- never retract stairs the user placed manually (e.g. via SGES)
+						option_StairsXPJ_override = false
+						DualBoard = false
+					end
+					boarding_from_the_terminal = true
+					show_Pax = true; Pax_chg = true
+				end
+				play_sound_by_key("start_unboarding_passengers")
+				sound_played.start_unboarding_passengers = true
+				slm_start_boarding_music()
+			end
+
+            if passengers_unloaded < arr_passengers_total then
+                local pax_arr_frac = (arr_passengers_total > 0) and (passengers_unloaded / arr_passengers_total) or 0
+                slm_try_apply_event("pax", "arrival", pax_arr_frac)
+                local pax_elapsed = now - pax_unload_start_time
+                local pax_time = (disembark_pax_time_per_passenger + math.random(0, disembark_pax_time_variation)) * slm_event_slow_factor
+                if pax_elapsed >= pax_time then
+                    local increment = math.floor(pax_elapsed / pax_time)
+                    passengers_unloaded = math.min(passengers_unloaded + increment, arr_passengers_total)
+                    pax_unload_start_time = now
+                end
+            end
+
+            if passengers_unloaded < arr_passengers_total then
+                if not pax_loop_playing then
+                    pax_loop_playing = true
+                    let_sound_loop(sounds.passengers_loop.id, true)
+                    play_sound(sounds.passengers_loop.id)
+                end
+            else
+                if pax_loop_playing then
+                    pax_loop_playing = false
+                    let_sound_loop(sounds.passengers_loop.id, false)
+                    stop_sound(sounds.passengers_loop.id)
+                end
+                if not sound_played.finished_unboarding_passengers then
+                    slm_stop_boarding_music()
+                    play_sound_by_key("finished_unboarding_passengers")
+                    sound_played.finished_unboarding_passengers = true
+					show_Bus = false
+					Bus_chg = true
+					boarding_from_the_terminal = false
+					show_Pax = false
+					Pax_chg = true
+                end
+            end
+        end
+    else
+        passengers_unloaded = 0
+    end
+
+    if (arr_cargo_total == 0 or cargo_unloaded >= arr_cargo_total) and
+       (arr_passengers_total == 0 or passengers_unloaded >= arr_passengers_total) then
+        -- Last unloading step on station aircraft: slm_rp_unload_update runs
+        -- after this callback and would see disembark already over (#SL19).
+        slm_rp_unload_update()
+        if slm_aircraft_type == "zibo" then
+            for z = 1, 5 do
+                if slm_rp_zibo_zone_dr[z] then slm_rp_zibo_zone_dr[z][0] = 0 end
+            end
+        end
+        if slm_aircraft_type == "toliss" and slm_rp_enabled and not slm_rp_excluded then
+            command_once("AirbusFBW/SetWeightAndCG")
+        end
+        disembark_started = false
+        disembark_done = true
+		show_BeltLoader = false
+		BeltLoader_chg = true
+		show_RearBeltLoader = false
+		RearBeltLoader_chg = true
+		show_Cart = false
+		Cart_chg = true
+		show_People4 = false
+		People4_chg = true
+		show_People3 = false
+		People3_chg = true
+		show_People2 = false
+		People2_chg = true
+		show_People1 = false
+		People1_chg = true
+		if slm_sequence_mode ~= "turnaround" and slm_sequence_mode ~= "night_stop"
+		   and not slm_manual_chocks then
+			show_Chocks = false
+			Chocks_chg  = true
+		end
+
+		if slm_sequence_mode ~= "turnaround" and not aircraft_has_own_stairs then
+			show_StairsXPJ  = false
+			StairsXPJ_chg   = true
+			show_StairsXPJ2 = false
+			StairsXPJ2_chg  = true
+		end
+    end
+end
+
+--------------------------------------------------------------------------------
+-- FUEL
+--------------------------------------------------------------------------------
+
+function start_fuel_loading()
+    fuel_loading = true
+    fuel_done = false
+    show_FUEL = true
+    FUEL_chg = true
+    slm_try_apply_event("fuel", "departure", 0.0)
+    fuel_ready_time = os.clock() + 30
+
+    if fuel_first then
+        show_People1 = true
+        People1_chg = true
+        show_People2 = true
+        People2_chg = true
+        show_People3 = true
+        People3_chg = true
+        show_People4 = true
+        People4_chg = true
+        slm_place_chocks()
+
+        if selected_location_group == "remote" or selected_location_group == "terminal" then
+			if not aircraft_has_own_stairs then
+				show_StairsXPJ  = true
+				StairsXPJ_chg   = true
+				show_StairsXPJ2 = true
+				StairsXPJ2_chg  = true
+				option_StairsXPJ_override = true
+			else
+				-- Own stairs / "Don't call jetway / stairs": stay hands-off,
+				-- never retract stairs the user placed manually (e.g. via SGES)
+				option_StairsXPJ_override = false
+			end
+        end
+    end
+end
+
+
+function manage_fuel_loading()
+    if fuel_loading and not fuel_done then
+        if not fuel_time_per_unit then
+            if unit_system == "lbs" then
+                fuel_time_per_unit = fuel_time_per_kg / 2.20462
+            else
+                fuel_time_per_unit = fuel_time_per_kg
+            end
+        end
+
+        if not slm_rf_tolerance_checked then
+            slm_rf_tolerance_checked = true
+            local current_disp = math.floor(from_kg(sim_fuel_total_kg or 0))
+            local diff         = current_disp - (fuel_total or 0)
+            local THRESHOLD    = (unit_system == "lbs") and 110 or 50
+            if (fuel_total or 0) > 0 and math.abs(diff) <= THRESHOLD then
+                logMsg("[SLM-RF] Fuel within rounding margin ("
+                       .. tostring(current_disp) .. " / " .. tostring(fuel_total)
+                       .. " " .. unit_system .. ") â€” skipping")
+                fuel_loaded  = fuel_total
+                show_FUEL    = false
+                FUEL_chg     = true
+                fuel_loading = false
+                fuel_done    = true
+                slm_rf_skipped           = true
+                slm_rf_tolerance_checked = false
+                return
+            end
+        end
+
+        if fuel_ready_time and os.clock() < fuel_ready_time then
+            fuel_loaded = math.floor(from_kg(sim_fuel_total_kg or 0))
+            return
+        end
+
+        -- Event: fuel delay_start
+        if slm_event_fuel_delay_until then
+            if os.clock() < slm_event_fuel_delay_until then
+                if fuel_last_update_time then fuel_last_update_time = os.clock() end
+                fuel_loaded = math.floor(from_kg(sim_fuel_total_kg or 0))
+                return
+            else
+                slm_event_fuel_delay_until = nil
+                if slm_event_dep_active and slm_event_dep_active.effect == "delay_start"
+                   and slm_event_dep_active.category == "fuel" then
+                    slm_event_dep_active = nil
+                end
+            end
+        end
+
+        local diff = (fuel_total or 0) - (fuel_loaded or 0)
+        if diff == 0 then
+            show_FUEL = false
+            FUEL_chg = true
+            fuel_loading = false
+            fuel_done = true
+            -- Target reached outside this function (dev Force loading): end like a
+            -- normal fill, or the fuel loop keeps playing until the next reset.
+            if fuel_loop_playing then
+                fuel_loop_playing = false
+                let_sound_loop(sounds.fuel_loop.id, false)
+                stop_sound(sounds.fuel_loop.id)
+                if not sound_played.finished_fuel_loading then
+                    play_sound_by_key("finished_fuel_loading")
+                    sound_played.finished_fuel_loading = true
+                end
+            end
+            return
+        end
+
+        if not sound_played.start_fuel_loading then
+            play_sound_by_key("start_fuel_loading")
+            sound_played.start_fuel_loading = true
+        end
+
+        if not fuel_loop_playing then
+            fuel_loop_playing = true
+            let_sound_loop(sounds.fuel_loop.id, true)
+            play_sound(sounds.fuel_loop.id)
+        end
+
+        if not slm_rf_active then slm_rf_start() end
+
+        local now = os.clock()
+        if not fuel_last_update_time then fuel_last_update_time = now end
+        local elapsed = now - fuel_last_update_time
+
+        local direction = (diff > 0) and 1 or -1
+        local increment = math.floor(elapsed / fuel_time_per_unit)
+
+        if increment > 0 then
+            fuel_loaded = (fuel_loaded or 0) + (increment * direction)
+
+            if direction == 1 and fuel_loaded >= fuel_total then
+                fuel_loaded = fuel_total
+            elseif direction == -1 and fuel_loaded <= fuel_total then
+                fuel_loaded = fuel_total
+            end
+
+            fuel_last_update_time = now
+        end
+
+        if fuel_loaded == fuel_total then
+            show_FUEL = false
+            FUEL_chg = true
+
+            if fuel_loop_playing then
+                fuel_loop_playing = false
+                let_sound_loop(sounds.fuel_loop.id, false)
+                stop_sound(sounds.fuel_loop.id)
+            end
+
+            fuel_loading = false
+            fuel_done = true
+
+            if not sound_played.finished_fuel_loading then
+                play_sound_by_key("finished_fuel_loading")
+                sound_played.finished_fuel_loading = true
+            end
+        end
+    end
+end
+
+
+--------------------------------------------------------------------------------
+-- Fuel Tanks List
+--------------------------------------------------------------------------------
+
+local function slm_rf_get_dr()
+    if slm_rf_tank_dr == nil then
+        slm_rf_tank_dr = dataref_table("sim/flightmodel/weight/m_fuel")
+    end
+    return slm_rf_tank_dr
+end
+
+local function slm_rf_total_current()
+    local tdr = slm_rf_get_dr()
+    local t = 0
+    for i = 0, 8 do
+        local v = tdr[i] or 0
+        if v > 0 then t = t + v end
+    end
+    return t
+end
+
+
+function slm_rf_start()
+    if not slm_rf_enabled or slm_rf_excluded then return end
+    if unit_system == "lbs" then
+        slm_rf_target_kg = (fuel_total or 0) * 0.453592
+    else
+        slm_rf_target_kg = fuel_total or 0
+    end
+    if slm_rf_target_kg <= 0 then return end
+
+    slm_rf_get_dr()
+
+
+    slm_rf_group_dr_override = {}
+    if slm_aircraft_type == "toliss" then
+        -- ToLiss spreads the fuel over its tanks itself (see slm_rf_update)
+        slm_rf_groups = {}
+        logMsg("[SLM-RF] ToLiss (ICAO=" .. slm_get_live_icao() ..
+               "): writing fuel deltas to m_fuel, ToLiss distributes")
+    elseif slm_aircraft_type == "zibo" then
+        slm_rf_groups = {{0,2},{1}}
+        logMsg("[SLM-RF] Zibo: wing groups=[0,2] then center=[1]")
+    else
+        slm_rf_groups = (slm_aircraft_data.tank_groups or {})[PLANE_ICAO or ""] or {{0,1}}
+    end
+
+    slm_rf_initial_real_kg = slm_rf_total_current()
+
+    slm_rf_active             = true
+    slm_rf_group_idx          = slm_defuel_performed and #slm_rf_groups or 1
+    slm_rf_history            = {}
+    slm_rf_last_fuel_loaded   = nil
+    slm_rf_last_t             = 0
+
+    local tank_max = (slm_aircraft_data.tank_max or {})[PLANE_ICAO or ""]
+    logMsg("[SLM-RF] Saturation mode: " .. (tank_max and "precise (defined max)" or "sliding history (fallback)"))
+    logMsg("[SLM-RF] Real fuel fill started: target=" ..
+           string.format("%.0f", slm_rf_target_kg) ..
+           " kg, current=" .. string.format("%.0f", slm_rf_initial_real_kg) ..
+           " kg, ICAO=" .. slm_get_live_icao() ..
+           ", groups=" .. #slm_rf_groups)
+end
+
+function slm_rf_stop()
+    if slm_rf_active then
+        logMsg("[SLM-RF] Real fuel fill stopped at " ..
+               string.format("%.0f", slm_rf_total_current()) .. " kg")
+    end
+    slm_rf_active             = false
+    slm_rf_group_idx          = 1
+    slm_rf_history            = {}
+    slm_rf_last_fuel_loaded   = nil
+    slm_rf_initial_real_kg    = 0
+    slm_rf_group_dr_override  = {}
+    slm_rf_tolerance_checked  = false
+    slm_rf_skipped            = false
+end
+
+local function slm_rf_is_sat(h)
+    if not h or #h < SLM_RF_SAT_WINDOW then return false end
+    local half = math.floor(SLM_RF_SAT_WINDOW / 2)
+    local mn_old, mn_new = math.huge, math.huge
+    for i = 1, half do
+        if h[i] < mn_old then mn_old = h[i] end
+    end
+    for i = half + 1, SLM_RF_SAT_WINDOW do
+        if h[i] < mn_new then mn_new = h[i] end
+    end
+    return (mn_new - mn_old) < SLM_RF_SAT_THRESHOLD
+end
+
+local function slm_rf_is_sat_for_tank(ti, h, cur)
+    local tank_max = (slm_aircraft_data.tank_max or {})[PLANE_ICAO or ""]
+    if tank_max and tank_max[ti] then
+        return cur >= tank_max[ti]
+    end
+    return slm_rf_is_sat(h)
+end
+
+function slm_rf_update()
+    if not slm_rf_active then return end
+    if slm_beacon_on then return end
+    local dr = slm_rf_get_dr()
+    if not dr then return end
+
+    -- ToLiss: when m_fuel changes, ToLiss takes the sum of all slots as the new
+    -- total, like a refuel ("Updating internal fuel amount to changed settings"):
+    -- it spreads that total over its tanks itself and closes the outer tank
+    -- transfer valves, which writing fuelTankContent_kgs never does. A written
+    -- value replaces the slot content (writing into the centre slot [0] is only an
+    -- "addition" while it is empty), so the delta goes into an empty slot,
+    -- searched from [8] down, once ToLiss has consumed the previous one. If all
+    -- 9 slots hold fuel, the delta is added onto [8]'s content (same sum).
+    if slm_aircraft_type == "toliss" then
+        local now = os.clock()
+        if now - slm_rf_last_t < slm_rf_interval then return end
+        slm_rf_last_t = now
+        local total, slot = 0, 8  -- no empty slot (all 9 tanks used): add onto [8]
+        for i = 0, 8 do
+            local v = dr[i] or 0
+            if v < 0 then return end  -- previous negative delta not consumed yet
+            total = total + v
+        end
+        for i = 8, 0, -1 do
+            if (dr[i] or 0) == 0 then slot = i; break end
+        end
+        local diff = to_kg(fuel_loaded or 0) - total
+        if math.abs(diff) > 1.0 then
+            -- ToLiss ignores changes under 40 kg (a final 15 kg remainder was
+            -- never taken): step 50 kg the other way first, the next write then
+            -- covers remainder + 50 kg. Going away from the target also keeps a
+            -- full-tank target from being clamped at max capacity.
+            if fuel_loaded == fuel_total and math.abs(diff) < 45 then
+                diff = (diff > 0) and -50 or 50
+                logMsg("[SLM-RF] ToLiss: final remainder under 40 kg, stepping 50 kg away first")
+            end
+            dr[slot] = (dr[slot] or 0) + diff
+            return  -- let ToLiss consume it before checking completion
+        end
+        if fuel_loaded == fuel_total then
+            slm_rf_active = false
+            logMsg("[SLM-RF] ToLiss done: total set to " ..
+                   string.format("%.0f", to_kg(fuel_total or 0)) .. " kg via m_fuel")
+        end
+        return
+    end
+
+    if slm_rf_last_fuel_loaded == nil then
+        slm_rf_last_fuel_loaded = fuel_loaded or 0
+        return
+    end
+
+    local current_fl  = fuel_loaded or 0
+    local delta_units = current_fl - slm_rf_last_fuel_loaded
+    if delta_units == 0 then return end
+    slm_rf_last_fuel_loaded = current_fl
+
+    local delta_kg     = (unit_system == "lbs") and (delta_units * 0.453592) or delta_units
+    local is_defueling = (delta_kg < 0)
+    delta_kg = math.abs(delta_kg)
+
+    local total     = slm_rf_total_current()
+    local active_dr = dr
+
+    if is_defueling then
+        local still_excess = total - slm_rf_target_kg
+        if still_excess <= 0.5 then
+            slm_rf_active = false
+            logMsg("[SLM-RF] Defuel done: tanks=" .. string.format("%.1f", total) ..
+                   " kg / cible=" .. string.format("%.0f", slm_rf_target_kg) .. " kg")
+            return
+        end
+        delta_kg = math.min(delta_kg, still_excess)
+
+        while slm_rf_group_idx >= 1 do
+            local group        = slm_rf_groups[slm_rf_group_idx]
+            if not group then break end
+            local group_indices = group.indices or group
+            local fill_dr       = slm_rf_group_dr_override[slm_rf_group_idx] or active_dr
+            local active_tanks  = {}
+            for _, ti in ipairs(group_indices) do
+                if (fill_dr[ti] or 0) > 0.5 then active_tanks[#active_tanks + 1] = ti end
+            end
+            if #active_tanks > 0 then
+                local per_tank = delta_kg / #active_tanks
+                for _, ti in ipairs(active_tanks) do
+                    fill_dr[ti] = math.max(0, (fill_dr[ti] or 0) - per_tank)
+                end
+                return
+            end
+            slm_rf_group_idx = slm_rf_group_idx - 1
+        end
+        slm_rf_active = false
+        return
+    end
+
+    local still_needed = slm_rf_target_kg - total
+    if still_needed <= 0.5 then
+        slm_rf_active = false
+        logMsg("[SLM-RF] Done: tanks=" .. string.format("%.1f", total) ..
+               " kg / cible=" .. string.format("%.0f", slm_rf_target_kg) .. " kg")
+        return
+    end
+    delta_kg = math.min(delta_kg, still_needed)
+
+    if slm_rf_group_idx > #slm_rf_groups then
+        slm_rf_active = false
+        logMsg("[SLM-RF] All groups exhausted at " ..
+               string.format("%.0f / %.0f kg", total, slm_rf_target_kg))
+        return
+    end
+
+    local group         = slm_rf_groups[slm_rf_group_idx]
+    local group_indices = group.indices or group
+    local group_weights = group.weights
+    local fill_dr = slm_rf_group_dr_override[slm_rf_group_idx] or active_dr
+    local active_tanks  = {}
+    for _, ti in ipairs(group_indices) do
+        if not slm_rf_is_sat_for_tank(ti, slm_rf_history[ti], fill_dr[ti] or 0) then
+            active_tanks[#active_tanks + 1] = ti
+        end
+    end
+
+    if #active_tanks == 0 then
+        logMsg("[SLM-RF] Group " .. slm_rf_group_idx ..
+               " saturÃ© (rÃ©servoirs=" .. string.format("%.0f", total) ..
+               " kg), passage au suivant")
+        slm_rf_group_idx = slm_rf_group_idx + 1
+        slm_rf_history = {}
+        return
+    end
+
+    local tank_amounts = {}
+    if group_weights then
+        local w_sum = 0
+        local active_w = {}
+        for _, ti in ipairs(active_tanks) do
+            local w = 1.0
+            for j, idx in ipairs(group_indices) do
+                if idx == ti then w = group_weights[j] or 1.0; break end
+            end
+            active_w[ti] = w
+            w_sum = w_sum + w
+        end
+        for _, ti in ipairs(active_tanks) do
+            tank_amounts[ti] = delta_kg * (active_w[ti] / w_sum)
+        end
+    else
+        local per_tank = delta_kg / #active_tanks
+        for _, ti in ipairs(active_tanks) do
+            tank_amounts[ti] = per_tank
+        end
+    end
+
+    for _, ti in ipairs(active_tanks) do
+        local cur = fill_dr[ti] or 0
+        local h = slm_rf_history[ti]
+        if not h then h = {}; slm_rf_history[ti] = h end
+        if #h < SLM_RF_SAT_WINDOW then
+            h[#h + 1] = cur
+        else
+            table.remove(h, 1)
+            h[SLM_RF_SAT_WINDOW] = cur
+        end
+
+        if not slm_rf_is_sat_for_tank(ti, h, cur) then
+            fill_dr[ti] = cur + tank_amounts[ti]
+        end
+    end
+end
+
+
+--------------------------------------------------------------------------------
+-- AIRCRAFT TYPE DETECTION
+--------------------------------------------------------------------------------
+
+function slm_detect_aircraft()
+    slm_exclusion_message = nil
+    slm_rf_excluded       = false
+    slm_rp_excluded       = false
+
+    local icao = PLANE_ICAO or ""
+    if (slm_aircraft_data.excluded_icao or {})[icao] then
+        slm_exclusion_message = slm_tr("excluded." .. icao, nil, (slm_aircraft_data.excluded_icao or {})[icao])
+        slm_rf_excluded = true
+        slm_rp_excluded = true
+        slm_aircraft_type = "default"
+        logMsg("[SLM] Aircraft excluded (" .. icao .. "): " .. slm_exclusion_message)
+        return
+    end
+
+    if XPLMFindDataRef("zibomod/b737_variant") then
+        slm_aircraft_type = "zibo"
+        logMsg("[SLM] Aircraft type: Zibo")
+    elseif XPLMFindDataRef("AirbusFBW/NoPax") then
+        slm_aircraft_type = "toliss"
+        logMsg("[SLM] Aircraft type: ToLiss")
+    else
+        slm_aircraft_type = "default"
+        logMsg("[SLM] Aircraft type: default (Laminar)")
+    end
+
+    -- Flight Factor A320: use its own beacon dataref instead of X-Plane standard
+    local ff_dr = XPLMFindDataRef("a320/Overhead/LightBeacon")
+    if ff_dr then
+        slm_ff_a320      = true
+        slm_ff_beacon_dr = ff_dr
+        logMsg("[SLM] Flight Factor A320 detected â€” using a320/Overhead/LightBeacon")
+    else
+        slm_ff_a320      = false
+        slm_ff_beacon_dr = nil
+    end
+end
+
+--------------------------------------------------------------------------------
+-- CABIN SEATING DISTRIBUTION
+--------------------------------------------------------------------------------
+-- Randomise where the (partial) pax load sits, so a half-empty cabin is not
+-- always perfectly balanced. Everything is driven by a single longitudinal
+-- bias in [-1, +1], drawn once per boarding.
+
+-- Best guess at the cabin capacity, for the load-factor cap on the bias.
+function slm_pax_cabin_capacity()
+    if slm_aircraft_type == "zibo" and slm_zibo_cabin_max and slm_zibo_cabin_max > 0 then
+        return slm_zibo_cabin_max
+    end
+    if slm_max_passengers and slm_max_passengers > 0 then return slm_max_passengers end
+    if slm_manual_max_pax and slm_manual_max_pax > 0 then return slm_manual_max_pax end
+    if slm_aircraft_type == "toliss" then
+        local prof = slm_toliss_cg_profile and slm_toliss_cg_profile()
+        if prof and tonumber(prof.max_pax) then return tonumber(prof.max_pax) end
+    end
+    return nil
+end
+
+-- Draw the bias once. Truncated Gaussian, mean shifted forward for low-cost
+-- (free seating -> pax bunch near the door), sigma widening as the cabin
+-- empties, and the whole thing scaled down toward 0 as the cabin fills.
+-- No-op until boarding has actually started (so pax variability is settled).
+function slm_ensure_pax_bias()
+    if slm_pax_bias ~= nil then return end
+    if not slm_pax_var_applied then return end
+    local cap = slm_pax_cabin_capacity()
+    local pax = passengers_total or 0
+    if not cap or cap <= 0 or pax <= 0 then
+        slm_pax_bias = 0
+        return
+    end
+    local free_frac = math.max(0, math.min(1, (cap - pax) / cap))
+    local mean  = slm_lowcost_mode and -0.30 or 0.0
+    local sigma = 0.12 + 0.40 * free_frac
+    local u1 = math.max(1e-9, math.random())
+    local u2 = math.random()
+    local g  = math.sqrt(-2 * math.log(u1)) * math.cos(2 * math.pi * u2)
+    local b  = mean + sigma * g
+    b = math.max(-1, math.min(1, b))
+    b = b * math.min(1, free_frac * 1.5)
+    slm_pax_bias = b
+    logMsg(string.format("[SLM-DIST] pax bias=%.2f (pax=%d cap=%d lowcost=%s)",
+        b, pax, cap, tostring(slm_lowcost_mode)))
+end
+
+-- Resolve the Zibo/LevelUp per-zone seat caps from the live pax_layout dataref.
+function slm_zibo_resolve_caps()
+    local layout = 1
+    local dr = XPLMFindDataRef("laminar/B738/pax_layout")
+    if dr then layout = XPLMGetDatai(dr) end
+    slm_zibo_caps = SLM_ZIBO_ZONE_CAPS[layout] or SLM_ZIBO_ZONE_CAPS[1]
+    slm_zibo_cabin_max = 0
+    for z = 1, 5 do slm_zibo_cabin_max = slm_zibo_cabin_max + slm_zibo_caps[z] end
+end
+
+-- Target pax count per Zibo zone (1=fwd .. 5=aft) for a given number already
+-- on board, honouring the bias and the per-zone seat caps. Sum == pax_now
+-- (unless the cabin is physically full).
+function slm_zibo_zone_quotas(pax_now)
+    local caps = slm_zibo_caps or {36, 36, 36, 36, 36}
+    local b    = slm_pax_bias or 0
+    local pos  = {-1, -0.5, 0, 0.5, 1}
+    local w, wsum = {}, 0
+    for z = 1, 5 do
+        w[z] = math.max(0.05, 1 + b * 0.6 * pos[z])
+        wsum = wsum + w[z]
+    end
+    local quota, assigned = {}, 0
+    for z = 1, 5 do
+        quota[z] = math.min(caps[z], math.floor(pax_now * w[z] / wsum + 0.5))
+        assigned = assigned + quota[z]
+    end
+    -- settle the rounding / cap remainder, filling toward the biased end first
+    local order = (b >= 0) and {5, 4, 3, 2, 1} or {1, 2, 3, 4, 5}
+    local diff  = pax_now - assigned
+    while diff > 0 do
+        local moved = false
+        for _, z in ipairs(order) do
+            if quota[z] < caps[z] then
+                quota[z] = quota[z] + 1; diff = diff - 1; moved = true
+                if diff == 0 then break end
+            end
+        end
+        if not moved then break end
+    end
+    while diff < 0 do
+        local moved = false
+        for _, z in ipairs(order) do
+            if quota[z] > 0 then
+                quota[z] = quota[z] - 1; diff = diff + 1; moved = true
+                if diff == 0 then break end
+            end
+        end
+        if not moved then break end
+    end
+    return quota
+end
+
+-- Drain the Zibo zones down to a target total, emptying the fullest zone first
+-- (tie -> forward), so zones deplete together and always reach zero.
+function slm_zibo_drain_to(remaining)
+    local cur, sum = {}, 0
+    for z = 1, 5 do
+        cur[z] = math.max(0, math.floor((slm_rp_zibo_zone_dr[z][0] or 0) + 0.5))
+        sum = sum + cur[z]
+    end
+    local excess = sum - math.max(0, remaining)
+    while excess > 0 do
+        local best, bestv = 0, 0
+        for z = 1, 5 do
+            if cur[z] > bestv then bestv = cur[z]; best = z end
+        end
+        if best == 0 then break end
+        cur[best] = cur[best] - 1
+        excess = excess - 1
+    end
+    for z = 1, 5 do slm_rp_zibo_zone_dr[z][0] = cur[z] end
+end
+
+-- X-Crafts E-Jets (#SL19): balance model of their EFB, read from
+-- plugins/efb/data/acf/<ICAO>.perf.db in the aircraft folder. OEW and its arm,
+-- MAC (leading edge, chord), CG limits, cabin zones {arm, seats} and holds
+-- {arm, max} front to back (same order as the rp_stations indices), tanks
+-- {e, f = arm empty / full, cap} in X-Plane tank order. Weights in kg, arms in
+-- the file unit (only %MAC comes out). nil when missing or not matching.
+function slm_ejet_model()
+    if slm_aircraft_type ~= "default" then return nil end
+    if slm_ejet_perf == nil then
+        slm_ejet_perf = false
+        local map = (slm_aircraft_data.rp_stations or {})[PLANE_ICAO or ""]
+        local f = map and AIRCRAFT_PATH
+                  and io.open(AIRCRAFT_PATH .. "plugins/efb/data/acf/" .. PLANE_ICAO .. ".perf.db", "r")
+        if not f then return nil end
+        local p, k, n = { pax = {}, cargo = {}, fuel = {} }, 1, tonumber
+        for line in f:lines() do
+            local w = {}
+            for x in line:gsub("#.*", ""):gmatch("%S+") do w[#w + 1] = x end
+            local key = (w[1] == "CONF") and w[2] or w[1]
+            if key == "UNITS" then k = (w[2] == "IMPERIAL") and 0.45359237 or 1
+            elseif key == "OEW" then p.oew = n(w[3])
+            elseif key == "OECG" then p.oecg = n(w[3])
+            elseif key == "CGLIM" then p.fwd, p.aft = n(w[3]), n(w[5])
+            elseif key == "MAC" then p.lemac, p.mac = n(w[3]), n(w[4])
+            elseif key == "PAX" then p.pax[#p.pax + 1] = { arm = n(w[3]), seats = n(w[4]) }
+            elseif key == "CARGO" then p.cargo[#p.cargo + 1] = { arm = n(w[3]), max = (n(w[4]) or 0) * k }
+            elseif key == "FUEL" then p.fuel[#p.fuel + 1] = { e = n(w[4]), f = n(w[5]), cap = (n(w[6]) or 0) * k }
+            elseif key == "END" then break      -- end of the BALANCE block
+            end
+        end
+        f:close()
+        if p.oew and p.oecg and p.lemac and (p.mac or 0) > 0 and p.fwd and p.aft
+           and #p.pax == #(map.pax or {}) and #p.cargo == #(map.cargo or {}) and #p.fuel > 0 then
+            p.oew, p.map = p.oew * k, map
+            p.seats = 0
+            for _, z in ipairs(p.pax) do p.seats = p.seats + (z.seats or 0) end
+            slm_ejet_perf = p
+            logMsg(string.format("[SLM-EJET] %s balance model: OEW %.0f kg, %d seats in %d zones, %d holds, %d tanks",
+                PLANE_ICAO, p.oew, p.seats, #p.pax, #p.cargo, #p.fuel))
+        end
+    end
+    return slm_ejet_perf or nil
+end
+
+-- Per-flight fwd/aft split of what goes to the holds on an E-Jet (freight +
+-- pax without a seat), drawn like their EFB, which changes it every time:
+-- 35-65 % forward, then each hold kept under its max weight, the excess going
+-- to the other (both full: in proportion to their max). Elsewhere:
+-- cargo_weights of aircraft.json (nil = equal).
+-- ponytail: two holds only (all X-Crafts E-Jets); other counts get equal shares.
+function slm_rp_cargo_weights(map)
+    local perf = slm_ejet_model()
+    if not perf then return map and map.cargo_weights end
+    if not slm_rp_ejet_cw then
+        local h = perf.cargo
+        slm_rp_ejet_cw = {}
+        for j = 1, #h do slm_rp_ejet_cw[j] = 1 end
+        if #h == 2 then
+            local total = to_kg(cargo_total or 0)
+                + math.max(0, (passengers_total or 0) - perf.seats) * (SB_pax_weight or 0)
+            local f = 0.35 + 0.30 * math.random()
+            if total > h[1].max + h[2].max then
+                f = h[1].max / (h[1].max + h[2].max)
+            elseif total > 0 then
+                f = math.min(math.max(f, 1 - h[2].max / total), h[1].max / total)
+            end
+            slm_rp_ejet_cw = { f, 1 - f }
+        end
+    end
+    return slm_rp_ejet_cw
+end
+
+-- E-Jet seating for this flight, like their EFB: whole pax per zone, drawn seat
+-- by seat (free seats weighted by the fore/aft bias of slm_ensure_pax_bias, so
+-- a near-full cabin fills evenly). Pax without a seat (SimBrief max above the
+-- X-Crafts cabin) go to the holds, so the weight on board stays the OFP one.
+-- Returns station index -> share of the pax weight, nil until the bias is drawn.
+function slm_ejet_pax_shares(perf)
+    if slm_rp_ejet_shares then return slm_rp_ejet_shares end
+    local pax = passengers_total or 0
+    slm_ensure_pax_bias()
+    if slm_pax_bias == nil or pax <= 0 then return nil end
+    local n, free, count = #perf.pax, {}, {}
+    for z, zone in ipairs(perf.pax) do free[z], count[z] = zone.seats or 0, 0 end
+    local seated = math.min(pax, perf.seats)
+    for _ = 1, seated do
+        local w, sum = {}, 0
+        for z = 1, n do
+            local pos = (n > 1) and (2 * (z - 1) / (n - 1) - 1) or 0
+            w[z] = free[z] * math.max(0.05, 1 + slm_pax_bias * 0.6 * pos)
+            sum = sum + w[z]
+        end
+        local r, z = math.random() * sum, 1
+        while z < n and (free[z] <= 0 or r >= w[z]) do r = r - w[z]; z = z + 1 end
+        count[z], free[z] = count[z] + 1, free[z] - 1
+    end
+    local shares, cw, cw_sum = {}, slm_rp_cargo_weights(perf.map), 0
+    for _, w in ipairs(cw) do cw_sum = cw_sum + w end
+    for z, i in ipairs(perf.map.pax) do shares[i] = count[z] / pax end
+    for j, i in ipairs(perf.map.cargo) do
+        shares[i] = (shares[i] or 0) + (pax - seated) / pax * cw[j] / cw_sum
+    end
+    slm_rp_ejet_shares = shares
+    logMsg(string.format("[SLM-EJET] seating %s, %d pax to the holds",
+        table.concat(count, "/"), pax - seated))
+    return shares
+end
+
+-- ZFW and TOW CG (%MAC) of an X-Crafts E-Jet from what is on board, with the
+-- balance model of its EFB: moments of OEW, stations and tanks (tank arm moving
+-- linearly from empty to full). Takeoff fuel = fuel on board less taxi_kg,
+-- taken from every tank in proportion. Returns zfwcg, towcg, fwd, aft limits,
+-- or nil when the aircraft has no model.
+function slm_ejet_cg(taxi_kg)
+    local p = slm_ejet_model()
+    if not p then return nil end
+    p.st_dr = p.st_dr or dataref_table("sim/flightmodel/weight/m_stations")
+    p.tk_dr = p.tk_dr or dataref_table("sim/flightmodel/weight/m_fuel")
+    local W, M = p.oew, p.oew * p.oecg
+    local function add(kg, arm) W, M = W + kg, M + kg * arm end
+    local function kg(dr, i) return math.max(0, tonumber(dr[i]) or 0) end
+    for z, zone in ipairs(p.pax) do add(kg(p.st_dr, p.map.pax[z]), zone.arm) end
+    for j, hold in ipairs(p.cargo) do add(kg(p.st_dr, p.map.cargo[j]), hold.arm) end
+    local zf = (M / W - p.lemac) / p.mac * 100
+    local fob = 0
+    for t = 1, #p.fuel do fob = fob + kg(p.tk_dr, t - 1) end
+    local k = (fob > 0) and math.max(0, fob - (taxi_kg or 0)) / fob or 0
+    for t, tank in ipairs(p.fuel) do
+        local f = kg(p.tk_dr, t - 1) * k
+        add(f, tank.e + (tank.f - tank.e) * math.min(1, (tank.cap > 0) and f / tank.cap or 0))
+    end
+    return zf, (M / W - p.lemac) / p.mac * 100, p.fwd, p.aft
+end
+
+-- Share of the passengers for each pax station of an rp_stations aircraft
+-- (station index -> fraction, sum 1): pax_weights of aircraft.json, equal by
+-- default. No fore/aft tilt and no cap at the station max weight: aircraft
+-- like the X-Crafts E-Jets reason in weight and spread it the same way
+-- (a cap dropped 10 pax on a full E175, #SL16). E-Jets with their EFB model:
+-- seating of slm_ejet_pax_shares (may include hold stations).
+function slm_rp_pax_shares(map, pax_idx)
+    local perf = slm_ejet_model()
+    local ejet = perf and slm_ejet_pax_shares(perf)
+    if ejet then return ejet end
+    local base, n, sum = map and map.pax_weights, #pax_idx, 0
+    for j = 1, n do sum = sum + ((base and base[j]) or 1) end
+    local shares = {}
+    for j, i in ipairs(pax_idx) do shares[i] = ((base and base[j]) or 1) / sum end
+    return shares
+end
+
+--------------------------------------------------------------------------------
+-- REAL PAYLOAD FILL
+--------------------------------------------------------------------------------
+
+-- ToLiss weighs every passenger at a fixed 100 kg (AirbusFBW/NoPax), whereas the
+-- OFP pax weight is usually lighter (bags are already in cargo). Fold the gap
+-- into the cargo holds so the aircraft's ZFW matches the loadsheet (#SL06).
+-- ToLiss reads FwdCargo/AftCargo in its own weight unit (lbs when set to LBS)
+-- and exposes no dataref for it, so we assume it matches the OFP/SLM unit.
+-- Returns the full-load cargo mass in the OFP/SLM unit.
+local SLM_TOLISS_PAX_KG = 100
+local function slm_toliss_cargo()
+    local cargo_kg = to_kg(cargo_total or 0)
+    local pax_kg   = SB_pax_weight or 0
+    if pax_kg > 0 then
+        cargo_kg = cargo_kg + (passengers_total or 0) * (pax_kg - SLM_TOLISS_PAX_KG)
+    end
+    return from_kg(math.max(0, cargo_kg))
+end
+
+-- Empty the aircraft once per flight before boarding, even when there is
+-- nothing to load: whatever was left in it (previous flight, EFB, add-on
+-- default load) would otherwise stay on board and the aircraft's ZFW would
+-- no longer match the loadsheet (#SL11). Reset by slm_rp_stop().
+function slm_rp_clear_payload()
+    if slm_rp_cleared then return end
+    slm_rp_cleared = true
+    if slm_aircraft_type == "default" then
+        local dr = dataref_table("sim/flightmodel/weight/m_stations")
+        for i = 0, 8 do dr[i] = 0 end
+    elseif slm_aircraft_type == "zibo" then
+        for z = 1, 5 do dataref_table("laminar/B738/tab/zone" .. z .. "_payload")[0] = 0 end
+        dataref_table("laminar/B738/tab/zone_cargo1_payload")[0] = 0
+        dataref_table("laminar/B738/tab/zone_cargo2_payload")[0] = 0
+    elseif slm_aircraft_type == "toliss" then
+        dataref_table("AirbusFBW/NoPax")[0]    = 0
+        dataref_table("AirbusFBW/FwdCargo")[0] = 0
+        dataref_table("AirbusFBW/AftCargo")[0] = 0
+        command_once("AirbusFBW/SetWeightAndCG")
+    else
+        return
+    end
+    logMsg("[SLM-RP] Payload cleared before boarding (" .. slm_aircraft_type .. ")")
+end
+
+function slm_rp_start()
+    if not slm_rp_enabled or slm_rp_excluded then return end
+    if slm_beacon_on then return end
+    slm_rp_clear_payload()
+    if (passengers_total or 0) <= 0 and (cargo_total or 0) <= 0 then return end
+
+    slm_rp_target_pax_kg   = (passengers_total or 0) * (SB_pax_weight or 0)
+    slm_rp_target_cargo_kg = to_kg(cargo_total or 0)
+    slm_rp_last_pax_loaded   = nil
+    slm_rp_last_cargo_loaded = 0     -- payload just cleared: count from zero
+    slm_rp_active            = true
+    slm_pax_bias             = nil   -- fresh seating draw for this boarding
+    slm_rp_st_pax            = nil
+    slm_rp_st_pax_unload0    = nil
+    slm_rp_ejet_shares, slm_rp_ejet_cw = nil, nil
+
+    if slm_aircraft_type == "default" then
+        slm_rp_station_dr = dataref_table("sim/flightmodel/weight/m_stations")
+        local rp_map = slm_aircraft_data.rp_stations and slm_aircraft_data.rp_stations[PLANE_ICAO or ""]
+        slm_rp_station_map = rp_map or nil
+        slm_rp_pax_written_kg   = 0
+        slm_rp_cargo_written_kg = 0
+        logMsg(string.format("[SLM-RP] Default: started pax=%.0f cargo=%.0f",
+            slm_rp_target_pax_kg, slm_rp_target_cargo_kg))
+
+    elseif slm_aircraft_type == "zibo" then
+        slm_rp_zibo_paxwt_dr = dataref_table("laminar/B738/std_pax_weight")
+        slm_rp_zibo_paxwt_dr[0] = (slm_data_source == "manual" or slm_data_source == "fsd") and 70 or (SB_pax_weight or 0)
+        slm_zibo_resolve_caps()
+        for z = 1, 5 do
+            slm_rp_zibo_zone_dr[z] = dataref_table("laminar/B738/tab/zone" .. z .. "_payload")
+        end
+        slm_rp_zibo_cargo1_dr = dataref_table("laminar/B738/tab/zone_cargo1_payload")
+        slm_rp_zibo_cargo2_dr = dataref_table("laminar/B738/tab/zone_cargo2_payload")
+        logMsg(string.format("[SLM-RP] Zibo: started pax=%d (%.0f/pax) cargo=%.0f layout_caps=%d/%d/%d/%d/%d",
+            passengers_total or 0, SB_pax_weight or 0, slm_rp_target_cargo_kg,
+            slm_zibo_caps[1], slm_zibo_caps[2], slm_zibo_caps[3], slm_zibo_caps[4], slm_zibo_caps[5]))
+
+    elseif slm_aircraft_type == "toliss" then
+        slm_rp_toliss_nopax_dr    = dataref_table("AirbusFBW/NoPax")
+        slm_rp_toliss_fwdcargo_dr = dataref_table("AirbusFBW/FwdCargo")
+        slm_rp_toliss_aftcargo_dr = dataref_table("AirbusFBW/AftCargo")
+        local slm_rp_toliss_paxdistrib_dr = dataref_table("AirbusFBW/PaxDistrib")
+        slm_rp_toliss_paxdistrib_dr[0] = 0.5
+        slm_rp_toliss_last_setweight = os.clock()
+        logMsg(string.format("[SLM-RP] ToLiss: started pax=%d cargo=%.0f",
+            passengers_total or 0, slm_rp_target_cargo_kg))
+    end
+end
+
+function slm_rp_stop()
+    if slm_rp_active then logMsg("[SLM-RP] Payload fill stopped") end
+    slm_rp_active            = false
+    slm_rp_cleared           = false
+    slm_rp_last_pax_loaded   = nil
+    slm_rp_last_cargo_loaded = nil
+    slm_rp_target_pax_kg     = 0
+    slm_rp_target_cargo_kg   = 0
+    slm_rp_station_dr        = nil
+    slm_rp_station_map       = nil
+    slm_rp_zibo_zone_dr      = {}
+    slm_rp_zibo_cargo1_dr    = nil
+    slm_rp_zibo_cargo2_dr    = nil
+    slm_rp_zibo_paxwt_dr     = nil
+    slm_rp_toliss_nopax_dr       = nil
+    slm_rp_toliss_fwdcargo_dr    = nil
+    slm_rp_toliss_aftcargo_dr    = nil
+    slm_rp_toliss_last_setweight = 0
+    slm_pax_bias             = nil
+    slm_rp_st_pax            = nil
+    slm_rp_st_pax_unload0    = nil
+    slm_rp_ejet_shares, slm_rp_ejet_cw = nil, nil
+    slm_zibo_caps            = nil
+    slm_zibo_cabin_max       = nil
+end
+
+function slm_rp_update()
+    if not slm_rp_active then return end
+    if slm_beacon_on then return end
+
+    local pax_done_rp   = ((passengers_total or 0) <= 0) or (slm_rp_target_pax_kg <= 0)
+    local cargo_done_rp = ((cargo_total or 0) <= 0) or (slm_rp_target_cargo_kg <= 0)
+
+    if slm_aircraft_type == "default" then
+        if not slm_rp_station_dr then return end
+        local dr = slm_rp_station_dr
+        local pax_indices   = (slm_rp_station_map and slm_rp_station_map.pax)   or {0,1,2}
+        local cargo_indices = (slm_rp_station_map and slm_rp_station_map.cargo) or {3,4}
+
+        if (passengers_total or 0) > 0 and slm_rp_target_pax_kg > 0 then
+            -- Quota-based fill: each station holds its share of the pax on
+            -- board so far, pax and cargo tracked apart (#SL16).
+            local loaded = passengers_loaded or 0
+            if loaded ~= slm_rp_last_pax_loaded then
+                slm_rp_last_pax_loaded = loaded
+                local shares   = slm_rp_pax_shares(slm_rp_station_map, pax_indices)
+                local total_kg = loaded * slm_rp_target_pax_kg / passengers_total
+                slm_rp_st_pax  = slm_rp_st_pax or {}
+                local written  = 0
+                for i, share in pairs(shares) do
+                    local want = total_kg * share
+                    dr[i] = math.max(0, (dr[i] or 0) + want - (slm_rp_st_pax[i] or 0))
+                    slm_rp_st_pax[i] = want
+                    written = written + want
+                end
+                slm_rp_pax_written_kg = written
+            end
+            pax_done_rp = slm_rp_pax_written_kg >= slm_rp_target_pax_kg - 0.5
+        end
+
+        if (cargo_total or 0) > 0 and slm_rp_target_cargo_kg > 0 then
+            if slm_rp_last_cargo_loaded == nil then
+                slm_rp_last_cargo_loaded = cargo_loaded or 0
+            else
+                local delta_units = (cargo_loaded or 0) - slm_rp_last_cargo_loaded
+                if delta_units ~= 0 then
+                    slm_rp_last_cargo_loaded = cargo_loaded
+                    local cargo_weights = slm_rp_cargo_weights(slm_rp_station_map)
+                    local total_kg = to_kg(math.abs(delta_units))
+                    slm_rp_cargo_written_kg = math.max(0, slm_rp_cargo_written_kg + (delta_units > 0 and total_kg or -total_kg))
+                    if cargo_weights then
+                        local total_w = 0
+                        for _, w in ipairs(cargo_weights) do total_w = total_w + w end
+                        for j, i in ipairs(cargo_indices) do
+                            local w_kg = total_kg * (cargo_weights[j] or 1) / total_w
+                            dr[i] = math.max(0, (dr[i] or 0) + (delta_units > 0 and w_kg or -w_kg))
+                        end
+                    else
+                        local per = total_kg / #cargo_indices
+                        for _, i in ipairs(cargo_indices) do
+                            dr[i] = math.max(0, (dr[i] or 0) + (delta_units > 0 and per or -per))
+                        end
+                    end
+                end
+            end
+            cargo_done_rp = slm_rp_cargo_written_kg >= slm_rp_target_cargo_kg - 0.5
+        end
+
+    elseif slm_aircraft_type == "zibo" then
+        if not slm_rp_zibo_zone_dr[1] then return end
+
+        if (passengers_total or 0) > 0 then
+            -- Quota-based fill: each frame, size the 5 zones for how many pax are
+            -- actually on board so far, honouring the per-flight bias and the
+            -- seat caps. Handles event-driven pax drops for free (loaded shrinks
+            -- -> quotas shrink -> zones tick down).
+            slm_ensure_pax_bias()
+            local loaded = passengers_loaded or 0
+            if loaded ~= slm_rp_last_pax_loaded then
+                local q = slm_zibo_zone_quotas(loaded)
+                for z = 1, 5 do slm_rp_zibo_zone_dr[z][0] = q[z] end
+                slm_rp_last_pax_loaded = loaded
+            end
+            pax_done_rp = loaded >= (passengers_total or 0)
+        end
+
+        if (cargo_total or 0) > 0 and slm_rp_target_cargo_kg > 0 then
+            if slm_rp_last_cargo_loaded == nil then
+                slm_rp_last_cargo_loaded = cargo_loaded or 0
+            else
+                local delta_units = (cargo_loaded or 0) - slm_rp_last_cargo_loaded
+                if delta_units ~= 0 then
+                    slm_rp_last_cargo_loaded = cargo_loaded
+                    local half = to_kg(math.abs(delta_units)) / 2
+                    if delta_units > 0 then
+                        slm_rp_zibo_cargo1_dr[0] = (slm_rp_zibo_cargo1_dr[0] or 0) + half
+                        slm_rp_zibo_cargo2_dr[0] = (slm_rp_zibo_cargo2_dr[0] or 0) + half
+                    else
+                        slm_rp_zibo_cargo1_dr[0] = math.max(0, (slm_rp_zibo_cargo1_dr[0] or 0) - half)
+                        slm_rp_zibo_cargo2_dr[0] = math.max(0, (slm_rp_zibo_cargo2_dr[0] or 0) - half)
+                    end
+                end
+            end
+            cargo_done_rp = (cargo_loaded or 0) >= (cargo_total or 0)
+        end
+
+    elseif slm_aircraft_type == "toliss" then
+        if not slm_rp_toliss_nopax_dr then return end
+
+        -- Set the fwd/aft distribution slider once, from the per-flight bias.
+        -- Clamp = 0.35-0.60, the edge of the certified ZFWCG envelope (also the
+        -- bound the loadsheet CG curves are sampled to). The Gaussian keeps most
+        -- flights near 0.5; low-cost skews forward. ToLiss exposes no finer
+        -- seating control than this slider.
+        if slm_pax_bias == nil then
+            slm_ensure_pax_bias()
+            if slm_pax_bias ~= nil then
+                local pd = math.max(0.35, math.min(0.60, 0.50 + slm_pax_bias * 0.09))
+                dataref_table("AirbusFBW/PaxDistrib")[0] = pd
+                logMsg(string.format("[SLM-DIST] ToLiss PaxDistrib=%.3f", pd))
+            end
+        end
+
+        if (passengers_total or 0) > 0 then
+            slm_rp_toliss_nopax_dr[0] = passengers_loaded or 0
+            slm_rp_last_pax_loaded    = passengers_loaded
+            pax_done_rp = (passengers_loaded or 0) >= (passengers_total or 0)
+        end
+
+        if (cargo_total or 0) > 0 and slm_rp_target_cargo_kg > 0 then
+            local frac = math.min(1.0, (cargo_loaded or 0) / cargo_total)
+            local half  = (slm_toliss_cargo() / 2) * frac
+            slm_rp_toliss_fwdcargo_dr[0] = half
+            slm_rp_toliss_aftcargo_dr[0] = half
+            cargo_done_rp = (cargo_loaded or 0) >= (cargo_total or 0)
+        end
+
+        local now = os.clock()
+        if now - slm_rp_toliss_last_setweight >= 5 then
+            slm_rp_toliss_last_setweight = now
+            command_once("AirbusFBW/SetWeightAndCG")
+        end
+    end
+
+    if pax_done_rp and cargo_done_rp then
+        if slm_aircraft_type == "toliss" then
+            command_once("AirbusFBW/SetWeightAndCG")
+        end
+        slm_rp_active = false
+        logMsg("[SLM-RP] Payload fill complete (" .. slm_aircraft_type .. ")")
+    end
+end
+
+function slm_rp_unload_update()
+    if not disembark_started then return end
+    if not slm_rp_enabled or slm_rp_excluded then return end
+    if slm_beacon_on then return end
+
+    if slm_aircraft_type == "default" then
+        if not slm_rp_station_dr then
+            if XPLMFindDataRef("sim/flightmodel/weight/m_stations") then
+                slm_rp_station_dr = dataref_table("sim/flightmodel/weight/m_stations")
+            else return end
+        end
+        local dr = slm_rp_station_dr
+        local pax_indices   = (slm_rp_station_map and slm_rp_station_map.pax)   or {0,1,2}
+        local cargo_indices = (slm_rp_station_map and slm_rp_station_map.cargo) or {3,4}
+
+        if (passengers_total or 0) > 0 and slm_rp_target_pax_kg > 0
+           and (passengers_unloaded or 0) ~= slm_rp_last_pax_unloaded then
+            -- Every station drains in proportion to the pax it received, so
+            -- they all reach zero together, whatever the split (#SL16).
+            slm_rp_last_pax_unloaded = passengers_unloaded or 0
+            if not slm_rp_st_pax_unload0 then
+                local start, sum = {}, 0
+                for i, kg in pairs(slm_rp_st_pax or {}) do
+                    start[i] = kg
+                    sum = sum + kg
+                end
+                if sum <= 0 then   -- fill not tracked: assume this flight's shares
+                    local shares = slm_rp_pax_shares(slm_rp_station_map, pax_indices)
+                    for i, share in pairs(shares) do start[i] = slm_rp_target_pax_kg * share end
+                    slm_rp_st_pax = {}
+                end
+                slm_rp_st_pax_unload0 = start
+            end
+            local base = (arr_passengers_total and arr_passengers_total > 0)
+                and arr_passengers_total or passengers_total
+            local frac = math.max(0, base - (passengers_unloaded or 0)) / base
+            slm_rp_st_pax = slm_rp_st_pax or {}
+            for i, kg0 in pairs(slm_rp_st_pax_unload0) do
+                local want = kg0 * frac
+                local cur  = slm_rp_st_pax[i] or kg0
+                dr[i] = math.max(0, (dr[i] or 0) + want - cur)
+                slm_rp_st_pax[i] = want
+            end
+        end
+
+        if (cargo_total or 0) > 0 then
+            if slm_rp_last_cargo_unloaded == nil then
+                slm_rp_last_cargo_unloaded = 0   -- count from the start of unloading
+            else
+                local delta_units = (cargo_unloaded or 0) - slm_rp_last_cargo_unloaded
+                if delta_units > 0 then
+                    slm_rp_last_cargo_unloaded = cargo_unloaded
+                    -- same split as the fill, so every hold reaches zero
+                    local cw, sum = slm_rp_cargo_weights(slm_rp_station_map), 0
+                    for j = 1, #cargo_indices do sum = sum + ((cw and cw[j]) or 1) end
+                    for j, i in ipairs(cargo_indices) do
+                        local kg = to_kg(delta_units) * ((cw and cw[j]) or 1) / sum
+                        dr[i] = math.max(0, (dr[i] or 0) - kg)
+                    end
+                end
+            end
+        end
+
+    elseif slm_aircraft_type == "zibo" then
+        if not slm_rp_zibo_zone_dr[1] then
+            for z = 1, 5 do
+                slm_rp_zibo_zone_dr[z] = dataref_table("laminar/B738/tab/zone" .. z .. "_payload")
+            end
+            slm_rp_zibo_cargo1_dr = dataref_table("laminar/B738/tab/zone_cargo1_payload")
+            slm_rp_zibo_cargo2_dr = dataref_table("laminar/B738/tab/zone_cargo2_payload")
+        end
+
+        if (passengers_total or 0) > 0 and (passengers_unloaded or 0) ~= slm_rp_last_pax_unloaded then
+            local base = (arr_passengers_total and arr_passengers_total > 0)
+                and arr_passengers_total or (passengers_total or 0)
+            slm_zibo_drain_to(math.max(0, base - (passengers_unloaded or 0)))
+            slm_rp_last_pax_unloaded = passengers_unloaded
+        end
+
+        if (cargo_total or 0) > 0 then
+            if slm_rp_last_cargo_unloaded == nil then
+                slm_rp_last_cargo_unloaded = cargo_unloaded or 0
+            else
+                local delta_units = (cargo_unloaded or 0) - slm_rp_last_cargo_unloaded
+                if delta_units > 0 then
+                    slm_rp_last_cargo_unloaded = cargo_unloaded
+                    local half = to_kg(delta_units) / 2
+                    slm_rp_zibo_cargo1_dr[0] = math.max(0, (slm_rp_zibo_cargo1_dr[0] or 0) - half)
+                    slm_rp_zibo_cargo2_dr[0] = math.max(0, (slm_rp_zibo_cargo2_dr[0] or 0) - half)
+                end
+            end
+        end
+
+    elseif slm_aircraft_type == "toliss" then
+        if not slm_rp_toliss_nopax_dr then
+            slm_rp_toliss_nopax_dr    = dataref_table("AirbusFBW/NoPax")
+            slm_rp_toliss_fwdcargo_dr = dataref_table("AirbusFBW/FwdCargo")
+            slm_rp_toliss_aftcargo_dr = dataref_table("AirbusFBW/AftCargo")
+            slm_rp_toliss_last_setweight = os.clock()
+        end
+
+        slm_rp_toliss_nopax_dr[0] = math.max(0,
+            (passengers_total or 0) - (passengers_unloaded or 0))
+
+        if (cargo_total or 0) > 0 then
+            local remaining_frac = math.max(0, 1.0 - (cargo_unloaded or 0) / cargo_total)
+            local half = (slm_toliss_cargo() / 2) * remaining_frac
+            slm_rp_toliss_fwdcargo_dr[0] = half
+            slm_rp_toliss_aftcargo_dr[0] = half
+        end
+
+        local now = os.clock()
+        if now - slm_rp_toliss_last_setweight >= 5 then
+            slm_rp_toliss_last_setweight = now
+            command_once("AirbusFBW/SetWeightAndCG")
+        end
+    end
+end
+
+
+function check_if_all_done()
+    if slm_cargo_penalty_until and os.clock() < slm_cargo_penalty_until then return end
+    if embark_started
+       and (cargo_total == 0 or cargo_loaded >= cargo_total)
+       and (passengers_total == 0 or passengers_loaded >= passengers_total)
+       and (fuel_total == 0 or fuel_done)
+    then
+        if end_time == nil then
+            end_time = os.clock() + FINISHED_ALL_DELAY
+        elseif os.clock() >= end_time then
+            embark_started = false
+            embark_done = true
+
+            if slm_lc_forced_fast then
+                apply_realistic_timings()
+                slm_lc_forced_fast = false
+            end
+
+            if not sound_played.finished_loading_all then
+                play_sound_by_key("finished_loading_all")
+                sound_played.finished_loading_all = true
+
+                local pax_actual   = passengers_loaded or 0
+                local cargo_actual = cargo_loaded or 0
+                local fuel_actual  = sim_fuel_total_kg or 0
+
+                local pax_w = from_kg(SB_pax_weight or 0)
+
+                local pax_mass = pax_actual * pax_w
+
+                SLM_real_pax        = pax_actual
+                SLM_real_cargo      = cargo_actual
+                SLM_real_fuel_block = from_kg(fuel_actual)
+
+                SLM_real_payload    = pax_mass + cargo_actual
+
+                loadsheet_ready = true
+                slm_load_controller = load_controllers[math.random(1, #load_controllers)]
+                logMsg("[SLM] Loadsheet is now available (loading completed).")
+
+                if slm_acars_output == "si" then
+                    slm_send_si_acars()
+                elseif slm_acars_output == "hoppie" then
+                    slm_send_hoppie_acars()
+                end
+
+                show_Cones     = false; Cones_chg     = true
+                show_People4   = false; People4_chg   = true
+                show_People3   = false; People3_chg   = true
+                show_People2   = false; People2_chg   = true
+                show_People1   = false; People1_chg   = true
+                if not slm_manual_chocks then show_Chocks = false; Chocks_chg = true end
+                if not aircraft_has_own_stairs then
+                    show_StairsXPJ  = false; StairsXPJ_chg  = true
+                    show_StairsXPJ2 = false; StairsXPJ2_chg = true
+                end
+
+                if selected_location_group == "jetway" then
+                    if not aircraft_has_own_stairs then
+                        command_once("sim/ground_ops/jetway")
+                    end
+                end
+            end
+
+            end_time = nil
+        end
+    end
+end
+
+--------------------------------------------------------------------------------
+-- DEV: FORCE LOADING / UNLOADING
+--------------------------------------------------------------------------------
+-- Finishes the running boarding or deboarding at once (dev mode button).
+-- Crew briefing and catering finish too: their start time is moved back so their
+-- own manager ends them on the next frame (sounds and SGES vehicles as usual).
+-- Passengers and cargo jump to their totals: the payload fill (slm_rp_*) follows
+-- the counters, so its baselines are set first. Fuel is poured in steps of
+-- SLM_DEV_FUEL_STEP_KG per frame so the tank-by-tank fill (slm_rf_update) sees
+-- each tank fill up; in one go when that fill does not run or on ToLiss (it
+-- writes the total itself).
+SLM_DEV_FUEL_STEP_KG = 20
+slm_dev_forcing = false
+
+function slm_dev_clear_events()
+    slm_event_delay_until      = nil
+    slm_event_pause_until      = nil
+    slm_event_fuel_delay_until = nil
+    slm_event_slow_factor      = 1.0
+    slm_event_slow_until       = nil
+    slm_cargo_penalty_until    = nil
+    slm_cargo_penalty_start    = nil
+end
+
+-- True when a crew briefing or a catering was running and has been forced.
+function slm_dev_force_preboard()
+    local forced = false
+    if crew_briefing_started and not crew_briefing_done then
+        crew_briefing_start_time = os.clock() - (crew_briefing_duration or 0)
+        forced = true
+    end
+    if catering_started and not catering_done then
+        slm_dev_clear_events()
+        slm_catering_elapsed_at_pause = nil
+        catering_start_time = os.clock() - (catering_duration or 0)
+        forced = true
+    end
+    if forced then logMsg("[SLM-DEV] Crew briefing / catering forced") end
+    return forced
+end
+
+function slm_dev_preboard_running()
+    return (crew_briefing_started and not crew_briefing_done)
+        or (catering_started and not catering_done)
+end
+
+function slm_dev_force_load()
+    slm_dev_force_preboard()
+    if disembark_started then
+        slm_dev_clear_events()
+        slm_rp_last_pax_unloaded   = slm_rp_last_pax_unloaded or passengers_unloaded or 0
+        slm_rp_last_cargo_unloaded = slm_rp_last_cargo_unloaded or cargo_unloaded or 0
+        start_disembarkation_pax_delay = 0
+        if not pax_unload_started then
+            pax_unload_started    = true
+            pax_unload_start_time = os.clock()
+        end
+        sound_played.start_unboarding_passengers = true
+        passengers_unloaded = arr_passengers_total or 0
+        cargo_unloaded      = arr_cargo_total or 0
+        logMsg("[SLM-DEV] Unloading forced")
+        return
+    end
+    if not embark_started then return end
+    slm_dev_clear_events()
+    fuel_wait_finished = true
+    if (passengers_total or 0) > 0 and not slm_pax_var_applied then
+        slm_pax_var_applied = true
+        slm_compute_pax_variability()
+    end
+    if not slm_rp_active and slm_rp_last_pax_loaded == nil then slm_rp_start() end
+    slm_rp_last_pax_loaded   = slm_rp_last_pax_loaded or passengers_loaded or 0
+    slm_rp_last_cargo_loaded = slm_rp_last_cargo_loaded or cargo_loaded or 0
+    bus_triggered, pax_trigger_time = true, os.clock()
+    if not pax_load_started then
+        pax_load_started = true
+        pax_start_time   = os.clock()
+    end
+    sound_played.start_boarding_passengers = true
+    sound_played.start_loading_cargo       = true
+    passengers_loaded = passengers_total or 0
+    cargo_loaded      = cargo_total or 0
+    if (fuel_total or 0) > 0 and not fuel_done then
+        fuel_loading    = true
+        fuel_ready_time = nil
+        sound_played.start_fuel_loading = true
+    end
+    slm_dev_forcing = true
+    logMsg("[SLM-DEV] Loading forced")
+end
+
+function slm_dev_force_tick()
+    if not slm_dev_forcing then return end
+    if not embark_started then slm_dev_forcing = false; return end
+    if fuel_loading and not fuel_done and fuel_loaded ~= fuel_total then
+        local instant = not slm_rf_enabled or slm_rf_excluded or slm_aircraft_type == "toliss"
+        -- wait for slm_rf_update to take its baseline, or the first step is lost
+        if instant or (slm_rf_active and slm_rf_last_fuel_loaded ~= nil) then
+            local diff = (fuel_total or 0) - (fuel_loaded or 0)
+            local step = math.max(1, math.floor(from_kg(SLM_DEV_FUEL_STEP_KG)))
+            if instant or math.abs(diff) <= step then
+                fuel_loaded = fuel_total
+            else
+                fuel_loaded = fuel_loaded + ((diff > 0) and step or -step)
+            end
+        end
+    end
+    -- Skip the closing delay once everything is on board
+    if end_time and end_time > os.clock() then end_time = os.clock() end
+end
+
+--------------------------------------------------------------------------------
+-- CREW BRIEFING
+--------------------------------------------------------------------------------
+
+
+function slm_deploy_access()
+    if selected_location_group == "remote" or selected_location_group == "terminal" then
+        if not aircraft_has_own_stairs then
+            show_StairsXPJ            = true; StairsXPJ_chg         = true
+            show_StairsXPJ2           = true; StairsXPJ2_chg        = true
+            option_StairsXPJ_override = true
+            DualBoard = true
+        end
+    elseif selected_location_group == "jetway" then
+        if not aircraft_has_own_stairs then
+            command_once("sim/ground_ops/jetway")
+        end
+    end
+end
+
+function start_crew_briefing()
+    crew_briefing_started    = true
+    crew_briefing_done       = false
+    crew_briefing_start_time = os.clock()
+    crew_briefing_duration   = random_range(crew_briefing_time_min, crew_briefing_time_max)
+    if slm_lowcost_mode then crew_briefing_duration = math.min(crew_briefing_duration, 300) end
+    show_People1 = true;  People1_chg = true
+    show_People2 = true;  People2_chg = true
+    show_People3 = true;  People3_chg = true
+    show_People4 = true;  People4_chg = true
+    slm_deploy_access()
+    if sounds.briefing.id and sounds.briefing.id ~= 0 then
+        briefing_playing = true
+        play_sound(sounds.briefing.id)
+        update_loop_volumes()
+    end
+end
+
+function manage_crew_briefing()
+    if not crew_briefing_started or crew_briefing_done then return end
+    local elapsed = os.clock() - crew_briefing_start_time
+    if elapsed >= crew_briefing_duration then
+        crew_briefing_started = false
+        crew_briefing_done    = true
+        estimated_time_crew   = nil
+        if briefing_playing then
+            briefing_playing = false
+            stop_sound(sounds.briefing.id)
+        end
+    else
+        estimated_time_crew = crew_briefing_duration - elapsed
+    end
+end
+
+--------------------------------------------------------------------------------
+-- CATERING
+--------------------------------------------------------------------------------
+
+function start_catering()
+    catering_started    = true
+    catering_done       = false
+    catering_start_time = os.clock()
+    catering_duration   = passengers_total * catering_time_per_pax + random_range(2, 4)
+    if slm_lowcost_mode then catering_duration = math.min(catering_duration, 300) end
+    slm_try_apply_event("catering", "departure", 0.0)
+    show_Catering = true
+    Catering_chg  = true
+    if sounds.catering_loop.id and sounds.catering_loop.id ~= 0 then
+        catering_loop_playing = true
+        let_sound_loop(sounds.catering_loop.id, true)
+        play_sound(sounds.catering_loop.id)
+        update_loop_volumes()
+    end
+end
+
+function manage_catering()
+    if not catering_started or catering_done then return end
+    -- Clear catering delay_start event when its delay has expired
+    if slm_event_dep_active and slm_event_dep_active.category == "catering"
+       and slm_event_dep_active.effect == "delay_start"
+       and catering_start_time and os.clock() >= catering_start_time then
+        slm_event_dep_active = nil
+    end
+    -- Event: pause handling (freeze elapsed by pushing start_time forward each frame)
+    if slm_event_pause_until then
+        if os.clock() < slm_event_pause_until then
+            if not slm_catering_elapsed_at_pause then
+                slm_catering_elapsed_at_pause = os.clock() - catering_start_time
+            end
+            catering_start_time = os.clock() - slm_catering_elapsed_at_pause
+            estimated_time_catering = catering_duration - slm_catering_elapsed_at_pause
+            return
+        else
+            slm_catering_elapsed_at_pause = nil
+            slm_event_pause_until = nil
+            slm_event_dep_active  = nil
+        end
+    end
+    -- Event: catering in-progress trigger
+    local cat_frac = (catering_duration and catering_duration > 0)
+        and math.min(1.0, (os.clock() - catering_start_time) / catering_duration) or 0
+    slm_try_apply_event("catering", "departure", cat_frac)
+    local elapsed = os.clock() - catering_start_time
+    if elapsed >= catering_duration then
+        catering_started        = false
+        catering_done           = true
+        estimated_time_catering = nil
+        show_Catering = false
+        Catering_chg  = true
+        if catering_loop_playing then
+            catering_loop_playing = false
+            let_sound_loop(sounds.catering_loop.id, false)
+            stop_sound(sounds.catering_loop.id)
+        end
+    else
+        estimated_time_catering = catering_duration - elapsed
+    end
+end
+
+--------------------------------------------------------------------------------
+-- CLEANING
+--------------------------------------------------------------------------------
+
+function start_cleaning()
+    cleaning_started    = true
+    cleaning_done       = false
+    cleaning_start_time = os.clock()
+    cleaning_duration   = arr_passengers_total * cleaning_time_per_pax + random_range(2, 4)
+    show_Cleaning = true
+    Cleaning_chg  = true
+    if sounds.cleaning_loop.id and sounds.cleaning_loop.id ~= 0 then
+        cleaning_loop_playing = true
+        let_sound_loop(sounds.cleaning_loop.id, true)
+        play_sound(sounds.cleaning_loop.id)
+        update_loop_volumes()
+    end
+end
+
+function manage_cleaning()
+    if not cleaning_started or cleaning_done then return end
+    local elapsed = os.clock() - cleaning_start_time
+    if elapsed >= cleaning_duration then
+        cleaning_started        = false
+        cleaning_done           = true
+        estimated_time_cleaning = nil
+        show_Cleaning = false
+        Cleaning_chg  = true
+        if cleaning_loop_playing then
+            cleaning_loop_playing = false
+            let_sound_loop(sounds.cleaning_loop.id, false)
+            stop_sound(sounds.cleaning_loop.id)
+        end
+    else
+        estimated_time_cleaning = cleaning_duration - elapsed
+    end
+end
+
+--------------------------------------------------------------------------------
+-- CREW DEPLANE
+--------------------------------------------------------------------------------
+
+function start_crew_deplane()
+    crew_deplane_started    = true
+    crew_deplane_done       = false
+    crew_deplane_start_time = os.clock()
+    crew_deplane_duration   = random_range(crew_briefing_time_min, crew_briefing_time_max)
+end
+
+function manage_crew_deplane()
+    if not crew_deplane_started or crew_deplane_done then return end
+    local elapsed = os.clock() - crew_deplane_start_time
+    if elapsed >= crew_deplane_duration then
+        crew_deplane_started        = false
+        crew_deplane_done           = true
+        estimated_time_crew_deplane = nil
+    else
+        estimated_time_crew_deplane = crew_deplane_duration - elapsed
+    end
+end
+
+--------------------------------------------------------------------------------
+-- LAST FLIGHT SAVE / RESTORE
+--------------------------------------------------------------------------------
+function slm_save_last_flight(mode)
+    local ld = SLM_Loadsheet_Data
+    slm_lf_mode      = mode
+    slm_lf_airline   = (ld and ld.airline ~= "N/A" and ld.airline) or ""
+    slm_lf_fltnum    = (ld and ld.fltnum  ~= "N/A" and ld.fltnum)  or ""
+    slm_lf_orig      = (ld and ld.orig)   or "?"
+    slm_lf_dest      = (ld and ld.dest)   or "?"
+    slm_lf_block_off = block_off_time or "--:--Z"
+    slm_lf_takeoff   = takeoff_time   or "--:--Z"
+    slm_lf_landing   = landing_time   or "--:--Z"
+    slm_lf_block_on  = block_on_time  or "--:--Z"
+    slm_lf_pax       = math.floor((SLM_real_pax   and SLM_real_pax   > 0 and SLM_real_pax)   or passengers_total or 0)
+    slm_lf_cargo     = math.floor((SLM_real_cargo and SLM_real_cargo > 0 and SLM_real_cargo) or cargo_total      or 0)
+    slm_lf_sched_out = sched_out or 0
+    slm_lf_sched_off = sched_off or 0
+    slm_lf_sched_on  = sched_on  or 0
+    slm_lf_sched_in  = sched_in  or 0
+    save_user_settings()
+    logMsg(string.format("[SLM] LastFlight saved: mode=%s flt=%s%s %s->%s pax=%d cargo=%.0f",
+        mode, slm_lf_airline, slm_lf_fltnum, slm_lf_orig, slm_lf_dest,
+        slm_lf_pax, slm_lf_cargo))
+end
+
+function slm_clear_last_flight()
+    slm_lf_mode      = nil
+    slm_lf_airline   = ""
+    slm_lf_fltnum    = ""
+    slm_lf_orig      = "?"
+    slm_lf_dest      = "?"
+    slm_lf_block_off = "--:--Z"
+    slm_lf_takeoff   = "--:--Z"
+    slm_lf_landing   = "--:--Z"
+    slm_lf_block_on  = "--:--Z"
+    slm_lf_pax       = 0
+    slm_lf_cargo     = 0
+    slm_lf_sched_out = 0
+    slm_lf_sched_off = 0
+    slm_lf_sched_on  = 0
+    slm_lf_sched_in  = 0
+    save_user_settings()
+    logMsg("[SLM] LastFlight cleared")
+end
+
+function slm_restore_last_flight()
+    -- State that was true before the crash regardless of mode
+    passed_500ft         = true
+    embark_done          = true
+    fuel_done            = true
+    SLM_real_pax         = slm_lf_pax
+    SLM_real_cargo       = slm_lf_cargo
+    SLM_real_fuel_block  = from_kg(sim_fuel_total_kg or 0)
+    passengers_total     = slm_lf_pax
+    cargo_total          = slm_lf_cargo
+    block_off_time = slm_lf_block_off
+    takeoff_time   = slm_lf_takeoff
+    landing_time   = slm_lf_landing
+    block_on_time  = slm_lf_block_on
+    sched_out      = slm_lf_sched_out
+    sched_off      = slm_lf_sched_off
+    sched_on       = slm_lf_sched_on
+    sched_in       = slm_lf_sched_in
+
+    if slm_lf_mode == "in_flight" then
+        -- Boarding done, plane airborne; SLM waits for landing detection
+        slm_last_sequence_mode = "in_flight"
+        slm_steps_visible      = false
+        slm_sequence_mode      = nil
+        slm_sequence_phase     = nil
+        -- Build minimal loadsheet data so the UI can display flight info
+        if not SLM_Loadsheet_Data then SLM_Loadsheet_Data = {} end
+        SLM_Loadsheet_Data.airline = slm_lf_airline ~= "" and slm_lf_airline or "N/A"
+        SLM_Loadsheet_Data.fltnum  = slm_lf_fltnum  ~= "" and slm_lf_fltnum  or "N/A"
+        SLM_Loadsheet_Data.orig    = slm_lf_orig
+        SLM_Loadsheet_Data.dest    = slm_lf_dest
+        logMsg("[SLM] Restored to in_flight")
+
+    elseif slm_lf_mode == "arrival" then
+        -- Restore to "just landed" state: no sequence started, user chooses Turnaround or RON
+        slm_sequence_mode      = nil
+        slm_sequence_phase     = nil
+        slm_last_sequence_mode = nil
+        slm_steps_visible      = false
+        landing_time           = current_zulu_hhmm()
+        arr_passengers_total   = slm_lf_pax
+        arr_cargo_total        = slm_lf_cargo
+        SLM_Loadsheet_Data = {
+            airline   = slm_lf_airline ~= "" and slm_lf_airline or "N/A",
+            fltnum    = slm_lf_fltnum  ~= "" and slm_lf_fltnum  or "N/A",
+            orig      = slm_lf_orig,
+            dest      = slm_lf_dest,
+            oew       = 0,
+            fuel_taxi = 0,
+        }
+        logMsg("[SLM] Restored to arrival â€” awaiting Turnaround or RON selection")
+    end
+
+    slm_lf_confirm_open = false
+end
+
+function slm_on_arrival()
+    slm_steps_visible         = false
+    slm_last_sequence_mode    = nil
+    landing_time              = current_zulu_hhmm()
+    slm_initial_fuel_kg       = sim_fuel_total_kg
+    slm_initial_fuel_captured = true
+end
+
+function slm_dev_cycle()
+    if slm_last_sequence_mode == "in_flight" then
+        -- In flight â†’ simulate landing â†’ arrival saved
+        slm_save_last_flight("arrival")
+        slm_on_arrival()
+        logMsg("[SLM DEV] Simulated landing â†’ arrival saved")
+    elseif passed_500ft then
+        -- already airborne but not yet in_flight label â†’ force full arrival
+        slm_save_last_flight("arrival")
+        slm_on_arrival()
+        logMsg("[SLM DEV] Forced arrival")
+    else
+        -- Boarding/idle â†’ simulate takeoff â†’ in_flight saved
+        takeoff_time           = current_zulu_hhmm()
+        block_off_time         = current_zulu_hhmm()
+        passed_500ft           = true
+        slm_steps_visible      = false
+        slm_last_sequence_mode = "in_flight"
+        slm_save_last_flight("in_flight")
+        logMsg("[SLM DEV] Simulated takeoff â†’ in_flight saved")
+    end
+end
+
+function slm_turnaround_check_simbrief()
+    local ok_http, http = pcall(require, "socket.http")
+    if not ok_http or not http then
+        slm_auto_import_message = slm_tr("plan.simbrief_unreachable", nil,
+            "SimBrief unreachable - check your connection and try again")
+        slm_sequence_phase = "waiting_for_new_plan"
+        return
+    end
+    local body, code = http.request("https://www.simbrief.com/api/xml.fetcher.php?userid=" .. simbrief_id)
+    if not body or code ~= 200 then
+        slm_auto_import_message = slm_tr("plan.simbrief_unreachable", nil,
+            "SimBrief unreachable - check your connection and try again")
+        slm_sequence_phase = "waiting_for_new_plan"
+        return
+    end
+    local new_ts = string.match(body, "<time_generated>(.-)</time_generated>") or ""
+    if new_ts ~= "" and new_ts ~= (last_ofp_timestamp or "") then
+
+        slm_clear_last_flight()   -- new OFP imported: previous flight is done
+        fetch_simbrief_data(simbrief_id)
+        slm_new_plan_imported   = true
+        slm_auto_import_message = slm_tr("plan.loaded", {
+            flight = (SLM_Loadsheet_Data and SLM_Loadsheet_Data.airline or "N/A")
+                  .. (SLM_Loadsheet_Data and SLM_Loadsheet_Data.fltnum or ""),
+            dest = SLM_Loadsheet_Data and SLM_Loadsheet_Data.dest or "" },
+        string.format(
+            "New flight plan loaded!\n  %s %s -> %s",
+            SLM_Loadsheet_Data and SLM_Loadsheet_Data.airline or "N/A",
+            SLM_Loadsheet_Data and SLM_Loadsheet_Data.fltnum  or "",
+            SLM_Loadsheet_Data and SLM_Loadsheet_Data.dest    or ""))
+        slm_ta_to_departure()
+    else
+
+        slm_auto_import_message = slm_tr("plan.wait_simbrief", nil,
+            "No new flight plan detected.\nPlease generate your next flight on SimBrief,\nthen click 'Load SimBrief Data'.")
+        slm_sequence_phase = "waiting_for_new_plan"
+    end
+end
+
+--------------------------------------------------------------------------------
+-- TURNAROUND AND SEQUENCES
+--------------------------------------------------------------------------------
+
+function start_departure_sequence(is_after_flight)
+    slm_detect_aircraft()
+    slm_place_chocks()
+    slm_sync_toliss_chocks()
+    slm_initial_fuel_kg       = sim_fuel_total_kg
+    slm_initial_fuel_captured = true
+    slm_sequence_mode      = "departure"
+    slm_last_sequence_mode = "departure"
+    slm_steps_visible      = true
+    slm_sequence_phase     = "crew_and_catering"
+    crew_briefing_done     = false
+    catering_done          = slm_lowcost_mode and (is_after_flight and true or false)  -- lowcost turnaround only: no catering
+    if slm_lowcost_mode then fuel_first = false end
+    catering_started       = false
+    slm_lc_cleaning_required = slm_lowcost_mode and (is_after_flight and true or false)
+    cleaning_done          = true
+    cleaning_started       = false
+    if skip_crew_briefing then
+        crew_briefing_done = true
+        slm_deploy_access()
+    else
+        start_crew_briefing()
+    end
+    if not slm_lowcost_mode or not is_after_flight then start_catering() end
+    -- Reset fuel state so stale "done" from previous flight doesn't carry over
+    fuel_done    = false
+    fuel_loading = false
+    fuel_time_per_unit       = nil
+    slm_rf_tolerance_checked = false
+end
+
+function start_turnaround()
+    slm_detect_aircraft()
+    if slm_lowcost_mode and timing_preset == "realistic" then
+        apply_fast_timings()
+        slm_lc_forced_fast = true
+    end
+    slm_place_chocks()
+    slm_sync_toliss_chocks()
+	slm_sequence_mode       = "turnaround"
+    slm_last_sequence_mode  = "turnaround"
+    slm_steps_visible       = true
+    slm_sequence_phase      = "arrival_ops"
+    slm_auto_import_done    = false
+    slm_auto_import_message = nil
+    SLM_Loadsheet_Data   = nil
+    simbrief_data_loaded = false
+    loadsheet_ready      = false
+    crew_briefing_done      = false
+    crew_briefing_started   = false
+    catering_done           = false
+    catering_started        = false
+    cleaning_done           = false
+    cleaning_started        = false
+    slm_initial_fuel_kg     = sim_fuel_total_kg
+    start_disembarkation()
+end
+
+function start_night_stop()
+    slm_detect_aircraft()
+    slm_place_chocks()
+    slm_sync_toliss_chocks()
+    slm_sequence_mode      = "night_stop"
+    slm_last_sequence_mode = "night_stop"
+    slm_steps_visible      = true
+    slm_sequence_phase     = "arrival_ops"
+    cleaning_done          = false
+    cleaning_started       = false
+    crew_deplane_done      = false
+    crew_deplane_started   = false
+    crew_deplane_start_time = nil
+    slm_initial_fuel_kg    = sim_fuel_total_kg
+    start_disembarkation()
+end
+
+function slm_ta_to_departure()
+    block_off_time = "--:--Z"
+    takeoff_time   = "--:--Z"
+    landing_time   = "--:--Z"
+    block_on_time  = "--:--Z"
+    passed_500ft   = false
+    slm_airborne_since = nil
+    start_departure_sequence(true)
+end
+
+function manage_sequence()
+    if not slm_sequence_mode then return end
+
+    if slm_sequence_mode == "departure" then
+        if slm_sequence_phase == "crew_and_catering" then
+            if crew_briefing_done and catering_done then
+                slm_sequence_mode  = nil
+                slm_sequence_phase = nil
+                start_embarkation()
+            end
+        end
+
+    elseif slm_sequence_mode == "turnaround" then
+        if slm_sequence_phase == "arrival_ops" then
+            if disembark_done then
+                if slm_lowcost_mode then
+                    -- Lowcost: cleaning happens later with briefing+catering, skip directly
+                    if slm_data_source == "simbrief" then
+                        slm_sequence_phase = "simbrief_check"
+                    else
+                        slm_sequence_phase = "waiting_for_new_plan"
+                        slm_auto_import_message = nil
+                        SLM_Loadsheet_Data = nil
+                    end
+                else
+                    slm_sequence_phase = "cleaning"
+                    start_cleaning()
+                end
+            end
+        elseif slm_sequence_phase == "cleaning" and cleaning_done then
+            if slm_data_source == "simbrief" then
+                slm_sequence_phase = "simbrief_check"
+            else
+                slm_sequence_phase = "waiting_for_new_plan"
+                slm_auto_import_message = nil
+                SLM_Loadsheet_Data = nil
+            end
+        elseif slm_sequence_phase == "waiting_for_new_plan" and SLM_Loadsheet_Data ~= nil
+            and (slm_data_source ~= "simbrief" or slm_new_plan_imported) then
+            slm_ta_to_departure()
+        elseif slm_sequence_phase == "simbrief_check" and not slm_auto_import_done then
+            slm_auto_import_done = true
+            slm_turnaround_check_simbrief()
+        end
+
+    elseif slm_sequence_mode == "night_stop" then
+        if slm_sequence_phase == "arrival_ops" and disembark_done then
+            slm_sequence_phase = "cleaning"
+            start_cleaning()
+        elseif slm_sequence_phase == "cleaning" and cleaning_done then
+            slm_sequence_phase = "crew_deplane"
+            start_crew_deplane()
+        elseif slm_sequence_phase == "crew_deplane" and crew_deplane_done then
+            slm_place_chocks()
+            show_Cones  = true
+            Cones_chg   = true
+
+            if not aircraft_has_own_stairs then
+                show_StairsXPJ  = false
+                StairsXPJ_chg   = true
+                show_StairsXPJ2 = false
+                StairsXPJ2_chg  = true
+            end
+            slm_sequence_phase = "done"
+            slm_clear_last_flight()   -- RON complete: wipe saved flight
+        end
+    end
+end
+
+--------------------------------------------------------------------------------
+-- RESET
+--------------------------------------------------------------------------------
+function reset_loads()
+    slm_stop_boarding_music()
+    slm_rf_stop()
+    slm_rp_stop()
+    slm_rp_last_pax_unloaded     = nil
+    slm_rp_last_cargo_unloaded   = nil
+    slm_rp_toliss_last_setweight = 0
+    cargo_loaded          = 0
+    passengers_loaded     = 0
+    cargo_unloaded        = 0
+    passengers_unloaded   = 0
+	cargo_total = 0
+	passengers_total = 0
+    embark_started        = false
+    embark_done           = false
+    disembark_started     = false
+    disembark_done        = false
+	fuel_loaded = 0
+	fuel_done = false
+	fuel_loading = false
+	fuel_ready_time = nil
+	fuel_time_per_unit = nil
+	fuel_last_update_time = nil
+	fuel_total = 0
+	show_People4 = false
+	People4_chg = true
+	show_People3 = false
+	People3_chg = true
+	show_People2 = false
+	People2_chg = true
+	show_People1 = false
+	People1_chg = true
+	show_Chocks = false
+	Chocks_chg = true
+	show_BeltLoader = false
+	BeltLoader_chg = true
+	show_RearBeltLoader = false
+	RearBeltLoader_chg = true
+	show_Cart = false
+	Cart_chg = true
+	boarding_from_the_terminal = false
+	show_Pax = false
+	Pax_chg = true
+	show_Bus = false
+	Bus_chg = true
+	show_StairsXPJ  = false
+	StairsXPJ_chg   = true
+	show_StairsXPJ2 = false
+	StairsXPJ2_chg  = true
+	option_StairsXPJ_override = false
+	DualBoard = false
+	bus_triggered = false
+	show_FUEL = false
+	FUEL_chg = true
+	simbrief_data_loaded = false
+	loadsheet_ready = false
+	slm_defuel_performed = false
+	estimated_time_cargo = nil
+    estimated_time_pax   = nil
+    estimated_time_fuel  = nil
+    cargo_start_reference_time = nil
+    disembark_start_time = nil
+    disembark_last_update_time = nil
+
+	start_time = 0
+	last_update_time = 0
+	pax_load_started = false
+	pax_start_time = 0
+	pax_trigger_time = nil
+	pax_unload_started = false
+	pax_unload_start_time = 0
+	fuel_done_time = nil
+	fuel_wait_finished = false
+	end_time = nil
+
+	sched_out = 0
+	sched_off = 0
+	sched_on  = 0
+	sched_in  = 0
+
+	block_off_time = "--:--Z"
+	beacon_prev = 0
+	takeoff_time = "--:--Z"
+	onground_prev = 1
+	landing_time = "--:--Z"
+	block_on_time = "--:--Z"
+	passed_500ft = false
+	slm_landing_confirm_time = nil
+	slm_airborne_since = nil
+	SLM_real_pax        = 0
+	SLM_real_cargo      = 0
+	SLM_real_fuel_block = 0
+	SLM_real_payload    = 0
+	arr_passengers_total = 0
+	arr_cargo_total      = 0
+	SB_pax_weight = 0
+	SB_bag_weight = 0
+	SB_pax_count  = 0
+	SB_bag_count  = 0
+	SB_pax_mass_planned = 0
+	SB_bag_mass_planned = 0
+	SLM_Loadsheet_Data = nil
+	SLM_is_busy[0]         = 0
+	SLM_loadsheet_ready[0] = 0
+	SLM_pax_total[0]   = 0
+	SLM_cargo_total[0] = 0
+	SLM_fuel_total[0]  = 0
+	SLM_pax_done[0]   = 0
+	SLM_cargo_done[0] = 0
+	SLM_fuel_done[0]  = 0
+	SLM_pax_fraction[0]   = 0
+	SLM_cargo_fraction[0] = 0
+	SLM_fuel_fraction[0]  = 0
+	SLM_eta_pax[0]   = 0
+	SLM_eta_cargo[0] = 0
+	SLM_eta_fuel[0]  = 0
+	SLM_eta_total[0] = 0
+	SLM_pax_state[0]   = 0
+	SLM_cargo_state[0] = 0
+	SLM_fuel_state[0]  = 0
+	SLM_ls_diff_pax[0]        = 0
+	SLM_ls_diff_cargo[0]      = 0
+	SLM_ls_diff_fuel_block[0] = 0
+	SLM_ls_diff_payload[0]    = 0
+
+	slm_sequence_mode       = nil
+	slm_sequence_phase      = nil
+	slm_last_sequence_mode  = nil
+	slm_steps_visible       = false
+	slm_auto_import_done    = false
+	slm_auto_import_message = nil
+	slm_new_plan_imported   = false
+	slm_lc_forced_fast      = false
+
+	crew_briefing_started    = false
+	crew_briefing_done       = false
+	crew_briefing_start_time = nil
+	crew_briefing_duration   = nil
+	estimated_time_crew      = nil
+
+	catering_started        = false
+	catering_done           = false
+	catering_start_time     = nil
+	catering_duration       = nil
+	estimated_time_catering = nil
+	show_Catering = false
+	Catering_chg  = true
+
+	cleaning_started        = false
+	cleaning_done           = false
+	cleaning_start_time     = nil
+	cleaning_duration       = nil
+	estimated_time_cleaning = nil
+	show_Cleaning = false
+	Cleaning_chg  = true
+
+	crew_deplane_started        = false
+	crew_deplane_done           = false
+	crew_deplane_start_time     = nil
+	crew_deplane_duration       = nil
+	estimated_time_crew_deplane = nil
+
+	last_ofp_timestamp = nil
+
+	slm_event_dep_pending     = nil
+	slm_event_arr_pending     = nil
+	slm_event_dep_active      = nil
+	slm_event_arr_active      = nil
+	slm_event_dep_triggered   = false
+	slm_event_arr_triggered   = false
+	slm_event_delay_until     = nil
+	slm_event_fuel_delay_until = nil
+	slm_event_pause_until     = nil
+	slm_event_slow_until      = nil
+	slm_event_slow_factor     = 1.0
+	slm_cargo_penalty_until   = nil
+	slm_cargo_penalty_start   = nil
+	slm_effective_pax         = nil
+	slm_effective_cargo       = nil
+	slm_max_passengers        = nil
+	slm_pax_var_applied       = false
+	slm_pax_bias              = nil
+	slm_rp_ejet_shares, slm_rp_ejet_cw = nil, nil
+	slm_zibo_caps             = nil
+	slm_zibo_cabin_max        = nil
+	slm_planned_cargo_display = nil
+	slm_catering_elapsed_at_pause = nil
+
+	save_user_settings()
+
+	update_slm_datarefs()
+
+    if briefing_playing then
+        briefing_playing = false
+        if sounds.briefing.id and sounds.briefing.id ~= 0 then
+            stop_sound(sounds.briefing.id)
+        end
+    end
+    if catering_loop_playing then
+        catering_loop_playing = false
+        if sounds.catering_loop.id and sounds.catering_loop.id ~= 0 then
+            let_sound_loop(sounds.catering_loop.id, false)
+            stop_sound(sounds.catering_loop.id)
+        end
+    end
+    if cleaning_loop_playing then
+        cleaning_loop_playing = false
+        if sounds.cleaning_loop.id and sounds.cleaning_loop.id ~= 0 then
+            let_sound_loop(sounds.cleaning_loop.id, false)
+            stop_sound(sounds.cleaning_loop.id)
+        end
+    end
+
+    sound_played = {
+        start_loading_cargo         = false,
+        start_boarding_passengers   = false,
+        finished_loading_cargo      = false,
+        finished_loading_pax        = false,
+        finished_loading_all        = false,
+        start_unloading_cargo       = false,
+        start_unboarding_passengers = false,
+        finished_unloading_cargo    = false,
+        finished_unboarding_passengers = false,
+        start_fuel_loading          = false,
+        finished_fuel_loading       = false,
+    }
+
+    if cargo_loop_playing then
+        cargo_loop_playing = false
+        let_sound_loop(sounds.cargo_loop.id, false)
+        stop_sound(sounds.cargo_loop.id)
+    end
+
+    if pax_loop_playing then
+        pax_loop_playing = false
+        let_sound_loop(sounds.passengers_loop.id, false)
+        stop_sound(sounds.passengers_loop.id)
+    end
+
+	if fuel_loop_playing then
+		fuel_loop_playing = false
+		let_sound_loop(sounds.fuel_loop.id, false)
+		stop_sound(sounds.fuel_loop.id)
+    end
+end
+
+--------------------------------------------------------------------------------
+-- TIME ESTIMATION
+--------------------------------------------------------------------------------
+local last_time_update = os.clock()
+
+function update_remaining_time()
+    if os.clock() - last_time_update > 1 then
+        if embark_started then
+            local avg_cargo_time_local = (cargo_time_per_kg_min + cargo_time_per_kg_max) / 2
+            if unit_system == "lbs" then
+                avg_cargo_time_local = avg_cargo_time_local / 2.20462
+            end
+
+			local avg_pax_time_local = (pax_time_per_passenger + pax_time_variation) / 2
+			local time_cargo = (cargo_total - cargo_loaded) * avg_cargo_time_local
+			local time_pax = 0
+			if pax_load_started then
+				time_pax = (passengers_total - passengers_loaded) * avg_pax_time_local
+			else
+				time_pax = passengers_total * avg_pax_time_local
+			end
+			estimated_time_cargo = time_cargo
+			estimated_time_pax   = time_pax
+
+            if fuel_total > 0 and fuel_time_per_unit then
+				local fuel_remaining = math.abs((fuel_total or 0) - (fuel_loaded or 0))
+				estimated_time_fuel = fuel_remaining * (fuel_time_per_unit or 0)
+            else
+                estimated_time_fuel = nil
+            end
+        end
+
+        if disembark_started then
+            local avg_dis_cargo = (disembark_cargo_time_per_kg_min + disembark_cargo_time_per_kg_max) / 2
+            local avg_dis_pax   = (disembark_pax_time_per_passenger + disembark_pax_time_variation) / 2
+            if unit_system == "lbs" then
+                avg_dis_cargo = avg_dis_cargo / 2.20462
+            end
+
+            estimated_time_cargo = (cargo_total - cargo_unloaded) * avg_dis_cargo
+            local hold_remaining = (slm_event_delay_until and os.clock() < slm_event_delay_until)
+                and (slm_event_delay_until - os.clock()) or 0
+            estimated_time_pax   = (passengers_total - passengers_unloaded) * avg_dis_pax + hold_remaining
+        end
+
+        last_time_update = os.clock()
+    end
+end
+
+--------------------------------------------------------------------------------
+-- UPDATE SLM DATAREFS
+--------------------------------------------------------------------------------
+function update_slm_datarefs()
+
+    SLM_boarding_active[0]      = embark_started        and 1 or 0
+    SLM_deboarding_active[0]    = disembark_started     and 1 or 0
+    SLM_boarding_done[0]        = embark_done           and 1 or 0
+    SLM_deboarding_done[0]      = disembark_done        and 1 or 0
+    SLM_crew_briefing_active[0] = crew_briefing_started and 1 or 0
+    SLM_catering_active[0]      = catering_started      and 1 or 0
+    SLM_cleaning_active[0]      = cleaning_started      and 1 or 0
+    SLM_crew_deplane_active[0]  = crew_deplane_started  and 1 or 0
+    SLM_sequence_active[0]      = (slm_sequence_mode ~= nil)     and 1 or 0
+    SLM_sequence_complete[0]    = (slm_sequence_phase == "done") and 1 or 0
+
+    SLM_is_busy[0] = (embark_started or disembark_started
+        or crew_briefing_started or catering_started or cleaning_started
+        or crew_deplane_started or slm_sequence_mode ~= nil) and 1 or 0
+
+    SLM_mode[0] = passed_500ft and 1 or 0
+
+    SLM_crew_briefing_fraction[0] = (crew_briefing_duration and crew_briefing_duration > 0)
+        and math.min(1, (os.clock() - (crew_briefing_start_time or os.clock())) / crew_briefing_duration) or 0
+
+    SLM_catering_fraction[0] = (catering_duration and catering_duration > 0)
+        and math.min(1, (os.clock() - (catering_start_time or os.clock())) / catering_duration) or 0
+
+    SLM_cleaning_fraction[0] = (cleaning_duration and cleaning_duration > 0)
+        and math.min(1, (os.clock() - (cleaning_start_time or os.clock())) / cleaning_duration) or 0
+    SLM_loadsheet_ready[0] = loadsheet_ready and 1 or 0
+
+    if selected_location_group == "remote" then
+        SLM_location_mode[0] = 0
+    elseif selected_location_group == "terminal" then
+        SLM_location_mode[0] = 1
+    elseif selected_location_group == "jetway" then
+        SLM_location_mode[0] = 2
+    end
+
+    SLM_aircraft_own_stairs[0] = aircraft_has_own_stairs and 1 or 0
+
+    SLM_pax_total[0]   = passengers_total or 0
+    SLM_cargo_total[0] = cargo_total or 0
+    SLM_fuel_total[0]  = fuel_total or 0
+
+	if embark_started then
+		SLM_pax_done[0] = passengers_loaded or 0
+	elseif disembark_started then
+		SLM_pax_done[0] = (passengers_total - passengers_unloaded) or 0
+	elseif embark_done then
+		SLM_pax_done[0] = passengers_total or 0
+	elseif disembark_done then
+		SLM_pax_done[0] = 0
+	else
+		SLM_pax_done[0] = 0
+	end
+
+	   if embark_started then
+        SLM_fuel_done[0] = fuel_loaded or 0
+    elseif embark_done then
+        SLM_fuel_done[0] = fuel_total or 0
+    else
+        SLM_fuel_done[0] = 0
+    end
+
+	if embark_started then
+		SLM_cargo_done[0] = cargo_loaded or 0
+	elseif disembark_started then
+		SLM_cargo_done[0] = (cargo_total - cargo_unloaded) or 0
+	elseif embark_done then
+		SLM_cargo_done[0] = cargo_total or 0
+	elseif disembark_done then
+		SLM_cargo_done[0] = 0
+	else
+		SLM_cargo_done[0] = 0
+	end
+
+    SLM_pax_fraction[0] =
+        (passengers_total > 0) and (SLM_pax_done[0] / passengers_total) or 0
+
+    SLM_cargo_fraction[0] =
+        (cargo_total > 0) and (SLM_cargo_done[0] / cargo_total) or 0
+
+    SLM_fuel_fraction[0] =
+        (fuel_total > 0) and (fuel_loaded / fuel_total) or 0
+
+    SLM_eta_pax[0]   = estimated_time_pax   or 0
+    SLM_eta_cargo[0] = estimated_time_cargo or 0
+    SLM_eta_fuel[0]  = estimated_time_fuel  or 0
+
+    local eta_total = 0
+    if disembark_started then
+        eta_total = math.max(estimated_time_pax or 0, estimated_time_cargo or 0)
+    elseif embark_started then
+        eta_total = math.max(
+            estimated_time_pax   or 0,
+            estimated_time_cargo or 0,
+            estimated_time_fuel  or 0
+        )
+    elseif cleaning_started then
+        eta_total = estimated_time_cleaning or 0
+    elseif crew_deplane_started then
+        eta_total = estimated_time_crew_deplane or 0
+    end
+    SLM_eta_total[0] = eta_total
+
+    if passengers_total == 0 or not pax_load_started then
+        SLM_pax_state[0] = 0
+    elseif SLM_pax_done[0] >= passengers_total then
+        SLM_pax_state[0] = 2
+    else
+        SLM_pax_state[0] = 1
+    end
+
+    if cargo_total == 0 then
+        SLM_cargo_state[0] = 0
+    elseif SLM_cargo_done[0] >= cargo_total then
+        SLM_cargo_state[0] = 2
+    else
+        SLM_cargo_state[0] = 1
+    end
+
+    if fuel_total == 0 or (not fuel_loading and not fuel_done) then
+        SLM_fuel_state[0] = 0
+    elseif fuel_done then
+        SLM_fuel_state[0] = 2
+    else
+        SLM_fuel_state[0] = 1
+    end
+
+    if loadsheet_ready then
+        SLM_ls_actual_pax[0]        = SLM_real_pax or 0
+        SLM_ls_actual_cargo[0]      = SLM_real_cargo or 0
+        SLM_ls_actual_fuel_block[0] = SLM_real_fuel_block or 0
+        SLM_ls_actual_payload[0]    = SLM_real_payload or 0
+    else
+        SLM_ls_actual_pax[0]        = 0
+        SLM_ls_actual_cargo[0]      = 0
+        SLM_ls_actual_fuel_block[0] = 0
+        SLM_ls_actual_payload[0]    = 0
+    end
+
+    if loadsheet_ready and simbrief_data_loaded and SLM_Loadsheet_Data then
+        SLM_ls_diff_pax[0] =
+            (SLM_real_pax or 0) - (SB_pax_count or 0)
+
+        SLM_ls_diff_cargo[0] =
+            (SLM_real_cargo or 0) - (SLM_Loadsheet_Data.cargo_total or 0)
+
+        SLM_ls_diff_fuel_block[0] =
+            (SLM_real_fuel_block or 0) - (SLM_Loadsheet_Data.fuel_block or 0)
+
+        SLM_ls_diff_payload[0] =
+            (SLM_real_payload or 0) - (SLM_Loadsheet_Data.payload_planned or 0)
+    else
+        SLM_ls_diff_pax[0]        = 0
+        SLM_ls_diff_cargo[0]      = 0
+        SLM_ls_diff_fuel_block[0] = 0
+        SLM_ls_diff_payload[0]    = 0
+    end
+
+    local active_ev = slm_event_dep_active or slm_event_arr_active
+    SLM_event_active[0] = active_ev and 1 or 0
+    local _cat_map = {pax=1, cargo=2, fuel=3, catering=4}
+    SLM_event_category[0] = (active_ev and _cat_map[active_ev.category]) or 0
+    local _now = os.clock()
+    SLM_event_paused[0] = (
+        (slm_event_pause_until   and _now < slm_event_pause_until)   or
+        (slm_event_delay_until   and _now < slm_event_delay_until)   or
+        (slm_cargo_penalty_until and _now < slm_cargo_penalty_until)
+    ) and 1 or 0
+    SLM_event_slowed[0] = (slm_event_slow_until and _now < slm_event_slow_until) and 1 or 0
+end
+
+--------------------------------------------------------------------------------
+-- FLIGHT TIME DETECTION
+--------------------------------------------------------------------------------
+function timestamp_to_utc_hhmmz(epoch)
+    if epoch == 0 then return "--:--Z" end
+    return os.date("!%H:%MZ", epoch)
+end
+
+function current_zulu_hhmm()
+    return string.format("%02d:%02dZ", zulu_hours, zulu_minutes)
+end
+
+local function slm_get_callsign()
+    -- Zibo: flight number is in FMC line, format "     AFU1352"
+    if slm_aircraft_type == "zibo" and slm_zibo_fmc_line_dr then
+        local line = (slm_zibo_fmc_line_dr or ""):match("^([^%z]*)") or ""
+        local cs = line:match("([%a][%a%d]*)%s*$")
+        if cs and #cs >= 3 and cs:match("%d") then return cs:upper() end
+    end
+    local raw = slm_flight_id_dr or ""
+    local s = raw:match("^([^%z]*)") or ""
+    return s:gsub("%s+", ""):upper()
+end
+
+
+function detect_block_times()
+    -- Use slm_beacon_on (already resolved for FF A320 or standard X-Plane)
+    local b = slm_beacon_on and 1 or 0
+    if beacon_prev == 0 and b == 1 and block_off_time == "--:--Z" then
+        block_off_time = current_zulu_hhmm()
+    elseif beacon_prev == 1 and b == 0 and block_on_time == "--:--Z" and takeoff_time ~= "--:--Z" then
+        block_on_time = current_zulu_hhmm()
+    end
+    beacon_prev = b
+end
+
+
+function detect_takeoff_and_landing()
+    if onground_prev == 1 and onground == 0 and takeoff_time == "--:--Z" then
+        takeoff_time = current_zulu_hhmm()
+        passed_500ft = false
+        slm_landing_confirm_time = nil
+        slm_airborne_since = os.clock()
+    end
+
+    -- Beacon-on is the normal trigger. Fallback: if the beacon was never toggled
+    -- on during the climb (forgotten/turned off), a sustained time airborne still
+    -- confirms the flight so the plugin doesn't get stuck offering "Start Loading"
+    -- after landing.
+    if not passed_500ft and onground == 0
+       and (slm_beacon_on or (slm_airborne_since and (os.clock() - slm_airborne_since) >= 60)) then
+        passed_500ft           = true
+        slm_steps_visible      = false
+        slm_last_sequence_mode = "in_flight"
+        -- Only save if SLM has real data; skip after a script reload where state was wiped
+        if simbrief_data_loaded or embark_done then
+            slm_save_last_flight("in_flight")
+        end
+    end
+
+    if onground_prev == 0 and onground == 1
+       and passed_500ft and landing_time == "--:--Z"
+       and slm_landing_confirm_time == nil then
+        slm_landing_confirm_time = os.clock()
+    end
+
+    if slm_landing_confirm_time and onground == 0 then
+        slm_landing_confirm_time = nil
+    end
+
+    if slm_landing_confirm_time
+       and (os.clock() - slm_landing_confirm_time >= 4.0) then
+        -- Only save if SLM has real data; don't overwrite a good in_flight save with zeros
+        if simbrief_data_loaded or embark_done then
+            slm_save_last_flight("arrival")
+        end
+        slm_on_arrival()
+        slm_landing_confirm_time = nil
+    end
+
+    onground_prev = onground
+end
+
+--------------------------------------------------------------------------------
+-- PRESETS TIMING SNAPSHOT
+--------------------------------------------------------------------------------
+local preset_values = {}
+
+local function capture_preset(func)
+    local snapshot = {
+        pax_time_per_passenger = pax_time_per_passenger,
+        pax_time_variation = pax_time_variation,
+        disembark_pax_time_per_passenger = disembark_pax_time_per_passenger,
+        disembark_pax_time_variation = disembark_pax_time_variation,
+        cargo_time_per_kg_min = cargo_time_per_kg_min,
+        cargo_time_per_kg_max = cargo_time_per_kg_max,
+        disembark_cargo_time_per_kg_min = disembark_cargo_time_per_kg_min,
+        disembark_cargo_time_per_kg_max = disembark_cargo_time_per_kg_max,
+        fuel_time_per_kg = fuel_time_per_kg,
+        catering_time_per_pax  = catering_time_per_pax,
+        cleaning_time_per_pax  = cleaning_time_per_pax,
+        crew_briefing_time_min = crew_briefing_time_min,
+        crew_briefing_time_max = crew_briefing_time_max
+    }
+
+    func()
+
+    local result = {
+        pax_time_per_passenger = pax_time_per_passenger,
+        pax_time_variation = pax_time_variation,
+        disembark_pax_time_per_passenger = disembark_pax_time_per_passenger,
+        disembark_pax_time_variation = disembark_pax_time_variation,
+        cargo_time_per_kg_min = cargo_time_per_kg_min,
+        cargo_time_per_kg_max = cargo_time_per_kg_max,
+        disembark_cargo_time_per_kg_min = disembark_cargo_time_per_kg_min,
+        disembark_cargo_time_per_kg_max = disembark_cargo_time_per_kg_max,
+        fuel_time_per_kg = fuel_time_per_kg,
+        catering_time_per_pax  = catering_time_per_pax,
+        cleaning_time_per_pax  = cleaning_time_per_pax,
+        crew_briefing_time_min = crew_briefing_time_min,
+        crew_briefing_time_max = crew_briefing_time_max
+    }
+
+    pax_time_per_passenger = snapshot.pax_time_per_passenger
+    pax_time_variation = snapshot.pax_time_variation
+    disembark_pax_time_per_passenger = snapshot.disembark_pax_time_per_passenger
+    disembark_pax_time_variation = snapshot.disembark_pax_time_variation
+    cargo_time_per_kg_min = snapshot.cargo_time_per_kg_min
+    cargo_time_per_kg_max = snapshot.cargo_time_per_kg_max
+    disembark_cargo_time_per_kg_min = snapshot.disembark_cargo_time_per_kg_min
+    disembark_cargo_time_per_kg_max = snapshot.disembark_cargo_time_per_kg_max
+    fuel_time_per_kg = snapshot.fuel_time_per_kg
+    catering_time_per_pax  = snapshot.catering_time_per_pax
+    cleaning_time_per_pax  = snapshot.cleaning_time_per_pax
+    crew_briefing_time_min = snapshot.crew_briefing_time_min
+    crew_briefing_time_max = snapshot.crew_briefing_time_max
+
+    return result
+end
+
+preset_values.realistic = capture_preset(apply_realistic_timings)
+preset_values.fast      = capture_preset(apply_fast_timings)
+preset_values.veryfast  = capture_preset(apply_veryfast_timings)
+
+--------------------------------------------------------------------------------
+-- WINDOW MANAGEMENT
+--------------------------------------------------------------------------------
+function create_embark_window()
+    if embark_wnd == nil then
+        embark_wnd = float_wnd_create(500, 900, 1, true)
+        float_wnd_set_title(embark_wnd, "SimLoad Manager")
+        float_wnd_set_imgui_builder(embark_wnd, "build_embark_window")
+        float_wnd_set_onclose(embark_wnd, "on_close_embark_window")
+        logMsg("[SLM] Embark window created.")
+    end
+end
+
+function on_close_embark_window(wnd)
+    close_embark_window()
+end
+
+function close_embark_window()
+    if embark_wnd ~= nil then
+        float_wnd_destroy(embark_wnd)
+        embark_wnd = nil
+        logMsg("[SLM] Embark window closed by script.")
+    end
+end
+
+function toggle_embark_window()
+    if embark_wnd == nil then
+        create_embark_window()
+    else
+        close_embark_window()
+    end
+end
+
+-- SLM 5: the loadsheet is a tab of the web window (SLM_State.loadsheet); the
+-- former ImGui loadsheet window (SLM-Data/SimLoadManager_loadsheet.lua) is gone.
+
+--------------------------------------------------------------------------------
+-- OPEN URL
+--------------------------------------------------------------------------------
+-- Opens the URL in the system browser. Background on Linux: xdg-open can wait.
+function open_url(url)
+    if jit.os == "Windows" then
+        os.execute("start " .. url)
+    elseif jit.os == "OSX" then
+        os.execute('open "' .. url .. '"')
+    else
+        os.execute('xdg-open "' .. url .. '" >/dev/null 2>&1 &')
+    end
+end
+
+function open_simchecklist() open_url("https://Simchecklist.eu") end
+function Ko_fi() open_url("https://ko-fi.com/rackhamrpl") end
+
+--------------------------------------------------------------------------------
+-- HOPPIE ACARS
+--------------------------------------------------------------------------------
+
+local function slm_url_encode(s)
+    if type(s) ~= "string" then s = tostring(s or "") end
+    return (s:gsub("([^%w%-%.%_%~ ])", function(c)
+        return string.format("%%%02X", string.byte(c))
+    end):gsub(" ", "+"))
+end
+
+local function slm_fmt_row(label, value, digit)
+    local n = math.max(0, digit - #label - #value)
+    return label .. string.rep("_", n) .. " @" .. value .. "@ "
+end
+
+-- Refreshes SLM_Loadsheet_Data.zfwcg (ToLiss, E-Jets) and .towcg (E-Jets,
+-- #SL19) from the live pax/cargo/distribution state. Called every frame (so
+-- the loadsheet window shows it continuously, not only after a
+-- CPDLC/TELEX/ACARS send) and again right before building the outbound packet
+-- so the sent message always carries the latest value.
+function slm_toliss_update_zfwcg()
+    if not SLM_Loadsheet_Data then return end
+    SLM_Loadsheet_Data.towcg = nil
+    if slm_aircraft_type ~= "toliss" then
+        local zf, to
+        if slm_rp_enabled and not slm_rp_excluded then
+            zf, to = slm_ejet_cg(to_kg(tonumber(SLM_Loadsheet_Data.fuel_taxi) or 0))
+        end
+        SLM_Loadsheet_Data.zfwcg = zf and string.format("%.1f", zf) or nil
+        SLM_Loadsheet_Data.towcg = to and string.format("%.1f", to) or nil
+        return
+    end
+
+    local fwd_cargo_kg, aft_cargo_kg
+    if slm_rp_toliss_fwdcargo_dr and slm_rp_toliss_aftcargo_dr then
+        fwd_cargo_kg = to_kg(slm_rp_toliss_fwdcargo_dr[0])  -- ToLiss unit = OFP unit
+        aft_cargo_kg = to_kg(slm_rp_toliss_aftcargo_dr[0])
+    else
+        local cargo_kg = to_kg(SLM_real_cargo or 0)
+        fwd_cargo_kg = cargo_kg / 2
+        aft_cargo_kg = cargo_kg / 2
+    end
+
+    if slm_toliss_paxdistrib_ro_dr == nil then
+        slm_toliss_paxdistrib_ro_dr = XPLMFindDataRef("AirbusFBW/PaxDistrib") or false
+    end
+    local distrib = slm_toliss_paxdistrib_ro_dr and XPLMGetDataf(slm_toliss_paxdistrib_ro_dr) or 0.5
+
+    local zfwcg = slm_toliss_zfwcg(SLM_real_pax or 0, fwd_cargo_kg, aft_cargo_kg, distrib)
+    SLM_Loadsheet_Data.zfwcg = zfwcg and string.format("%.1f", zfwcg) or nil
+end
+
+local function slm_build_acars_packet()
+    local ld    = SLM_Loadsheet_Data
+    local ctrl  = slm_load_controller or "SLM"
+    local pax   = string.format("%03d", math.floor(SLM_real_pax or 0))
+
+    local function fmt_w(val)
+        if unit_system == "kg" then
+            return string.format("%.1fT", val / 1000)
+        else
+            return string.format("%.0flbs", val)
+        end
+    end
+
+    -- ZFW: compute from weights like the loadsheet (oew + payload), not MCDU init page
+    -- oew from SimBrief if available, otherwise derive from X-Plane total weight
+    -- ld.oew and SLM_real_payload are in display units (unit_system), convert to real kg here
+    -- so zfw_kg is unambiguously in kg before from_kg() converts it back for display below.
+    local oew_kg  = to_kg(tonumber(ld.oew) or 0)
+    if oew_kg <= 0 then
+        oew_kg = math.max(0, (slm_total_weight_kg or 0) - (sim_fuel_total_kg or 0) - to_kg(SLM_real_payload or 0))
+    end
+    local zfw_kg  = oew_kg + to_kg(SLM_real_payload or 0)
+    local fob = fmt_w(SLM_real_fuel_block or 0)
+    local zfw = fmt_w(from_kg(zfw_kg))
+
+    slm_toliss_update_zfwcg()
+    local zfwcg_str = ld.zfwcg
+    local towcg_str = ld.towcg
+
+    local lines
+    if slm_data_source == "simbrief" then
+        local flt  = (ld.airline ~= "N/A" and ld.airline or "") .. (ld.fltnum ~= "N/A" and ld.fltnum or "")
+        local fuel_taxi = tonumber(ld.fuel_taxi) or 0
+        local tow = fmt_w(from_kg(zfw_kg) + ((SLM_real_fuel_block or 0) - fuel_taxi))
+        local pld = fmt_w(SLM_real_payload or 0)
+        lines = {
+            "----FINAL LOADSHEET----",
+            slm_fmt_row("FL",  flt,  9),
+            slm_fmt_row("PAX", pax,  9),
+            slm_fmt_row("PLD", pld,  9),
+            slm_fmt_row("ZFW", zfw,  9),
+        }
+        if zfwcg_str then lines[#lines+1] = slm_fmt_row("ZFWCG", zfwcg_str, 9) end
+        if towcg_str then lines[#lines+1] = slm_fmt_row("TOWCG", towcg_str, 9) end
+        lines[#lines+1] = slm_fmt_row("TOW", tow,  9)
+        lines[#lines+1] = slm_fmt_row("FOB", fob,  9)
+        lines[#lines+1] = slm_fmt_row("BY",  ctrl, 9)
+    else
+        local payload = fmt_w(SLM_real_payload or 0)
+        lines = {
+            "----FINAL LOADSHEET----",
+            slm_fmt_row("PAX", pax,     9),
+            slm_fmt_row("PLD", payload, 9),
+            slm_fmt_row("ZFW", zfw,     9),
+        }
+        if zfwcg_str then lines[#lines+1] = slm_fmt_row("ZFWCG", zfwcg_str, 9) end
+        if towcg_str then lines[#lines+1] = slm_fmt_row("TOWCG", towcg_str, 9) end
+        lines[#lines+1] = slm_fmt_row("FOB", fob,     9)
+        lines[#lines+1] = slm_fmt_row("BY",  ctrl,    9)
+    end
+
+    -- Load distribution (loadsheet card): the displays ignore line breaks and
+    -- wrap the text two 9-char fields per line, so one field per cabin section
+    -- (0A, 0B...) and per hold (CPT1, CPT2...), front to back. Inserted before
+    -- BY, which stays last: a controller name longer than the field would
+    -- shift every field after it.
+    local D = slm_loadsheet_distrib()
+    if D then
+        local by = table.remove(lines)
+        for n, s in ipairs(D.cabin or {}) do
+            lines[#lines+1] = slm_fmt_row("0" .. string.char(64 + n), tostring(s.pax), 9)
+        end
+        for n, h in ipairs(D.holds or {}) do
+            lines[#lines+1] = slm_fmt_row("CPT" .. n, fmt_w(h.w), 9)
+        end
+        lines[#lines+1] = by
+    end
+
+    return table.concat(lines, "\n")
+end
+
+function slm_send_hoppie_acars()
+    if slm_hoppie_logon == "" then
+        slm_acars_status_msg   = slm_tr("acars.no_logon", nil, "Hoppie: no logon configured")
+        slm_acars_status_color = 0xFF00AAFF
+        slm_acars_status_time  = os.clock()
+        return
+    end
+    if not loadsheet_ready then
+        slm_acars_status_msg   = slm_tr("acars.not_ready", { svc = "Hoppie" }, "Hoppie: loadsheet not ready")
+        slm_acars_status_color = 0xFF00AAFF
+        slm_acars_status_time  = os.clock()
+        return
+    end
+    local callsign = slm_get_callsign()
+    if callsign == "" then
+        slm_acars_status_msg   = slm_tr("acars.no_callsign", { svc = "Hoppie" }, "Hoppie: no callsign (MCDU or override)")
+        slm_acars_status_color = 0xFF00AAFF
+        slm_acars_status_time  = os.clock()
+        return
+    end
+
+    local from        = callsign:sub(1, 3) .. "OPS"
+    local to          = callsign
+    local is_telex    = (slm_hoppie_msgtype == "telex")
+    local raw_content = slm_build_acars_packet()
+    local packet, msg_type
+    if is_telex then
+        packet   = raw_content:gsub("@", ""):gsub("\n", "%%0A")
+        msg_type = "telex"
+    else
+        packet   = "/data2/313//NE/" .. raw_content:gsub("\n", "%%0A")
+        msg_type = "cpdlc"
+    end
+
+    local ok_http, http = pcall(require, "socket.http")
+    if not ok_http then
+        slm_acars_status_msg   = slm_tr("acars.unavailable", { svc = "Hoppie", lib = "socket.http" }, "Hoppie: socket.http unavailable")
+        slm_acars_status_color = 0xFF0000FF
+        slm_acars_status_time  = os.clock()
+        return
+    end
+    local ok_ltn12, ltn12 = pcall(require, "ltn12")
+    if not ok_ltn12 then
+        slm_acars_status_msg   = slm_tr("acars.unavailable", { svc = "Hoppie", lib = "ltn12" }, "Hoppie: ltn12 unavailable")
+        slm_acars_status_color = 0xFF0000FF
+        slm_acars_status_time  = os.clock()
+        return
+    end
+
+    local payload = string.format("logon=%s&from=%s&to=%s&type=%s&packet=%s",
+        slm_hoppie_logon, from, to, msg_type, packet)
+
+    local response_chunks = {}
+    http.TIMEOUT = 5
+    local _, code = http.request{
+        url    = "https://www.hoppie.nl/acars/system/connect.html",
+        method = "POST",
+        headers = {
+            ["Content-Type"]   = "application/x-www-form-urlencoded",
+            ["Content-Length"] = tostring(#payload),
+        },
+        source = ltn12.source.string(payload),
+        sink   = ltn12.sink.table(response_chunks),
+    }
+    local body = table.concat(response_chunks)
+
+    if body and body:match("^ok") then
+        slm_acars_status_msg   = slm_tr("acars.sent", { svc = "Hoppie", to = to }, "Hoppie: loadsheet sent to " .. to)
+        slm_acars_status_color = 0xFF00FF00
+    else
+        local reason = (body and body:match("^error (.+)") or tostring(code or "no response"))
+        slm_acars_status_msg   = slm_tr("acars.error", { svc = "Hoppie", reason = reason }, "Hoppie error: " .. reason)
+        slm_acars_status_color = 0xFF0000FF
+    end
+    slm_acars_status_time = os.clock()
+end
+
+function slm_send_si_acars()
+    if slm_si_key == "" then return end
+    if not loadsheet_ready then
+        slm_acars_status_msg   = slm_tr("acars.not_ready", { svc = "SI" }, "SI: loadsheet not ready")
+        slm_acars_status_color = 0xFF00AAFF
+        slm_acars_status_time  = os.clock()
+        return
+    end
+    local callsign = slm_get_callsign()
+    if callsign == "" then
+        slm_acars_status_msg   = slm_tr("acars.no_callsign", { svc = "SI" }, "SI: no callsign (MCDU or override)")
+        slm_acars_status_color = 0xFF00AAFF
+        slm_acars_status_time  = os.clock()
+        return
+    end
+
+    local from   = callsign:sub(1, 3) .. "OPS"
+    local to     = callsign
+    local packet = slm_build_acars_packet():gsub("@", ""):gsub("\n", "%%0A")
+
+    local ok_http, http = pcall(require, "socket.http")
+    if not ok_http then
+        slm_acars_status_msg   = slm_tr("acars.unavailable", { svc = "SI", lib = "socket.http" }, "SI: socket.http unavailable")
+        slm_acars_status_color = 0xFF0000FF
+        slm_acars_status_time  = os.clock()
+        return
+    end
+    local ok_ltn12, ltn12 = pcall(require, "ltn12")
+    if not ok_ltn12 then
+        slm_acars_status_msg   = slm_tr("acars.unavailable", { svc = "SI", lib = "ltn12" }, "SI: ltn12 unavailable")
+        slm_acars_status_color = 0xFF0000FF
+        slm_acars_status_time  = os.clock()
+        return
+    end
+
+    local payload = string.format("logon=%s&from=%s&to=%s&type=telex&packet=%s",
+        slm_si_key, from, to, packet)
+
+    local response_chunks = {}
+    http.TIMEOUT = 5
+    local _, code = http.request{
+        url    = "https://acars.sayintentions.ai/acars/system/connect.html",
+        method = "POST",
+        headers = {
+            ["Content-Type"]   = "application/x-www-form-urlencoded",
+            ["Content-Length"] = tostring(#payload),
+        },
+        source = ltn12.source.string(payload),
+        sink   = ltn12.sink.table(response_chunks),
+    }
+    local body = table.concat(response_chunks)
+
+    if body and body:match("^ok") then
+        slm_acars_status_msg   = slm_tr("acars.sent", { svc = "SI", to = to }, "SI: loadsheet sent to " .. to)
+        slm_acars_status_color = 0xFF00FF00
+    else
+        local reason = (body and body:match("^error (.+)") or tostring(code or "no response"))
+        slm_acars_status_msg   = slm_tr("acars.error", { svc = "SI", reason = reason }, "SI error: " .. reason)
+        slm_acars_status_color = 0xFF0000FF
+    end
+    slm_acars_status_time = os.clock()
+end
+
+--------------------------------------------------------------------------------
+-- SLM STATE & ACTIONS
+--------------------------------------------------------------------------------
+-- Single contract between the logic and any UI (ImGui today, CEF in SLM 5):
+-- the logic fills SLM_State (rules, phases, progress), and every user action,
+-- whether an ImGui button or an X-Plane command, goes through slm_action().
+-- UI code only reads SLM_State and calls slm_action(); it never decides or
+-- changes the operational state itself.
+SLM_State   = {}
+SLM_ACTIONS = {}
+
+function slm_is_busy()
+    return embark_started or disembark_started
+        or crew_briefing_started or catering_started
+        or cleaning_started or crew_deplane_started
+        or slm_sequence_mode ~= nil
+end
+
+-- What the user is allowed to do right now.
+function slm_update_rules()
+    local S = SLM_State
+    S.has_data     = SLM_Loadsheet_Data ~= nil
+    S.ops_running  = embark_started or disembark_started
+    S.busy         = slm_is_busy()
+    S.beacon_on    = slm_beacon_on
+    S.beacon_hold  = slm_beacon_on and onground == 1
+    if passed_500ft and onground == 0 then
+        S.mode = "in_flight"
+    elseif passed_500ft and onground == 1 then
+        S.mode = "arrival"
+    else
+        S.mode = "departure"
+    end
+    -- Loading a new flight plan is refused mid-flight and while a sequence runs,
+    -- except when a turnaround/night stop is explicitly waiting for the next plan.
+    S.load_blocked = (passed_500ft and onground == 0)
+        or (passed_500ft and onground == 1 and slm_sequence_mode == nil)
+        or (slm_sequence_mode == "departure")
+        or (slm_sequence_mode == "turnaround"
+            and slm_sequence_phase ~= "waiting_for_new_plan")
+        or (slm_sequence_mode == "night_stop"
+            and slm_sequence_phase ~= "waiting_for_new_plan")
+    S.can_start            = not S.busy and S.has_data and not slm_beacon_on
+    S.can_load_last_flight = slm_lf_mode ~= nil
+    S.can_change_location  = not S.busy
+    S.can_topup            = simbrief_data_loaded and onground == 1 and not slm_beacon_on
+    S.can_view_loadsheet   = loadsheet_ready
+    S.can_force_event      = embark_started or disembark_started
+    S.can_force_load       = (embark_started or disembark_started or slm_dev_preboard_running()) and not slm_dev_forcing
+    S.location             = selected_location_group
+    S.own_stairs           = aircraft_has_own_stairs
+    S.dev_mode             = slm_dev_mode
+    S.fsd_available        = slm_fsd_available
+    S.real_fill_excluded   = slm_rf_excluded or slm_rp_excluded
+    S.bpb_option_available = slm_manual_chocks and slm_bpb_detect()
+    S.preset_values        = preset_values
+end
+
+function slm_update_state()
+    slm_update_rules()
+    slm_update_settings_state()
+    slm_update_steps()
+    slm_update_display_state()
+    slm_update_loadsheet_state()
+    if not SLM_State.can_topup and slm_topup_active then slm_topup_active = false end
+end
+
+-- Single entry point for user actions. Returns false for an unknown action.
+function slm_action(name, arg)
+    local fn = SLM_ACTIONS[name]
+    if not fn then
+        logMsg("[SLM] Unknown action: " .. tostring(name))
+        return false
+    end
+    slm_update_rules()
+    fn(arg)
+    slm_update_state()  -- the UI sees the outcome within the same frame
+    return true
+end
+
+do  -- scoped: the file-scope local budget is already near Lua's 200 limit
+local A = SLM_ACTIONS
+
+-- Flight data
+function A.load_simbrief()
+    if SLM_State.load_blocked then return end
+    if slm_sequence_phase == "waiting_for_new_plan" then
+        local prev_ts = last_ofp_timestamp
+        fetch_simbrief_data(simbrief_id)
+        slm_detect_aircraft()
+        if last_ofp_timestamp ~= prev_ts then
+            slm_clear_last_flight()  -- new OFP confirmed: previous flight is done
+        else
+            slm_auto_import_message = slm_tr("plan.same", nil,
+                "Same flight plan detected — please generate a new OFP on SimBrief.")
+        end
+    else
+        fetch_simbrief_data(simbrief_id)
+        slm_detect_aircraft()
+    end
+end
+
+function A.open_dispatch() open_url("https://dispatch.simbrief.com/options/new") end
+
+function A.load_manual() slm_load_manual_data() end
+function A.load_fsd()    slm_load_fsd_data()    end
+
+-- Last flight recovery
+function A.open_last_flight()    slm_lf_confirm_open = true  end
+function A.confirm_last_flight() slm_restore_last_flight()   end
+function A.cancel_last_flight()  slm_lf_confirm_open = false end
+
+-- Stand
+function A.set_location(loc)
+    if SLM_State.ops_running then return end
+    if loc ~= "remote" and loc ~= "terminal" and loc ~= "jetway" then return end
+    selected_location_group = loc
+end
+
+function A.set_own_stairs(on)
+    if SLM_State.ops_running then return end
+    aircraft_has_own_stairs = on
+end
+
+function A.toggle_own_stairs() A.set_own_stairs(not aircraft_has_own_stairs) end
+
+-- Sequences
+function A.start_loading()
+    if not passed_500ft and SLM_State.has_data and not SLM_State.busy then
+        start_departure_sequence()
+    end
+end
+
+function A.start_turnaround()
+    if passed_500ft and SLM_State.has_data and not SLM_State.busy then
+        start_turnaround()
+    end
+end
+
+function A.start_ron()
+    if passed_500ft and SLM_State.has_data and not SLM_State.busy then
+        start_night_stop()
+    end
+end
+
+function A.reset() reset_loads() end
+
+function A.finish_briefing()
+    if not crew_briefing_started then return end  -- the command can fire at any time
+    crew_briefing_started = false
+    crew_briefing_done    = true
+    estimated_time_crew   = nil
+    if briefing_playing then
+        briefing_playing = false
+        stop_sound(sounds.briefing.id)
+    end
+end
+
+function A.start_walkaround() command_once("walkaround/start_stop_cabin") end
+
+-- Fuel top-up
+function A.toggle_topup()
+    slm_topup_active = not slm_topup_active
+    if slm_topup_active then
+        slm_topup_new_target = fuel_total or 0
+    end
+end
+
+function A.set_topup_target(v) slm_topup_new_target = math.floor(v) end
+
+function A.apply_topup(target)
+    if not SLM_State.can_topup then return end
+    slm_apply_fuel_topup(target)
+    slm_topup_active = false
+end
+
+function A.cancel_topup() slm_topup_active = false end
+
+-- Windows, links, tools
+-- Opens the window on the Loadsheet tab: the page switches tab when seq changes.
+function A.view_loadsheet()
+    SLM_State.show_tab = { name = "loadsheet", seq = ((SLM_State.show_tab or {}).seq or 0) + 1 }
+    create_embark_window()
+end
+function A.open_simchecklist() open_simchecklist() end
+function A.open_kofi()         Ko_fi() end
+function A.toggle_sges()       simload_toggle_SGES() end
+function A.dev_cycle()         slm_dev_cycle() end
+function A.dev_force_event(idx) slm_dev_force_event(slm_events_db[idx + 1]) end
+function A.dev_force_load()    slm_dev_force_load() end
+end
+
+--------------------------------------------------------------------------------
+-- SETTINGS (state + actions)
+--------------------------------------------------------------------------------
+-- Every user-editable value, as { get, set, enabled }. SLM_State.settings mirrors
+-- the current values (updated in place, so a reference stays valid), and
+-- slm_action("set", { key = k, value = v }) changes one, with the side effects
+-- and persistence the ImGui widgets always had. "enabled" (optional) mirrors
+-- when the UI allows the change; SLM_State.settings_enabled exposes it.
+SLM_SETTING_KEYS = {}
+SLM_SETTING_DEFS = {}
+
+function slm_setting_def(key, get, set, enabled)
+    SLM_SETTING_DEFS[key] = { get = get, set = set, enabled = enabled }
+    SLM_SETTING_KEYS[#SLM_SETTING_KEYS + 1] = key
+end
+
+function slm_set(key, value)
+    return slm_action("set", { key = key, value = value })
+end
+
+function SLM_ACTIONS.set(arg)
+    local d = SLM_SETTING_DEFS[arg.key]
+    if not d then
+        logMsg("[SLM] Unknown setting: " .. tostring(arg.key))
+        return
+    end
+    if d.enabled and not d.enabled() then return end
+    d.set(arg.value)
+end
+
+function slm_update_settings_state()
+    local S = SLM_State
+    S.settings = S.settings or {}
+    S.settings_enabled = S.settings_enabled or {}
+    for _, key in ipairs(SLM_SETTING_KEYS) do
+        local d = SLM_SETTING_DEFS[key]
+        S.settings[key] = d.get()
+        S.settings_enabled[key] = (d.enabled == nil) or d.enabled()
+    end
+end
+
+do
+    local function idle() return not SLM_State.busy end
+
+    -- Pilot profile & data source
+    slm_setting_def("captain",
+        function() return slm_captain_name end,
+        function(v) slm_captain_name = v; save_user_settings() end, idle)
+    slm_setting_def("data_source",
+        function() return slm_data_source end,
+        function(v) slm_data_source = v; save_user_settings() end, idle)
+    slm_setting_def("simbrief_id",
+        function() return simbrief_id end,
+        function(v) simbrief_id = v; save_user_settings() end,
+        function() return idle() and slm_data_source == "simbrief" end)
+
+    -- ACARS
+    slm_setting_def("acars_output",
+        function() return slm_acars_output end,
+        function(v) slm_acars_output = v; save_user_settings() end, idle)
+    slm_setting_def("hoppie_logon",
+        function() return slm_hoppie_logon end,
+        function(v) slm_hoppie_logon = v; save_user_settings() end, idle)
+    slm_setting_def("hoppie_msgtype",
+        function() return slm_hoppie_msgtype end,
+        function(v) slm_hoppie_msgtype = v; save_user_settings() end, idle)
+    slm_setting_def("si_key",
+        function() return slm_si_key end,
+        function(v) slm_si_key = v; save_user_settings() end, idle)
+
+    -- Units & display
+    slm_setting_def("unit_system",
+        function() return unit_system end,
+        function(v) unit_system = v; save_user_settings() end, idle)
+    slm_setting_def("font_choice",
+        function() return slm_font_choice end,
+        function(v) slm_font_choice = math.max(0, math.min(9, v)); save_user_settings() end)
+    slm_setting_def("language",
+        function() return slm_language end,
+        function(v)
+            if type(v) ~= "string" or not v:match("^%a%a$") then return end
+            slm_language = v:lower()
+            save_user_settings()
+        end)
+    slm_setting_def("ui_scale",
+        function() return slm_ui_scale end,
+        function(v)
+            slm_ui_scale = math.max(80, math.min(150, math.floor(tonumber(v) or 100)))
+            save_user_settings()
+        end)
+
+    -- Operations
+    slm_setting_def("lowcost",
+        function() return slm_lowcost_mode end,
+        function(v)
+            slm_lowcost_mode = v
+            if not v then slm_tankering_mode = false end
+            save_user_settings()
+        end, idle)
+    slm_setting_def("tankering",
+        function() return slm_tankering_mode end,
+        function(v) slm_tankering_mode = v; save_user_settings() end,
+        function() return idle() and slm_lowcost_mode end)
+    slm_setting_def("fuel_first",
+        function() return fuel_first end,
+        function(v) fuel_first = v; save_user_settings() end,
+        function() return idle() and not slm_lowcost_mode end)
+    slm_setting_def("rf_enabled",
+        function() return slm_rf_enabled end,
+        function(v) slm_rf_enabled = v; save_user_settings() end,
+        function() return idle() and not (slm_rf_excluded or slm_rp_excluded) end)
+    slm_setting_def("rp_enabled",
+        function() return slm_rp_enabled end,
+        function(v) slm_rp_enabled = v; save_user_settings() end,
+        function() return idle() and not (slm_rf_excluded or slm_rp_excluded) end)
+    slm_setting_def("skip_crew_briefing",
+        function() return skip_crew_briefing end,
+        function(v) skip_crew_briefing = v; save_user_settings() end, idle)
+    slm_setting_def("manual_chocks",
+        function() return slm_manual_chocks end,
+        function(v) slm_manual_chocks = v; save_user_settings() end, idle)
+    slm_setting_def("bpb_remove_chocks",
+        function() return slm_bpb_remove_chocks end,
+        function(v) slm_bpb_remove_chocks = v; save_user_settings() end, idle)
+    slm_setting_def("no_chocks",
+        function() return slm_no_chocks end,
+        function(v) slm_no_chocks = v; save_user_settings() end, idle)
+
+    -- Simulation
+    slm_setting_def("timing_preset",
+        function() return timing_preset end,
+        function(v)
+            if v == "realistic" then
+                apply_realistic_timings()
+            elseif v == "fast" then
+                apply_fast_timings()
+            elseif v == "veryfast" then
+                apply_veryfast_timings()
+            elseif v == "custom" then
+                timing_preset = "custom"
+                apply_custom_timings()
+            else
+                return
+            end
+            save_user_settings()
+        end, idle)
+    for _, name in ipairs({
+        "pax_time_per_passenger", "pax_time_variation",
+        "disembark_pax_time_per_passenger", "disembark_pax_time_variation",
+        "cargo_time_per_kg_min", "cargo_time_per_kg_max",
+        "disembark_cargo_time_per_kg_min", "disembark_cargo_time_per_kg_max",
+        "fuel_time_per_kg", "catering_time_per_pax", "cleaning_time_per_pax",
+        "crew_briefing_min", "crew_briefing_max", "event_duration_factor",
+    }) do
+        local global = "custom_" .. name
+        slm_setting_def(global,
+            function() return _G[global] end,
+            function(v)
+                _G[global] = v
+                apply_custom_timings()
+                save_user_settings()
+            end, idle)
+    end
+    slm_setting_def("event_chance",
+        function() return slm_event_chance end,
+        function(v) slm_event_chance = v; save_user_settings() end, idle)
+    slm_setting_def("pax_variability",
+        function() return slm_pax_variability_enabled end,
+        function(v) slm_pax_variability_enabled = v; save_user_settings() end, idle)
+
+    -- Audio
+    slm_setting_def("volume",
+        function() return Volume end,
+        function(v)
+            Volume = v
+            set_all_sounds_gain(Volume)
+            update_loop_volumes()
+            save_user_settings()
+        end,
+        function() return not is_muted end)
+    slm_setting_def("muted",
+        function() return is_muted end,
+        function(v)
+            is_muted = v
+            update_loop_volumes()
+            if is_muted then
+                set_all_sounds_gain(0.0001)
+            else
+                set_all_sounds_gain(Volume)
+            end
+        end)
+    slm_setting_def("boarding_music",
+        function() return slm_boarding_music_enabled end,
+        function(v)
+            slm_boarding_music_enabled = v
+            if not v then slm_stop_boarding_music() end
+            slm_init_boarding_music()
+            save_user_settings()
+        end)
+    slm_setting_def("boarding_music_vol",
+        function() return slm_boarding_music_vol end,
+        function(v) slm_boarding_music_vol = v; save_user_settings() end,
+        function() return slm_boarding_music_enabled end)
+
+    -- Web version (SLM 5 plugin only: FlyWithLua has no server, the settings are unused there)
+    slm_setting_def("web_enabled",
+        function() return slm_web_enabled end,
+        function(v) slm_web_enabled = v and true or false; save_user_settings() end)
+    slm_setting_def("web_port",
+        function() return slm_web_port end,
+        function(v)
+            local n = math.floor(tonumber(v) or 0)
+            if n < 1024 or n > 65535 then return end
+            slm_web_port = n
+            save_user_settings()
+        end)
+
+    -- Dev
+    slm_setting_def("dev_mode",
+        function() return slm_dev_mode end,
+        function(v) slm_dev_mode = v and true or false; save_user_settings() end)
+
+    -- Manual flight data form
+    slm_setting_def("manual_pax",
+        function() return slm_manual_pax end,
+        function(v) slm_manual_pax = math.max(0, v) end)
+    slm_setting_def("manual_max_pax",
+        function() return slm_manual_max_pax end,
+        function(v) slm_manual_max_pax = math.max(0, v); save_user_settings() end)
+    slm_setting_def("manual_cargo",
+        function() return slm_manual_cargo end,
+        function(v) slm_manual_cargo = math.max(0, v) end)
+    slm_setting_def("manual_fuel",
+        function() return slm_manual_fuel end,
+        function(v) slm_manual_fuel = math.max(0, v) end)
+    slm_setting_def("manual_fltnum",
+        function() return slm_manual_fltnum end,
+        function(v) slm_manual_fltnum = v end)
+    slm_setting_def("manual_orig",
+        function() return slm_manual_orig end,
+        function(v) slm_manual_orig = v:upper() end)
+    slm_setting_def("manual_dest",
+        function() return slm_manual_dest end,
+        function(v) slm_manual_dest = v:upper() end)
+    slm_setting_def("manual_std",
+        function() return slm_manual_std end,
+        function(v) slm_manual_std = v end)
+    slm_setting_def("manual_sta",
+        function() return slm_manual_sta end,
+        function(v) slm_manual_sta = v end)
+end
+
+--------------------------------------------------------------------------------
+-- DISPLAY STATE
+--------------------------------------------------------------------------------
+-- Texts and figures shown around the steps: update status, flight summary,
+-- top-up figures, ACARS status, flight times, last-flight recap, dev tools.
+SLM_ACARS_TONES = { [0xFF00FF00] = "ok", [0xFF0000FF] = "bad", [0xFF00AAFF] = "amber" }
+
+-- Scheduled vs actual block/flight time row, toned by delay.
+function slm_time_row(label, sched_timestamp, actual_time)
+    local sched_str = timestamp_to_utc_hhmmz(sched_timestamp) or "--:--Z"
+    local act_str = actual_time or "--:--Z"
+    local text = string.format("%-15s | %s | %s", label, sched_str, act_str)
+    if act_str == "--:--Z" then
+        return { text = text, sched = sched_str, act = act_str }
+    end
+    local sh, sm = string.match(sched_str, "(%d+):(%d+)")
+    local ah, am = string.match(act_str, "(%d+):(%d+)")
+    sh, sm, ah, am = tonumber(sh) or 0, tonumber(sm) or 0, tonumber(ah) or 0, tonumber(am) or 0
+    local diff = math.abs((ah * 60 + am) - (sh * 60 + sm))
+    local tone = "ok"
+    if diff > 10 then tone = "bad"
+    elseif diff > 3 then tone = "warn"
+    end
+    return { text = text, tone = tone, sched = sched_str, act = act_str }
+end
+
+function slm_last_flight_lines()
+    local lines = {}
+    local flt = (slm_lf_airline ~= "" and slm_lf_airline or "") ..
+                (slm_lf_fltnum  ~= "" and slm_lf_fltnum  or "")
+    local route = { flight = flt, orig = slm_lf_orig, dest = slm_lf_dest }
+    if flt ~= "" then
+        lines[#lines + 1] = slm_tr("lf.flight", route,
+            string.format("  Flight : %s  (%s -> %s)", flt, slm_lf_orig, slm_lf_dest))
+    else
+        lines[#lines + 1] = slm_tr("lf.route", route, string.format("  Route  : %s -> %s", slm_lf_orig, slm_lf_dest))
+    end
+    local in_flight = slm_lf_mode == "in_flight"
+    lines[#lines + 1] = slm_tr(in_flight and "lf.phase_in_flight" or "lf.phase_arrival", nil,
+        string.format("  Phase  : %s", in_flight and "In Flight" or "Arrival"))
+    local function time_line(key, label, value)
+        if value ~= "--:--Z" then
+            lines[#lines + 1] = slm_tr(key, { time = value }, string.format("  %-6s : %s", label, value))
+        end
+    end
+    time_line("lf.off_block", "BLOFF", slm_lf_block_off)
+    time_line("lf.takeoff",   "T/O",   slm_lf_takeoff)
+    time_line("lf.landing",   "LDG",   slm_lf_landing)
+    time_line("lf.on_block",  "BLON",  slm_lf_block_on)
+    lines[#lines + 1] = slm_tr("lf.loads",
+        { pax = slm_lf_pax, cargo = string.format("%.0f", slm_lf_cargo), unit = unit_system },
+        string.format("  PAX    : %d  |  Cargo : %.0f %s", slm_lf_pax, slm_lf_cargo, unit_system))
+    return lines
+end
+
+function slm_update_display_state()
+    local S = SLM_State
+    S.unit = unit_system
+
+    local update_tone
+    if not slm_update_checked or slm_update_status == "Unable to verify update at this time" then
+        update_tone = "muted"
+    elseif slm_update_available then
+        update_tone = "info"
+    else
+        update_tone = "ok"
+    end
+    S.update_status = { text = slm_update_status, tone = update_tone, tr = SLM_TR[slm_update_status] }
+    S.version = SLM5_VERSION or SLM_VERSION  -- SLM5_VERSION: set by the SLM 5 plugin
+
+    S.summary, S.data_hint = nil, nil
+    if SLM_Loadsheet_Data then
+        local pax_info_str
+        if (SB_pax_count or 0) > 0 and embark_started and not embark_done then
+            pax_info_str = string.format("Schd %d", SB_pax_count)
+        else
+            pax_info_str = tostring(passengers_total)
+        end
+        local cargo_info_str
+        if slm_planned_cargo_display ~= nil and embark_started and not embark_done then
+            cargo_info_str = string.format("Schd %.0f", slm_planned_cargo_display)
+        else
+            cargo_info_str = string.format("%.0f", cargo_total)
+        end
+        S.summary = string.format(
+            "  %s PAX  |  %s %s cargo  |  %.0f %s fuel  |  %s",
+            pax_info_str, cargo_info_str, unit_system, fuel_total, unit_system,
+            SLM_Loadsheet_Data.load_time_str or "--:--Z")
+    elseif slm_data_source == "simbrief" then
+        S.data_hint = "  Please import a new flight or load a saved flight"
+    elseif slm_data_source == "manual" then
+        S.data_hint = "  Please fill in your data and click Load manual data"
+    elseif slm_data_source == "fsd" then
+        S.data_hint = "  Please send your data from Flight Sim Deck"
+    end
+    S.exclusion_message = slm_exclusion_message
+    S.exclusion_tr = SLM_TR[slm_exclusion_message]
+
+    -- Structured flight figures, for UIs that lay them out themselves (SLM 5 web UI).
+    S.flight = nil
+    if SLM_Loadsheet_Data then
+        local L = SLM_Loadsheet_Data
+        local airline = (L.airline and L.airline ~= "N/A") and L.airline or ""
+        local fltnum  = (L.fltnum  and L.fltnum  ~= "N/A") and L.fltnum  or ""
+        S.flight = {
+            callsign      = airline .. fltnum,
+            aircraft_icao = L.aircraft_icao,
+            aircraft_name = L.aircraft_name,
+            reg           = L.reg,
+            orig          = L.orig,
+            dest          = L.dest,
+            orig_name     = L.orig_name,
+            dest_name     = L.dest_name,
+            load_time     = L.load_time_str,
+            pax_total     = passengers_total or 0,
+            pax_loaded    = passengers_loaded or 0,
+            pax_scheduled = SB_pax_count or 0,
+            cargo_total   = cargo_total or 0,
+            cargo_loaded  = cargo_loaded or 0,
+            fuel_total    = fuel_total or 0,
+            fuel_loaded   = fuel_loaded or 0,
+        }
+    end
+
+    S.topup = {
+        active  = slm_topup_active,
+        current = math.floor(from_kg(sim_fuel_total_kg or 0)),
+        plan    = fuel_total or 0,
+        target  = slm_topup_new_target,
+    }
+
+    S.acars_status = nil
+    if slm_acars_output ~= "none" and slm_acars_status_msg
+        and (os.clock() - (slm_acars_status_time or 0)) < SLM_HOPPIE_STATUS_DURATION then
+        S.acars_status = { text = slm_acars_status_msg, tone = SLM_ACARS_TONES[slm_acars_status_color],
+                           tr = SLM_TR[slm_acars_status_msg] }
+    end
+
+    S.last_flight_confirm = slm_lf_confirm_open
+    S.last_flight = nil
+    if slm_lf_confirm_open then
+        local lines = slm_last_flight_lines()
+        S.last_flight = { lines = lines, tr = slm_tr_lines(lines) }
+    end
+
+    S.times = {
+        now  = current_zulu_hhmm(),
+        rows = {
+            slm_time_row("Block-Off (OUT)", sched_out, block_off_time),
+            slm_time_row("Takeoff (OFF)",   sched_off, takeoff_time),
+            slm_time_row("Landing (ON)",    sched_on,  landing_time),
+            slm_time_row("Block-In (IN)",   sched_in,  block_on_time),
+        },
+    }
+
+    local to_arrival = slm_last_sequence_mode == "in_flight" or passed_500ft
+    S.dev_cycle_label = to_arrival and "To Arrival" or "To In Flight"
+    S.dev_cycle_tr = { key = to_arrival and "dev.to_arrival" or "dev.to_in_flight" }
+    S.dev_force_load_label = disembark_started and "Force unloading" or "Force loading"
+    S.dev_force_load_tr = { key = disembark_started and "dev.force_unloading" or "dev.force_loading" }
+    S.dev_events = {}
+    S.dev_events_tr = {}  -- web page: "[category] " + translated event label
+    for i, ev in ipairs(slm_events_db) do
+        S.dev_events[i] = "[" .. ev.category .. "] " .. ev.label
+        S.dev_events_tr[i] = { key = "event." .. tostring(ev.id) .. ".label", vars = { category = ev.category } }
+    end
+end
+
+--------------------------------------------------------------------------------
+-- LOADSHEET (state)
+--------------------------------------------------------------------------------
+-- SLM_State.loadsheet: every figure of the loadsheet, planned vs actual, in the
+-- display unit (same rules as the former ImGui loadsheet window), plus the fuel
+-- tanks and the load distribution read from X-Plane. nil until a flight is loaded.
+do
+    local function row(planned, actual)
+        local diff = actual - planned
+        local pct = (planned > 0) and (diff / planned * 100) or 0
+        return { planned = planned, actual = actual, diff = diff, pct = pct,
+                 tone = (math.abs(pct) <= 5) and "ok" or "warn" }
+    end
+
+    local function weight_row(planned, actual, max)
+        local tone
+        if max <= 0 then tone = nil
+        elseif actual > max then tone = "bad"
+        elseif actual >= max * 0.98 then tone = "warn"
+        else tone = "ok" end
+        return { planned = planned, actual = actual, max = max, margin = max - actual, tone = tone }
+    end
+
+    -- Fuel tanks, read when the loadsheet is issued (aircraft fuelled).
+    -- The aircraft's real tanks: the slots of aircraft.json tank_max when the
+    -- type is described there, else the slots holding fuel (acf_tank_rat is
+    -- not enough: some add-ons declare slots they never use, ex. ToLiss A20N).
+    -- Capacity from tank_max, else ratio x acf_m_fuel_tot when consistent
+    -- with the fuel on board; otherwise none (figure without gauge).
+    -- Sorted left to right (acf_tank_X); centre tanks well aft of the wing
+    -- tanks go on a second row (trim / tail tanks).
+    local TK = {}
+    local function tank_refs()
+        if TK.ok ~= nil then return TK.ok end
+        local function find(p) local ok, t = pcall(dataref_table, p); return ok and t or nil end
+        TK.fuel, TK.rat = find("sim/flightmodel/weight/m_fuel"), find("sim/aircraft/overflow/acf_tank_rat")
+        TK.x, TK.z = find("sim/aircraft/overflow/acf_tank_X"), find("sim/aircraft/overflow/acf_tank_Z")
+        TK.tot = find("sim/aircraft/weight/acf_m_fuel_tot")
+        TK.ok = (TK.fuel and TK.rat and TK.x and TK.z and TK.tot) and true or false
+        return TK.ok
+    end
+
+    function slm_loadsheet_tanks()
+        if not tank_refs() then return nil end
+        local defined = ((slm_aircraft_data and slm_aircraft_data.tank_max) or {})[PLANE_ICAO or ""]
+        local total = tonumber(TK.tot[0]) or 0
+        local list, span = {}, 0
+        for i = 0, 8 do
+            local kg = tonumber(TK.fuel[i]) or 0
+            local real
+            if defined then real = defined[i] ~= nil else real = kg >= 1 end
+            if real then
+                local x = tonumber(TK.x[i]) or 0
+                span = math.max(span, math.abs(x))
+                local cap = defined and defined[i] or (tonumber(TK.rat[i]) or 0) * total
+                if cap < kg * 0.98 then cap = nil end   -- inconsistent capacity: no gauge
+                list[#list + 1] = { index = i, x = x, z = tonumber(TK.z[i]) or 0, kg = kg, cap_kg = cap }
+            end
+        end
+        if #list == 0 then return nil end
+        local centre = math.max(0.05 * span, 0.01)
+        local wing_z
+        for _, t in ipairs(list) do
+            if math.abs(t.x) <= centre then t.side = "C"
+            elseif t.x < 0 then t.side = "L" else t.side = "R" end
+            if t.side ~= "C" then wing_z = math.max(wing_z or t.z, t.z) end
+        end
+        for _, t in ipairs(list) do
+            t.row = (t.side == "C" and wing_z and t.z > wing_z + 0.3 * span) and 2 or 1
+        end
+        -- Rank on each side, 1 = closest to the fuselage (row 2: front to back).
+        for _, side in ipairs({ "L", "R", "C" }) do
+            local s = {}
+            for _, t in ipairs(list) do if t.side == side and t.row == 1 then s[#s + 1] = t end end
+            table.sort(s, function(a, b) return math.abs(a.x) < math.abs(b.x) end)
+            for r, t in ipairs(s) do t.rank, t.count = r, #s end
+        end
+        local aft = {}
+        for _, t in ipairs(list) do if t.row == 2 then aft[#aft + 1] = t end end
+        table.sort(aft, function(a, b) return a.z < b.z end)
+        for r, t in ipairs(aft) do t.rank, t.count = r, #aft end
+        table.sort(list, function(a, b)
+            if a.row ~= b.row then return a.row < b.row end
+            if a.x ~= b.x then return a.x < b.x end
+            return a.index < b.index
+        end)
+        local out, sum, cap = {}, 0, 0
+        for _, t in ipairs(list) do
+            out[#out + 1] = { index = t.index, side = t.side, row = t.row, rank = t.rank, count = t.count,
+                              fuel = from_kg(t.kg), capacity = t.cap_kg and from_kg(t.cap_kg) or nil }
+            sum = sum + t.kg
+            cap = (cap and t.cap_kg) and cap + t.cap_kg or nil
+        end
+        return { list = out, total = from_kg(sum), capacity = cap and from_kg(cap) or nil }
+    end
+
+    -- Load distribution, read from the aircraft when the loadsheet is issued:
+    -- only the zones SLM really fills, so the page draws as many cabin sections
+    -- and holds as the aircraft has.
+    --   Zibo: its 5 cabin zones (pax counts, seats from pax_layout) and 2 holds.
+    --   ToLiss: no cabin zones, only the fwd/aft split of PaxDistrib (read as
+    --     the aft share, as slm_pax_bias sets it), halves of max pax / 2 seats;
+    --     holds = freight only (bags are in ToLiss' 100 kg/pax), OFP unit.
+    --   Aircraft of rp_stations: one section per pax station, one hold per
+    --     cargo station, front to back (acf_stations_ref_z). Pax and seats
+    --     (cabin capacity) shared out like the weight, rounded so they add up
+    --     to the totals; E-Jets: seats of their EFB zones, holds = whole
+    --     station (freight + pax without a seat). A station shared by pax and
+    --     cargo is split in the ratio SLM writes them.
+    -- nil when SLM does not fill the aircraft (Real Payload off, excluded,
+    -- aircraft not described). Returns { cabin = { {id, pax, seats} } | nil,
+    -- holds = { {id, w} } | nil } (w in the display unit).
+    function slm_loadsheet_distrib()
+        if not slm_rp_enabled or slm_rp_excluded then return nil end
+        local function read(path, i)
+            if not XPLMFindDataRef(path) then return nil end
+            local ok, t = pcall(dataref_table, path)
+            return ok and t and tonumber(t[i or 0]) or nil
+        end
+        local function hold_ids(holds)
+            for n, h in ipairs(holds) do
+                h.id = (#holds == 1 and "hold") or (#holds == 2 and (n == 1 and "fwd" or "aft")) or n
+            end
+            return holds
+        end
+        local cabin, holds = {}, {}
+
+        if slm_aircraft_type == "zibo" then
+            if not slm_zibo_caps then slm_zibo_resolve_caps() end
+            for z = 1, 5 do
+                cabin[z] = { id = "0" .. string.char(64 + z),
+                             pax = math.floor((read("laminar/B738/tab/zone" .. z .. "_payload") or 0) + 0.5),
+                             seats = slm_zibo_caps[z] }
+            end
+            for c = 1, 2 do
+                holds[c] = { w = from_kg(read("laminar/B738/tab/zone_cargo" .. c .. "_payload") or 0) }
+            end
+
+        elseif slm_aircraft_type == "toliss" then
+            local n = math.floor((read("AirbusFBW/NoPax") or 0) + 0.5)
+            local pd = math.max(0, math.min(1, read("AirbusFBW/PaxDistrib") or 0.5))
+            local prof = slm_toliss_cg_profile and slm_toliss_cg_profile()
+            local half = prof and tonumber(prof.max_pax) and tonumber(prof.max_pax) / 2
+            local aft = math.floor(n * pd + 0.5)
+            cabin[1] = { id = "fwd", pax = n - aft, seats = half and math.ceil(half) }
+            cabin[2] = { id = "aft", pax = aft, seats = half and math.floor(half) }
+            holds[1] = { w = read("AirbusFBW/FwdCargo") or 0 }   -- ToLiss unit = OFP unit
+            holds[2] = { w = read("AirbusFBW/AftCargo") or 0 }
+
+        else
+            local map = (slm_aircraft_data.rp_stations or {})[PLANE_ICAO or ""]
+            if not map or not XPLMFindDataRef("sim/flightmodel/weight/m_stations") then return nil end
+            local kg  = dataref_table("sim/flightmodel/weight/m_stations")
+            local pz  = XPLMFindDataRef("sim/aircraft/weight/acf_stations_ref_z")
+                        and dataref_table("sim/aircraft/weight/acf_stations_ref_z")
+            local pax_idx, cargo_idx = map.pax or {}, map.cargo or {}
+            local function share(list, weights, i)
+                local sum, w = 0, nil
+                for j, k in ipairs(list) do
+                    sum = sum + ((weights and weights[j]) or 1)
+                    if k == i then w = (weights and weights[j]) or 1 end
+                end
+                return w and w / sum or 0
+            end
+            -- Pax part of each station (kg), in the ratio SLM writes pax and cargo.
+            local pax_kg_total   = (SLM_real_pax or 0) * (SB_pax_weight or 0)
+            local cargo_kg_total = to_kg(SLM_real_cargo or 0)
+            local pax_shares     = slm_rp_pax_shares(map, pax_idx)
+            local function split(i)
+                local p = pax_kg_total * (pax_shares[i] or 0)
+                local c = cargo_kg_total * share(cargo_idx, slm_rp_cargo_weights(map), i)
+                local on = math.max(0, tonumber(kg[i]) or 0)
+                if p + c <= 0 then return 0, 0 end
+                return on * p / (p + c), on * c / (p + c)
+            end
+            local function z_of(i) return pz and tonumber(pz[i]) or i end
+            -- Whole numbers that keep the rounded total (largest remainder).
+            local function apportion(vals)
+                local total, out, order = 0, {}, {}
+                for j, v in ipairs(vals) do total, out[j], order[j] = total + v, math.floor(v), j end
+                local left = math.floor(total + 0.5)
+                for j = 1, #vals do left = left - out[j] end
+                table.sort(order, function(a, b)
+                    local ra, rb = vals[a] - out[a], vals[b] - out[b]
+                    if ra ~= rb then return ra > rb end
+                    return a < b
+                end)
+                for r = 1, left do out[order[r]] = out[order[r]] + 1 end
+                return out
+            end
+            local pax_w = SB_pax_weight or 0
+            local cap = slm_pax_cabin_capacity()
+            local perf = slm_ejet_model()
+            local pax_n, seat_n = {}, {}
+            for j, i in ipairs(pax_idx) do
+                pax_n[j]  = (pax_w > 0) and (split(i) / pax_w) or 0
+                seat_n[j] = (cap or 0) * (pax_shares[i] or 0)
+            end
+            pax_n, seat_n = apportion(pax_n), apportion(seat_n)
+            if perf then
+                cap = perf.seats
+                for j = 1, #pax_idx do seat_n[j] = perf.pax[j].seats end
+            end
+            for j, i in ipairs(pax_idx) do
+                cabin[#cabin + 1] = { z = z_of(i), pax = pax_n[j], seats = cap and seat_n[j] or nil }
+            end
+            for _, i in ipairs(cargo_idx) do
+                local _, c = split(i)
+                if perf then c = math.max(0, tonumber(kg[i]) or 0) end
+                holds[#holds + 1] = { z = z_of(i), w = from_kg(c) }
+            end
+            table.sort(cabin, function(a, b) return a.z < b.z end)
+            table.sort(holds, function(a, b) return a.z < b.z end)
+            for n, s in ipairs(cabin) do s.id, s.z = "0" .. string.char(64 + n), nil end
+            for _, h in ipairs(holds) do h.z = nil end
+        end
+
+        local pax, freight = 0, 0
+        for _, s in ipairs(cabin) do
+            pax = pax + s.pax
+            if s.seats and s.seats < s.pax then s.seats = nil end   -- inconsistent: no gauge
+        end
+        for _, h in ipairs(holds) do freight = freight + h.w end
+        local D = { cabin = (pax > 0) and cabin or nil, holds = (freight >= 1) and hold_ids(holds) or nil }
+        return (D.cabin or D.holds) and D or nil
+    end
+
+    -- The loadsheet exists once issued (end of loading, loadsheet_ready) and is
+    -- rebuilt only when one of its figures changes (ex. a fuel top-up), not
+    -- every frame: the page receives it once, the tanks are read then.
+    local issued_key
+
+    function slm_update_loadsheet_state()
+        local d = SLM_Loadsheet_Data
+        if not (loadsheet_ready and d) then
+            SLM_State.loadsheet, issued_key = nil, nil
+            return
+        end
+        local key = table.concat({ tostring(d), tostring(SLM_real_pax), tostring(SLM_real_cargo),
+            tostring(SLM_real_payload), tostring(SLM_real_fuel_block), unit_system,
+            tostring(d.zfwcg), tostring(d.towcg), tostring(slm_load_controller), tostring(d.captain) }, "|")
+        if key == issued_key and SLM_State.loadsheet then return end
+        issued_key = key
+        slm_build_loadsheet_state(d)
+    end
+
+    function slm_build_loadsheet_state(d)
+        local manual = d.slm_source == "manual" or d.slm_source == "fsd"
+        local L = { source = d.slm_source or "simbrief", manual = manual }
+
+        L.flight = {
+            airline = d.airline, fltnum = d.fltnum, date = d.date,
+            aircraft_name = d.aircraft_name, aircraft_icao = d.aircraft_icao, reg = d.reg,
+            orig = d.orig, dest = d.dest, altn = (not manual) and d.altn or nil,
+            orig_name = d.orig_name,
+            std = d.std, sta = d.sta,
+            dispatcher = d.dispatcher, captain = d.captain,
+            -- Signed by a Ko-fi supporter (drawn when the loading ends).
+            prepared_by = slm_load_controller or d.manual_controller
+                or load_controllers[math.random(1, #load_controllers)],
+        }
+
+        -- Passengers
+        local pax_planned = tonumber(d.pax_total) or 0
+        local pax_actual  = tonumber(SLM_real_pax) or pax_planned
+        local pax_w       = tonumber(d.pax_weight) or 0
+        L.pax  = row(pax_planned, pax_actual)
+        L.body = row(pax_planned * pax_w, pax_actual * pax_w)
+
+        -- Cargo: planned baggage = cargo - freight; actual baggage follows the pax ratio
+        local cargo_planned   = tonumber(d.cargo_total) or 0
+        local freight_planned = tonumber(d.freight_added) or 0
+        local bag_planned     = math.floor(cargo_planned - freight_planned + 0.5)
+        local cargo_actual    = tonumber(SLM_real_cargo) or cargo_planned
+        local ratio           = (pax_planned > 0) and (pax_actual / pax_planned) or 1
+        local bag_actual      = math.floor(bag_planned * ratio + 0.5)
+        L.baggage = (not manual) and row(bag_planned, bag_actual) or nil
+        -- Manual / FSD data has no baggage split: all the cargo is freight.
+        if manual then
+            L.freight = row(cargo_planned, cargo_actual)
+        else
+            L.freight = row(freight_planned, math.max(0, cargo_actual - bag_actual))
+        end
+        L.cargo   = row(cargo_planned, cargo_actual)
+
+        -- Payload, weights, fuel
+        local oew = tonumber(d.oew) or 0
+        local payload_planned = tonumber(d.payload_planned) or 0
+        local payload_actual  = tonumber(SLM_real_payload) or 0
+        L.payload = row(payload_planned, payload_actual)
+
+        local fuel_planned = tonumber(d.fuel_block) or 0
+        L.fuel = row(fuel_planned, tonumber(SLM_real_fuel_block) or fuel_planned)
+        if not manual then
+            local fb_actual = tonumber(SLM_real_fuel_block) or 0
+            local taxi, land = tonumber(d.fuel_taxi) or 0, tonumber(d.fuel_land) or 0
+            local est_zfw, est_tow, est_ldw = tonumber(d.est_zfw) or 0, tonumber(d.est_tow) or 0, tonumber(d.est_ldw) or 0
+            local zfw_p = (est_zfw > 0) and est_zfw or (oew + payload_planned)
+            local tow_p = (est_tow > 0) and est_tow or (zfw_p + (fuel_planned - taxi))
+            local ldw_p = (est_ldw > 0) and est_ldw or (zfw_p + land)
+            local zfw_a = oew + payload_actual
+            L.oew = oew
+            L.zfw = weight_row(zfw_p, zfw_a, tonumber(d.max_zfw) or 0)
+            L.tow = weight_row(tow_p, zfw_a + (fb_actual - taxi), tonumber(d.max_tow) or 0)
+            L.ldw = weight_row(ldw_p, zfw_a + land, tonumber(d.max_ldw) or 0)
+            L.zfwcg = tonumber(d.zfwcg)
+            L.towcg = tonumber(d.towcg)
+            local perf = L.towcg and slm_ejet_model()
+            L.cg_limits = perf and { fwd = perf.fwd, aft = perf.aft } or nil
+            L.fuel_plan = {
+                taxi = tonumber(d.fuel_taxi), trip = tonumber(d.fuel_trip), cont = tonumber(d.fuel_cont),
+                altn = tonumber(d.fuel_altn), reserve = tonumber(d.fuel_reserve),
+            }
+        end
+        L.tanks = slm_loadsheet_tanks()
+        L.distrib = slm_loadsheet_distrib()
+        SLM_State.loadsheet = L
+    end
+end
+
+--------------------------------------------------------------------------------
+-- SEQUENCE STEPS (state)
+--------------------------------------------------------------------------------
+-- SLM_State.steps is the ordered, display-ready list for the current sequence:
+--   { kind = "newline" }
+--   { kind = "text", tone = <tone|nil>, lines = { "..." } }
+--   { kind = "step", status = "done" | "pending", label = "..." }
+--   { kind = "step", status = "active", header = "...",
+--     bar     = { frac = 0..1, tone = <tone|nil> } | nil,
+--     counter = "..." | nil,            -- shown right of the progress bar
+--     blocks  = { { tone = <tone|nil>, lines = { "..." } }
+--               | { segments = { { text = "...", tone = <tone|nil> }, ... } } },
+--     buttons = { { label = "...", action = "<slm_action name>" } } | nil }
+-- Quantity steps (passengers, cargo, fuel) also carry, for UIs that lay the
+-- figures out themselves (SLM 5 web UI; ImGui ignores them):
+--     id = "pax" | "cargo" | "fuel", title = "..." (name without figures),
+--     figure = { actual = n, schd = n, unit = "pax" | unit_system }
+-- Tones are semantic ("done", "pending", "event", "muted", "info", "ok", "warn",
+-- "eta"); each UI maps them to its own colours (SLM_TONE_COLORS for ImGui).
+do  -- scoped helpers: the file-scope local budget is already near Lua's 200 limit
+local H = {}
+
+function H.split_lines(text, prefix)
+    local lines = {}
+    for line in (text .. "\n"):gmatch("(.-)\n") do
+        lines[#lines + 1] = prefix .. line
+    end
+    return lines
+end
+
+-- Translatable text (#SL17): English for ImGui, language-file key and
+-- variables for the web page. Blocks built from them carry the list in `tr`.
+function H.tx(key, vars, text) return { key = key, vars = vars, text = text } end
+
+function H.block(tone, prefix, parts)
+    local lines = {}
+    for _, p in ipairs(parts) do
+        for _, line in ipairs(H.split_lines(p.text, prefix)) do lines[#lines + 1] = line end
+    end
+    return { tone = tone, lines = lines, tr = parts }
+end
+
+function H.event(ev)
+    return H.tx("event." .. tostring(ev.id) .. ".desc", nil, ev.description)
+end
+
+-- Rounded-up minutes, without the "< 1 minute" case (arrival rows).
+function H.eta_minutes(eta_seconds)
+    local mins = math.ceil(eta_seconds / 60)
+    return H.tx(mins > 1 and "eta.minutes" or "eta.minute", { min = mins },
+        string.format("Estimated: %d minute%s", mins, mins > 1 and "s" or ""))
+end
+
+function H.eta(eta_seconds)
+    if eta_seconds < 60 then
+        return H.tx("eta.lt_minute", nil, "Estimated: < 1 minute")
+    end
+    return H.eta_minutes(eta_seconds)
+end
+
+-- Estimated line of an active step, as its own block.
+function H.eta_block(part) return H.block(nil, "   ", { part }) end
+
+-- Step names (English shown by ImGui -> language-file key of the web page).
+H.NAME_KEYS = {
+    ["Passenger Deboarding"]             = "step.pax_deboarding",
+    ["Cargo Unloading"]                  = "step.cargo_unloading",
+    ["Cabin Cleaning"]                   = "step.cleaning",
+    ["Crew Deplane"]                     = "step.crew_deplane",
+    ["Flight Plan Update"]               = "step.flight_plan",
+    ["Boarding Phase"]                   = "step.boarding_phase",
+    ["Briefing & Rapid Cleaning"]        = "step.briefing_cleaning",
+    ["Crew Briefing"]                    = "step.briefing",
+    ["Catering"]                         = "step.catering",
+    ["Fuel Loading"]                     = "step.fuel",
+    ["Fuel already at sufficient level"] = "step.fuel_sufficient",
+    ["Passenger Boarding"]               = "step.pax_boarding",
+    ["Cargo Loading"]                    = "step.cargo_loading",
+}
+function H.name(it, name)
+    local key = H.NAME_KEYS[name]
+    if key then it.name_tr = { key = key } end
+    return it
+end
+
+-- "Waiting: 2 min 5 sec remaining" (catering) / "Hold: ..." (arrival events).
+function H.wait_ms(kind, rem)
+    local hm, hs = math.floor(rem / 60), rem % 60
+    local label = (kind == "hold") and "Hold" or "Waiting"
+    if hm > 0 then
+        return H.tx(kind .. ".min_sec", { min = hm, sec = hs },
+            string.format("%s: %d min %d sec remaining", label, hm, hs))
+    end
+    return H.tx(kind .. ".sec", { sec = hs }, string.format("%s: %d sec remaining", label, hs))
+end
+
+function H.remaining_text(rem)
+    return rem >= 60
+        and string.format("~%dm%02ds", math.floor(rem / 60), math.floor(rem % 60))
+        or  string.format("~%ds", math.ceil(rem))
+end
+
+function H.add(items, item) items[#items + 1] = item; return item end
+
+function H.figure(it, id, title, actual, schd, unit)
+    it.id, it.title = id, title
+    it.figure = { actual = actual, schd = schd, unit = unit }
+    return H.name(it, title)
+end
+function H.newline(items) H.add(items, { kind = "newline" }) end
+
+-- Generic step row: done / pending, or active with optional bar, event, message, ETA.
+-- message and event_msg are lists of translatable texts (H.tx).
+function H.step(items, label, status, frac, eta_seconds, message, event_msg)
+    if status ~= "active" then
+        return H.name(H.add(items, { kind = "step", status = (status == "done") and "done" or "pending", label = label }), label)
+    end
+    local it = H.name(H.add(items, { kind = "step", status = "active", header = ">> " .. label, blocks = {} }), label)
+    if frac ~= nil then it.bar = { frac = frac } end
+    if event_msg then it.blocks[#it.blocks + 1] = H.block("event", "  ", event_msg) end
+    if message then it.blocks[#it.blocks + 1] = H.block("muted", "   ", message) end
+    if eta_seconds then it.blocks[#it.blocks + 1] = H.eta_block(H.eta(eta_seconds)) end
+    return it
+end
+
+function H.arrival_steps(items, mode)
+    if mode == "turnaround" or mode == "night_stop" then
+        if disembark_done then
+            H.step(items, "Passenger Deboarding", "done")
+            H.newline(items)
+            H.step(items, "Cargo Unloading",      "done")
+        elseif disembark_started then
+
+            if arr_passengers_total <= 0 or passengers_unloaded >= arr_passengers_total then  -- nothing to unload = done
+                H.figure(H.step(items, "Passenger Deboarding", "done"), "pax", "Passenger Deboarding",
+                    arr_passengers_total, arr_passengers_total, "pax")
+            else
+                local pax_cur = arr_passengers_total - passengers_unloaded
+                local frac_pax = (arr_passengers_total > 0) and math.min(1, pax_cur / arr_passengers_total) or 0
+                local it = H.add(items, { kind = "step", status = "active", header = ">> Passenger Deboarding",
+                    bar = { frac = frac_pax }, blocks = {},
+                    counter = string.format("%d / %d PAX", pax_cur, arr_passengers_total) })
+                H.figure(it, "pax", "Passenger Deboarding", passengers_unloaded, arr_passengers_total, "pax")
+                if slm_event_arr_active and slm_event_arr_active.category == "pax" then
+                    local parts = { H.event(slm_event_arr_active) }
+                    if slm_event_delay_until and os.clock() < slm_event_delay_until then
+                        parts[2] = H.wait_ms("hold", math.ceil(slm_event_delay_until - os.clock()))
+                    end
+                    it.blocks[#it.blocks + 1] = H.block("event", "  ", parts)
+                end
+                if estimated_time_pax and estimated_time_pax > 0 then
+                    it.blocks[#it.blocks + 1] = H.eta_block(H.eta_minutes(estimated_time_pax))
+                end
+            end
+            H.newline(items)
+
+            if arr_cargo_total <= 0 or cargo_unloaded >= arr_cargo_total then  -- nothing to unload = done
+                H.figure(H.step(items, "Cargo Unloading", "done"), "cargo", "Cargo Unloading",
+                    arr_cargo_total, arr_cargo_total, unit_system)
+            else
+                local cargo_cur = arr_cargo_total - cargo_unloaded
+                local frac_cargo = (arr_cargo_total > 0) and math.min(1, cargo_cur / arr_cargo_total) or 0
+                local it = H.add(items, { kind = "step", status = "active", header = ">> Cargo Unloading",
+                    bar = { frac = frac_cargo }, blocks = {},
+                    counter = string.format("%.0f / %.0f %s", cargo_cur, arr_cargo_total, unit_system) })
+                H.figure(it, "cargo", "Cargo Unloading", cargo_unloaded, arr_cargo_total, unit_system)
+                if slm_event_arr_active and slm_event_arr_active.category == "cargo" then
+                    it.blocks[#it.blocks + 1] = H.block("event", "  ", { H.event(slm_event_arr_active) })
+                end
+                if estimated_time_cargo and estimated_time_cargo > 0 then
+                    it.blocks[#it.blocks + 1] = H.eta_block(H.eta_minutes(estimated_time_cargo))
+                end
+            end
+        else
+            H.figure(H.step(items, "Passenger Deboarding", "pending"), "pax", "Passenger Deboarding",
+                0, arr_passengers_total, "pax")
+            H.figure(H.step(items, "Cargo Unloading",      "pending"), "cargo", "Cargo Unloading",
+                0, arr_cargo_total, unit_system)
+        end
+        H.newline(items)
+    end
+
+    if mode == "night_stop" or (mode == "turnaround" and not slm_lowcost_mode) then
+        if cleaning_done then
+            H.step(items, "Cabin Cleaning", "done")
+        elseif cleaning_started then
+            local frac = (cleaning_duration and cleaning_duration > 0) and
+                math.min(1.0, (os.clock() - cleaning_start_time) / cleaning_duration) or 0
+            H.step(items, "Cabin Cleaning", "active", frac, estimated_time_cleaning)
+        else
+            H.step(items, "Cabin Cleaning", "pending")
+        end
+        H.newline(items)
+    end
+
+    if mode == "night_stop" then
+        if crew_deplane_done then
+            H.step(items, "Crew Deplane", "done")
+        elseif crew_deplane_started then
+            local frac = (crew_deplane_duration and crew_deplane_duration > 0) and
+                math.min(1.0, (os.clock() - crew_deplane_start_time) / crew_deplane_duration) or 0
+            H.step(items, "Crew Deplane", "active", frac, nil,
+                { H.tx("step.msg.crew_deplaning", nil, "Crew is deplaning...") })
+        else
+            H.step(items, "Crew Deplane", "pending")
+        end
+        H.newline(items)
+    end
+
+    if mode == "turnaround" then
+        local fp_status
+        if slm_new_plan_imported or (slm_data_source ~= "simbrief" and SLM_Loadsheet_Data ~= nil) then
+            fp_status = "done"
+        elseif slm_sequence_phase == "waiting_for_new_plan" then
+            fp_status = "active"
+        else
+            fp_status = "pending"
+        end
+        H.step(items, "Flight Plan Update", fp_status)
+        if slm_sequence_phase == "waiting_for_new_plan" then
+            local parts = {}
+            if slm_data_source == "simbrief" then
+                parts = { H.tx("plan.wait_simbrief", nil, "No new flight plan detected.\n"
+                    .. "Please generate your next flight on SimBrief,\nthen click 'Load SimBrief Data'.") }
+            elseif slm_data_source == "manual" then
+                parts = { H.tx("plan.wait_manual", nil, "Enter your next flight data\nand click Load manual data.") }
+            elseif slm_data_source == "fsd" then
+                parts = { H.tx("plan.wait_fsd", nil,
+                    "Send your next flight data from Flight Sim Deck,\nthen click Load FSD data.") }
+            end
+            local block = H.block("info", "  ", parts)
+            block.kind = "text"
+            H.add(items, block)
+        elseif slm_auto_import_message then
+            local tone = (slm_sequence_phase == "waiting_for_new_plan") and "info" or "ok"
+            H.add(items, { kind = "text", tone = tone, lines = H.split_lines(slm_auto_import_message, "  "),
+                tr = slm_tr_lines({ slm_auto_import_message }) })
+        end
+        if not slm_new_plan_imported then
+            H.newline(items)
+            H.add(items, { kind = "text", tone = "info", lines = { "  -- Once flight plan is loaded --" },
+                tr = { H.tx("plan.once_loaded", nil, "-- Once flight plan is loaded --") } })
+            H.newline(items)
+            H.step(items, "Boarding Phase", "pending")
+        end
+        H.newline(items)
+    end
+end
+
+function H.preboard_steps(items)
+    local briefing_label = slm_lc_cleaning_required and "Briefing & Rapid Cleaning" or "Crew Briefing"
+    if crew_briefing_done then
+        H.step(items, briefing_label, "done")
+    elseif crew_briefing_started then
+        local frac = (crew_briefing_duration and crew_briefing_duration > 0) and
+            math.min(1.0, (os.clock() - crew_briefing_start_time) / crew_briefing_duration) or 0
+        local it = H.step(items, briefing_label, "active", frac, estimated_time_crew,
+            { H.tx(slm_walkaround_available and "step.msg.briefing_walkaround" or "step.msg.briefing", nil,
+                "Crew is arriving and conducting briefing.\nTime to review your flight plan"
+                .. (slm_walkaround_available and " & Walkaround." or ".")) })
+        it.buttons = { { label = "Finish Briefing", action = "finish_briefing", tr = { key = "btn.finish_briefing" } } }
+        if slm_walkaround_available then
+            it.buttons[2] = { label = "Start Walkaround", action = "start_walkaround", tr = { key = "btn.start_walkaround" } }
+        end
+    else
+        H.step(items, briefing_label, "pending")
+    end
+    H.newline(items)
+
+    if not slm_lowcost_mode or not slm_lc_cleaning_required then
+        if catering_done then
+            H.step(items, "Catering", "done")
+        elseif catering_started then
+            local frac = (catering_duration and catering_duration > 0) and
+                math.max(0.0, math.min(1.0, (os.clock() - catering_start_time) / catering_duration)) or 0
+            local cat_ev_msg = nil
+            if slm_event_dep_active and slm_event_dep_active.category == "catering" then
+                cat_ev_msg = { H.event(slm_event_dep_active) }
+                if slm_event_dep_active.effect == "delay_start"
+                   and catering_start_time and os.clock() < catering_start_time then
+                    cat_ev_msg[2] = H.wait_ms("wait", math.ceil(catering_start_time - os.clock()))
+                end
+            end
+            H.step(items, "Catering", "active", frac, estimated_time_catering, nil, cat_ev_msg)
+        else
+            H.step(items, "Catering", "pending")
+        end
+        H.newline(items)
+    end
+end
+
+function H.fuel_step(items)
+    local fuel_already_at_target = (fuel_total or 0) > 0 and ((fuel_total or 0) - (fuel_loaded or 0) == 0) and not fuel_loading
+    local fuel_done_now = embark_done or (embark_started and (fuel_done or fuel_already_at_target))
+    if fuel_done_now then
+        local fuel_label = slm_rf_skipped
+            and "Fuel already at sufficient level"
+            or  string.format("Fuel Loading (%.0f %s)", fuel_total, unit_system)
+        H.figure(H.step(items, fuel_label, "done"), "fuel",
+            slm_rf_skipped and fuel_label or "Fuel Loading", fuel_loaded, fuel_total, unit_system)
+    elseif embark_started then
+        local fuel_fraction
+        local bar_tone = nil
+        if slm_defuel_performed then
+            local denom = from_kg(slm_initial_fuel_kg or 1)
+            fuel_fraction = (denom > 0) and (fuel_loaded / denom) or 0
+            bar_tone = "event"
+        else
+            fuel_fraction = (fuel_total > 0) and (fuel_loaded / fuel_total) or 0
+        end
+        fuel_fraction = math.max(0, math.min(1, fuel_fraction))
+        local it = H.add(items, { kind = "step", status = "active",
+            header  = string.format(">> Fuel Loading - Schd %.0f %s", fuel_total, unit_system),
+            bar     = { frac = fuel_fraction, tone = bar_tone },
+            counter = string.format("%.0f %s", fuel_loaded, unit_system),
+            blocks  = {} })
+        H.figure(it, "fuel", "Fuel Loading", fuel_loaded, fuel_total, unit_system)
+        if slm_event_dep_active and slm_event_dep_active.category == "fuel" then
+            it.blocks[#it.blocks + 1] = H.block("event", "  ", { H.event(slm_event_dep_active) })
+        end
+        local part
+        if fuel_loading then
+            if slm_event_fuel_delay_until and os.clock() < slm_event_fuel_delay_until then
+                local rem = H.remaining_text(math.max(0, slm_event_fuel_delay_until - os.clock()))
+                part = H.tx("wait.fuel_truck_rem", { rem = rem }, "Waiting for fuel truck: " .. rem)
+            elseif fuel_ready_time and os.clock() < fuel_ready_time then
+                part = H.tx("wait.fuel_truck", nil, "Waiting for fuel truck...")
+            elseif estimated_time_fuel then
+                local fuel_remaining = math.abs(fuel_total - fuel_loaded)
+                part = H.eta(fuel_remaining * (fuel_time_per_unit or 1))
+            else
+                part = H.tx("eta.none", nil, "Estimated: --")
+            end
+        else
+            part = H.tx("eta.waiting", nil, "Estimated: Waiting")
+        end
+        it.blocks[#it.blocks + 1] = H.eta_block(part)
+    else
+        H.figure(H.step(items, "Fuel Loading", "pending"), "fuel", "Fuel Loading",
+            fuel_loaded, fuel_total, unit_system)
+    end
+    H.newline(items)
+end
+
+function H.pax_step(items)
+    local pax_cur = math.max(0, math.min(passengers_loaded, passengers_total))
+    local pax_done_now = embark_done
+        or (embark_started and (passengers_total == 0 or pax_cur >= passengers_total))
+    local pax_concealed = (SB_pax_count or 0) > 0
+    if pax_done_now then
+        H.figure(H.step(items, string.format("Passenger Boarding (%d PAX)", passengers_total), "done"),
+            "pax", "Passenger Boarding", passengers_total,
+            pax_concealed and SB_pax_count or passengers_total, "pax")
+    elseif embark_started then
+        local frac = (passengers_total > 0) and (pax_cur / passengers_total) or 0
+        local it = H.add(items, { kind = "step", status = "active",
+            header  = pax_concealed and string.format(">> Passenger Boarding - Schd %d Pax", SB_pax_count)
+                      or ">> Passenger Boarding",
+            bar     = { frac = frac },
+            counter = pax_concealed and string.format("%d PAX", pax_cur)
+                      or string.format("%d / %d PAX", pax_cur, passengers_total),
+            blocks  = {} })
+        H.figure(it, "pax", "Passenger Boarding", pax_cur,
+            pax_concealed and SB_pax_count or passengers_total, "pax")
+        if slm_event_dep_active and slm_event_dep_active.category == "pax" then
+            it.blocks[#it.blocks + 1] = H.block("event", "  ", { H.event(slm_event_dep_active) })
+        end
+        local pax_event_waiting = slm_event_dep_active
+            and slm_event_dep_active.category == "pax"
+            and ((slm_event_delay_until and os.clock() < slm_event_delay_until)
+              or (slm_event_pause_until and os.clock() < slm_event_pause_until))
+        if pax_event_waiting then
+            local ev_t = (slm_event_delay_until and os.clock() < slm_event_delay_until)
+                and slm_event_delay_until or slm_event_pause_until
+            local rem = H.remaining_text(math.max(0, ev_t - os.clock()))
+            it.blocks[#it.blocks + 1] = H.eta_block(H.tx("wait.rem", { rem = rem }, "Waiting: " .. rem))
+        elseif not pax_load_started then
+            if bus_triggered and pax_trigger_time then
+                local t = pax_trigger_time - os.clock()
+                it.blocks[#it.blocks + 1] = { segments = {
+                    { text = "   Estimated: ", tr = { key = "eta.label" } },
+                    { text = t > 60 and "Boarding soon" or "Boarding any moment", tone = "warn",
+                      tr = { key = t > 60 and "eta.boarding_soon" or "eta.boarding_any_moment" } } } }
+            else
+                it.blocks[#it.blocks + 1] = H.eta_block(H.tx("eta.boarding_later", nil, "Estimated: Boarding later"))
+            end
+        elseif estimated_time_pax and estimated_time_pax > 0 then
+            it.blocks[#it.blocks + 1] = H.eta_block(H.eta(estimated_time_pax))
+        else
+            it.blocks[#it.blocks + 1] = H.eta_block(H.tx("eta.none", nil, "Estimated: --"))
+        end
+    else
+        H.figure(H.step(items, "Passenger Boarding", "pending"), "pax", "Passenger Boarding",
+            0, pax_concealed and SB_pax_count or passengers_total, "pax")
+    end
+    H.newline(items)
+end
+
+function H.cargo_step(items)
+    local cargo_cur = math.max(0, math.min(cargo_loaded, cargo_total))
+    -- During bag-removal penalty: animate cargo_cur from frozen value down to slm_effective_cargo
+    local penalty_active = slm_cargo_penalty_until and os.clock() < slm_cargo_penalty_until
+    if penalty_active and slm_cargo_penalty_start and slm_effective_cargo then
+        local total_d   = math.max(1, slm_cargo_penalty_until - slm_cargo_penalty_start)
+        local elapsed_d = os.clock() - slm_cargo_penalty_start
+        local t = math.min(1, math.max(0, elapsed_d / total_d))
+        cargo_cur = cargo_cur + (slm_effective_cargo - cargo_cur) * t
+    end
+    local cargo_done_now = (embark_done
+        or (embark_started and (cargo_total == 0 or cargo_cur >= cargo_total)))
+        and not penalty_active
+    local cargo_concealed = slm_planned_cargo_display ~= nil
+                            and embark_started and not embark_done
+    if cargo_done_now then
+        H.figure(H.step(items, string.format("Cargo Loading (%.0f %s)", cargo_total, unit_system), "done"),
+            "cargo", "Cargo Loading", cargo_total, cargo_total, unit_system)
+    elseif embark_started then
+        local frac = (cargo_total > 0) and (cargo_cur / cargo_total) or 0
+        local counter
+        if cargo_concealed then
+            counter = string.format("%.0f %s", cargo_cur, unit_system)
+        else
+            local cargo_denom = (penalty_active and slm_effective_cargo) or cargo_total
+            counter = string.format("%.0f / %.0f %s", cargo_cur, cargo_denom, unit_system)
+        end
+        local it = H.add(items, { kind = "step", status = "active",
+            header  = cargo_concealed
+                      and string.format(">> Cargo Loading - Schd %.0f %s", slm_planned_cargo_display, unit_system)
+                      or ">> Cargo Loading",
+            bar     = { frac = frac },
+            counter = counter,
+            blocks  = {} })
+        H.figure(it, "cargo", "Cargo Loading", cargo_cur,
+            cargo_concealed and slm_planned_cargo_display or cargo_total, unit_system)
+        if slm_event_dep_active and slm_event_dep_active.category == "cargo" then
+            it.blocks[#it.blocks + 1] = H.block("event", "  ", { H.event(slm_event_dep_active) })
+        end
+        local part
+        if penalty_active then
+            local rem = H.remaining_text(math.max(0, slm_cargo_penalty_until - os.clock()))
+            part = H.tx("wait.bag_removal", { rem = rem }, "Bag removal: " .. rem)
+        else
+            local cargo_event_waiting = slm_event_dep_active
+                and slm_event_dep_active.category == "cargo"
+                and ((slm_event_delay_until and os.clock() < slm_event_delay_until)
+                  or (slm_event_pause_until and os.clock() < slm_event_pause_until))
+            if cargo_event_waiting then
+                local ev_t = (slm_event_delay_until and os.clock() < slm_event_delay_until)
+                    and slm_event_delay_until or slm_event_pause_until
+                local rem = H.remaining_text(math.max(0, ev_t - os.clock()))
+                part = H.tx("wait.rem", { rem = rem }, "Waiting: " .. rem)
+            elseif cargo_loaded == 0 then
+                part = H.tx("eta.waiting", nil, "Estimated: Waiting")
+            elseif estimated_time_cargo and estimated_time_cargo > 0 then
+                part = H.eta(estimated_time_cargo)
+            else
+                part = H.tx("eta.none", nil, "Estimated: --")
+            end
+        end
+        it.blocks[#it.blocks + 1] = H.eta_block(part)
+    else
+        H.figure(H.step(items, "Cargo Loading", "pending"), "cargo", "Cargo Loading",
+            0, slm_planned_cargo_display or cargo_total, unit_system)
+    end
+    H.newline(items)
+end
+
+-- Estimate of remaining boarding time (used by turnaround + departure)
+function H.boarding_eta()
+    local avg_pax_t = (pax_time_per_passenger + pax_time_variation) / 2
+    local avg_cargo_t = (cargo_time_per_kg_min + cargo_time_per_kg_max) / 2
+    if unit_system == "lbs" then avg_cargo_t = avg_cargo_t / 2.20462 end
+    if embark_started then
+        local eta_fuel = estimated_time_fuel or 0
+        if fuel_first and not slm_lowcost_mode and fuel_loading and not pax_load_started then
+            return math.max(estimated_time_cargo or 0, eta_fuel + passengers_total * avg_pax_t)
+        else
+            return math.max(estimated_time_pax or 0, estimated_time_cargo or 0, eta_fuel)
+        end
+    elseif not embark_done then
+        local pax_ref   = (passengers_total and passengers_total > 0) and passengers_total or (arr_passengers_total or 0)
+        local cargo_ref = (cargo_total and cargo_total > 0) and cargo_total or (arr_cargo_total or 0)
+        local exp_pax   = pax_ref   * avg_pax_t
+        local exp_cargo = cargo_ref * avg_cargo_t
+        local exp_fuel  = (fuel_total or 0) * (fuel_time_per_unit or fuel_time_per_kg or 0)
+        if fuel_first and not slm_lowcost_mode then
+            return math.max(exp_cargo, exp_fuel + exp_pax)
+        elseif slm_lowcost_mode then
+            return math.max(exp_pax, exp_cargo)
+        else
+            return math.max(exp_pax, exp_cargo, exp_fuel)
+        end
+    end
+    return 0
+end
+
+-- Estimate of remaining pre-boarding time (crew briefing + catering + cleaning[lowcost])
+function H.preboard_eta()
+    local pax_ref = (passengers_total and passengers_total > 0) and passengers_total or (arr_passengers_total or 0)
+    local crew_rem = 0
+    if crew_briefing_started then
+        crew_rem = estimated_time_crew or 0
+    elseif not crew_briefing_done then
+        crew_rem = (crew_briefing_time_min + crew_briefing_time_max) / 2
+    end
+    local catering_rem = 0
+    if catering_started then
+        catering_rem = estimated_time_catering or 0
+    elseif not catering_done then
+        catering_rem = pax_ref * catering_time_per_pax
+    end
+    local cleaning_dep_rem = 0
+    if slm_lowcost_mode then
+        if cleaning_started then
+            cleaning_dep_rem = estimated_time_cleaning or 0
+        elseif not cleaning_done then
+            cleaning_dep_rem = pax_ref * cleaning_time_per_pax
+        end
+        local fuel_dep_rem = estimated_time_fuel or 0
+        return math.max(crew_rem, catering_rem, cleaning_dep_rem, fuel_dep_rem)
+    end
+    return math.max(crew_rem, catering_rem)
+end
+
+-- Total remaining time of the whole sequence, or nil.
+function H.total_eta(mode)
+    local total_eta_secs = nil
+    if mode == "night_stop" then
+        -- RON: sequential arrival-only phases â€” disembark â†’ cleaning â†’ crew deplane
+        local disembark_remaining = disembark_started and
+            math.max(estimated_time_pax or 0, estimated_time_cargo or 0) or 0
+        local cleaning_remaining = 0
+        if cleaning_started then
+            cleaning_remaining = estimated_time_cleaning or 0
+        elseif not cleaning_done then
+            cleaning_remaining = (arr_passengers_total or 0) * cleaning_time_per_pax
+        end
+        local crew_dep_remaining = 0
+        if crew_deplane_started then
+            crew_dep_remaining = estimated_time_crew_deplane or 0
+        elseif not crew_deplane_done then
+            crew_dep_remaining = (crew_briefing_time_min + crew_briefing_time_max) / 2
+        end
+        local t = disembark_remaining + cleaning_remaining + crew_dep_remaining
+        if t > 0 then total_eta_secs = t end
+
+    elseif mode == "turnaround" then
+        -- TURNAROUND: arrival phases (sequential) + departure phases
+        -- Arrival portion
+        local disembark_remaining = disembark_started and
+            math.max(estimated_time_pax or 0, estimated_time_cargo or 0) or 0
+        local cleaning_arr_rem = 0
+        if not slm_lowcost_mode then
+            if cleaning_started and not crew_briefing_started and not catering_started and not embark_started then
+                cleaning_arr_rem = estimated_time_cleaning or 0
+            elseif not cleaning_done and not crew_briefing_done and not catering_done and not embark_done then
+                cleaning_arr_rem = (arr_passengers_total or 0) * cleaning_time_per_pax
+            end
+        end
+        -- Departure portion
+        local t = disembark_remaining + cleaning_arr_rem + H.preboard_eta() + H.boarding_eta()
+        if t > 0 then total_eta_secs = t end
+
+    elseif disembark_started or (cleaning_started and not slm_lowcost_mode) then
+        -- Standalone arrival (not part of a sequence)
+        local disembark_remaining = math.max(estimated_time_pax or 0, estimated_time_cargo or 0)
+        total_eta_secs = disembark_remaining
+
+    elseif embark_started or crew_briefing_started or catering_started
+        or (cleaning_started and slm_lowcost_mode) then
+        -- Standalone departure (not part of a turnaround)
+        total_eta_secs = H.preboard_eta() + H.boarding_eta()
+    end
+    return total_eta_secs
+end
+
+-- Which sequence the step list describes, or nil when there is nothing to show.
+function H.steps_mode()
+    local mode = slm_last_sequence_mode
+    if mode == "in_flight" then return nil end
+    if not mode then
+        if embark_started or embark_done then
+            mode = "departure"
+        elseif disembark_started or disembark_done then
+            mode = passed_500ft and "turnaround" or "departure"
+        else
+            return nil
+        end
+    end
+    return mode
+end
+
+function slm_update_steps()
+    local items = {}
+    SLM_State.steps_visible = slm_steps_visible
+    SLM_State.steps = items
+    SLM_State.total_eta = nil
+
+    local mode = H.steps_mode()
+    if not mode then return end
+
+    H.arrival_steps(items, mode)
+    if mode ~= "turnaround" and mode ~= "night_stop" then
+        H.preboard_steps(items)
+        if fuel_first and not slm_lowcost_mode then
+            H.fuel_step(items)
+            H.pax_step(items)
+            H.cargo_step(items)
+        else
+            H.pax_step(items)
+            H.cargo_step(items)
+            H.fuel_step(items)
+        end
+    end
+
+    local total_eta_secs = H.total_eta(mode)
+    if total_eta_secs and total_eta_secs > 0 then
+        SLM_State.total_eta = total_eta_secs
+        local text
+        if total_eta_secs < 60 then
+            text = "  Total Estimated: < 1 minute"
+        else
+            local mins = math.ceil(total_eta_secs / 60)
+            text = string.format("  Total Estimated: ~%d minute%s", mins, mins > 1 and "s" or "")
+        end
+        H.add(items, { kind = "text", tone = "eta", lines = { text } })
+    end
+end
+
+end
+
+--------------------------------------------------------------------------------
+-- IMGUI HELPERS
+--------------------------------------------------------------------------------
+SLM_TONE_COLORS = {
+    done    = 0xFF00CC00,
+    pending = 0xFF888888,
+    event   = 0xFF0080FF,
+    muted   = 0xFFAAAAAA,
+    info    = 0xFF00A5FF,
+    ok      = 0xFF00FF00,
+    warn    = 0xFFFFA500,
+    eta     = 0xFFFFE080,
+    bad     = 0xFF0000FF,
+    amber   = 0xFF00AAFF,
+    error   = 0xFF4444FF,
+    notice  = 0xFF2255FF,
+}
+
+function slm_draw_text_block(tone, lines)
+    if tone then imgui.PushStyleColor(imgui.constant.Col.Text, SLM_TONE_COLORS[tone]) end
+    for _, line in ipairs(lines) do
+        imgui.TextUnformatted(line)
+    end
+    if tone then imgui.PopStyleColor() end
+end
+
+function slm_draw_step_item(it)
+    if it.status ~= "active" then
+        local prefix = (it.status == "done") and "[DONE] " or "[Pending] "
+        slm_draw_text_block(it.status, { prefix .. it.label })
+        return
+    end
+    imgui.TextUnformatted(it.header)
+    if it.bar then
+        if it.bar.tone then imgui.PushStyleColor(imgui.constant.Col.PlotHistogram, SLM_TONE_COLORS[it.bar.tone]) end
+        imgui.ProgressBar(it.bar.frac, 200, 20, "")
+        if it.bar.tone then imgui.PopStyleColor() end
+    end
+    if it.counter then
+        imgui.SameLine()
+        imgui.TextUnformatted(it.counter)
+    end
+    for _, block in ipairs(it.blocks) do
+        if block.segments then
+            for i, seg in ipairs(block.segments) do
+                if i > 1 then imgui.SameLine(nil, 0) end
+                slm_draw_text_block(seg.tone, { seg.text })
+            end
+        else
+            slm_draw_text_block(block.tone, block.lines)
+        end
+    end
+    if it.buttons then
+        for _, btn in ipairs(it.buttons) do
+            imgui.SameLine()
+            if imgui.Button(btn.label) then
+                slm_action(btn.action)
+            end
+        end
+    end
+end
+
+function slm_draw_sequence_steps()
+    -- SLM_State.steps is re-read for every item: a button inside a step (e.g.
+    -- "Finish Briefing") runs an action that rebuilds the list mid-draw.
+    local i = 1
+    while SLM_State.steps[i] do
+        local it = SLM_State.steps[i]
+        if it.kind == "newline" then
+            imgui.NewLine()
+        elseif it.kind == "text" then
+            slm_draw_text_block(it.tone, it.lines)
+        else
+            slm_draw_step_item(it)
+        end
+        i = i + 1
+    end
+end
+
+--------------------------------------------------------------------------------
+-- MANUAL DATA LOAD
+--------------------------------------------------------------------------------
+function slm_load_manual_data()
+    slm_detect_aircraft()
+    simbrief_data_loaded  = true
+    passengers_total     = slm_manual_pax
+    cargo_total          = slm_manual_cargo
+    fuel_total           = slm_manual_fuel
+    SB_pax_weight        = 70
+    SB_bag_weight        = 0
+    SB_pax_count         = slm_manual_pax
+    SB_bag_count         = 0
+    SB_pax_mass_planned  = slm_manual_pax * 70
+    SB_bag_mass_planned  = 0
+
+    local idx1 = math.random(1, #load_controllers)
+    local idx2
+    repeat idx2 = math.random(1, #load_controllers) until idx2 ~= idx1
+    local manual_dispatcher  = load_controllers[idx1]
+    local manual_controller  = load_controllers[idx2]
+
+    SLM_Loadsheet_Data = {
+        airline           = "",
+        fltnum            = slm_manual_fltnum,
+        date              = os.date("%d%b%y"):upper(),
+        aircraft_icao     = PLANE_ICAO or "?",
+        aircraft_name     = "",
+        orig              = slm_manual_orig ~= "" and slm_manual_orig or "???",
+        dest              = slm_manual_dest ~= "" and slm_manual_dest or "???",
+        altn              = "",
+        std               = slm_manual_std ~= "" and slm_manual_std or nil,
+        sta               = slm_manual_sta ~= "" and slm_manual_sta or nil,
+        captain           = (slm_captain_name ~= "" and slm_captain_name) or "N/A",
+        dispatcher        = manual_dispatcher,
+        manual_controller = manual_controller,
+        pax_total         = slm_manual_pax,
+        cargo_total       = slm_manual_cargo,
+        pax_weight        = 70,
+        bag_weight        = 0,
+        pax_mass_planned  = slm_manual_pax * 70,
+        bag_mass_planned  = 0,
+        pax_count_sb      = slm_manual_pax,
+        bag_count_sb      = 0,
+        fuel_block        = slm_manual_fuel,
+        payload_planned   = slm_manual_pax * 70 + slm_manual_cargo,
+        slm_source        = "manual",
+        load_time_str     = current_zulu_hhmm(),
+    }
+    logMsg(string.format("[SLM] Manual data loaded: pax=%d cargo=%.0f fuel=%.0f flt=%s %s->%s",
+        slm_manual_pax, slm_manual_cargo, slm_manual_fuel,
+        slm_manual_fltnum ~= "" and slm_manual_fltnum or "-",
+        slm_manual_orig   ~= "" and slm_manual_orig   or "???",
+        slm_manual_dest   ~= "" and slm_manual_dest   or "???"))
+end
+
+--------------------------------------------------------------------------------
+-- FLIGHT SIM DECK INTEGRATION
+--------------------------------------------------------------------------------
+local function slm_detect_fsd()
+    slm_fsd_available = (XPLMFindDataRef("FlightSimDeck/Boarding/Pax") ~= nil)
+    if slm_fsd_available then
+        logMsg("[SLM] Flight Sim Deck detected")
+    end
+end
+
+--------------------------------------------------------------------------------
+-- WALKAROUND INTEGRATION
+--------------------------------------------------------------------------------
+local function slm_detect_walkaround()
+    slm_walkaround_available = (XPLMFindCommand("walkaround/toggle_WalkAround") ~= nil)
+        or (XPLMFindDataRef("walkaround/toggle_WalkAround") ~= nil)
+    if slm_walkaround_available then
+        logMsg("[SLM] Walkaround plugin detected")
+    end
+end
+
+function slm_load_fsd_data()
+    if not slm_fsd_available then return end
+    slm_fsd_pax_dr     = slm_fsd_pax_dr     or dataref_table("FlightSimDeck/Boarding/Pax")
+    slm_fsd_baggage_dr = slm_fsd_baggage_dr  or dataref_table("FlightSimDeck/Boarding/Baggage")
+    slm_fsd_fuel_dr    = slm_fsd_fuel_dr     or dataref_table("FlightSimDeck/Boarding/Fuel")
+
+    slm_manual_pax   = math.floor(slm_fsd_pax_dr[0] or 0)
+    slm_manual_cargo = slm_fsd_baggage_dr[0] or 0.0
+    slm_manual_fuel  = slm_fsd_fuel_dr[0]    or 0.0
+
+    slm_load_manual_data()
+    SLM_Loadsheet_Data.slm_source    = "fsd"
+    SLM_Loadsheet_Data.load_time_str = current_zulu_hhmm()
+    logMsg(string.format("[SLM] FSD data loaded: pax=%d cargo=%.0f fuel=%.0f",
+        slm_manual_pax, slm_manual_cargo, slm_manual_fuel))
+end
+
+--------------------------------------------------------------------------------
+-- IMGUI
+--------------------------------------------------------------------------------
+function slm_draw_settings_panel()
+    if imgui.CollapsingHeader("Settings") then
+        imgui.Spacing()
+
+        local S = SLM_State
+        local C = S.settings   -- updated in place by every action
+        local busy = S.busy
+
+        local COL = imgui.constant.Col
+        local function section_header(title)
+            imgui.NewLine()
+            imgui.Spacing()
+            imgui.PushStyleColor(COL.Text, 0xFFFFA500)
+            imgui.TextUnformatted(title)
+            imgui.PopStyleColor()
+            imgui.Separator()
+            imgui.Spacing()
+        end
+
+        -- In dev mode, mask sensitive fields (SimBrief ID, API keys) with asterisks so
+        -- they don't leak in screenshots/streams taken while testing; edit them with
+        -- dev mode off, or directly in simload_settings.txt.
+        local function sensitive_input(label, value, maxlen)
+            if S.dev_mode then
+                imgui.BeginDisabled()
+                imgui.InputText(label, string.rep("*", #(value or "")), maxlen)
+                imgui.EndDisabled()
+                return false, value
+            end
+            return imgui.InputText(label, value or "", maxlen)
+        end
+
+        -- Checkbox bound to a setting key.
+        local function setting_checkbox(label, key)
+            local chg, v = imgui.Checkbox(label, C[key])
+            if chg then slm_set(key, v) end
+        end
+
+        -- Radio button selecting one value of a setting key.
+        local function setting_radio(label, key, value)
+            if imgui.RadioButton(label, C[key] == value) then slm_set(key, value) end
+        end
+
+        -- 1. PILOT PROFILE
+        section_header("PILOT PROFILE")
+        if busy then imgui.BeginDisabled() end
+        local changed_capt, new_capt = imgui.InputText("Captain", C.captain or "", 100)
+        if changed_capt then
+            slm_set("captain", new_capt)
+        end
+        if busy then imgui.EndDisabled() end
+
+        -- 2. DATA SOURCE
+        section_header("DATA SOURCE")
+        if busy then imgui.BeginDisabled() end
+        imgui.TextUnformatted("Data source:")
+        setting_radio("SimBrief##src", "data_source", "simbrief")
+        imgui.SameLine()
+        setting_radio("Manual##src", "data_source", "manual")
+        if S.fsd_available then
+            imgui.SameLine()
+            setting_radio("Flight Sim Deck##src", "data_source", "fsd")
+        end
+        if busy then imgui.EndDisabled() end
+
+        local id_locked = busy or C.data_source == "manual" or C.data_source == "fsd"
+        if id_locked then imgui.BeginDisabled() end
+        local changed, new_id = sensitive_input("SimBrief ID", C.simbrief_id, 100)
+        if changed then
+            slm_set("simbrief_id", new_id)
+        end
+        if id_locked then imgui.EndDisabled() end
+
+        imgui.Spacing()
+        if busy then imgui.BeginDisabled() end
+        imgui.TextUnformatted("ACARS output:")
+        imgui.SameLine()
+        setting_radio("None##acars", "acars_output", "none")
+        imgui.SameLine()
+        setting_radio("Hoppie##acars", "acars_output", "hoppie")
+        imgui.SameLine()
+        setting_radio("SayIntentions##acars", "acars_output", "si")
+
+        if C.acars_output == "hoppie" then
+            local chg_logon, new_logon = sensitive_input("Logon code##hoppie", C.hoppie_logon, 32)
+            if chg_logon then slm_set("hoppie_logon", new_logon) end
+            imgui.TextUnformatted("Message type:")
+            imgui.SameLine()
+            setting_radio("TELEX##mtype", "hoppie_msgtype", "telex")
+            imgui.SameLine()
+            setting_radio("CPDLC##mtype", "hoppie_msgtype", "cpdlc")
+        elseif C.acars_output == "si" then
+            local chg_key, new_key = sensitive_input("API Key##si", C.si_key, 64)
+            if chg_key then slm_set("si_key", new_key) end
+        end
+        if busy then imgui.EndDisabled() end
+
+        -- 3. UNITS & DISPLAY
+        section_header("UNITS & DISPLAY")
+        if busy then imgui.BeginDisabled() end
+        imgui.TextUnformatted("Unit System:")
+        local changed_unit_kg = imgui.RadioButton("Kilograms (kg)", C.unit_system == "kg")
+        imgui.SameLine()
+        local changed_unit_lbs = imgui.RadioButton("Pounds (lbs)", C.unit_system == "lbs")
+        if changed_unit_kg then
+            slm_set("unit_system", "kg")
+        elseif changed_unit_lbs then
+            slm_set("unit_system", "lbs")
+        end
+        if busy then imgui.EndDisabled() end
+
+        imgui.Spacing()
+        imgui.TextUnformatted("Plugin font size:")
+        imgui.SameLine()
+        if imgui.Button("<##slm_font_size") then
+            slm_set("font_choice", (C.font_choice or 0) - 1)
+        end
+        imgui.SameLine()
+        imgui.TextUnformatted((C.font_choice and C.font_choice > 0)
+            and (SLM_FONT_LABELS[C.font_choice] or ("Size " .. C.font_choice))
+            or "Default")
+        imgui.SameLine()
+        if imgui.Button(">##slm_font_size") then
+            slm_set("font_choice", (C.font_choice or 0) + 1)
+        end
+        if not imgui_push_font then
+            imgui.PushStyleColor(COL.Text, 0xFF888888)
+            imgui.TextUnformatted("(Requires FlyWithLua NG 2.8.15+)")
+            imgui.PopStyleColor()
+        elseif C.font_choice and C.font_choice > 0 and not slm_custom_fonts_ready then
+            imgui.PushStyleColor(COL.Text, 0xFFFFA500)
+            imgui.TextUnformatted("(Could not auto-install custom fonts. Manually copy")
+            imgui.TextUnformatted("ProFontWindows.ttf, Roboto-Light.ttf and Roboto-Regular.ttf")
+            imgui.TextUnformatted("from Resources/fonts to Resources/plugins/FlyWithLua/Custom_Fonts/,")
+            imgui.TextUnformatted("then reload scripts.)")
+            imgui.PopStyleColor()
+        end
+
+        -- 4. OPERATIONS
+        section_header("OPERATIONS")
+        if busy then imgui.BeginDisabled() end
+        setting_checkbox("Low-Cost Operations", "lowcost")
+        imgui.SameLine()
+        local tankering_locked = not C.lowcost
+        if tankering_locked then imgui.BeginDisabled() end
+        setting_checkbox("Tankering", "tankering")
+        if tankering_locked then imgui.EndDisabled() end
+        local fuel_first_locked = C.lowcost
+        if fuel_first_locked then imgui.BeginDisabled() end
+        setting_checkbox("Fuel First", "fuel_first")
+        if fuel_first_locked then imgui.EndDisabled() end
+        local real_fill_locked = S.real_fill_excluded
+        if real_fill_locked then imgui.BeginDisabled() end
+        setting_checkbox("Real Fuel Fill (writes datarefs)", "rf_enabled")
+        setting_checkbox("Real Payload Fill (writes datarefs)", "rp_enabled")
+        if real_fill_locked then imgui.EndDisabled() end
+        setting_checkbox("Skip Crew Briefing", "skip_crew_briefing")
+        setting_checkbox("Chocks: SLM never removes them", "manual_chocks")
+        if S.bpb_option_available then
+            imgui.TextUnformatted("   ")
+            imgui.SameLine()
+            setting_checkbox("Let BPB remove chocks", "bpb_remove_chocks")
+        end
+        setting_checkbox("Chocks: SLM never places them", "no_chocks")
+        if busy then imgui.EndDisabled() end
+
+        -- 5. SIMULATION
+        section_header("SIMULATION")
+        if busy then imgui.BeginDisabled() end
+        imgui.TextUnformatted("Timing preset:")
+        imgui.SameLine()
+        local preset = C.timing_preset  -- the three presets show the value from before any click
+        if imgui.RadioButton("Realistic", preset == "realistic") then slm_set("timing_preset", "realistic") end
+        imgui.SameLine()
+        if imgui.RadioButton("Fast", preset == "fast") then slm_set("timing_preset", "fast") end
+        imgui.SameLine()
+        if imgui.RadioButton("Very Fast", preset == "veryfast") then slm_set("timing_preset", "veryfast") end
+        imgui.SameLine()
+        setting_radio("Custom", "timing_preset", "custom")
+
+        if C.timing_preset == "custom" then
+            local P = S.preset_values
+            imgui.Separator()
+            imgui.TextUnformatted("Custom timing parameters:")
+            imgui.PushItemWidth(120)
+
+            -- One custom timing input, followed by the three presets for reference.
+            local function timing_row(label, name, input_fmt, ref_fmt, preset_name)
+                local key = "custom_" .. name
+                local c, v = imgui.InputFloat(label, C[key], 0, 0, input_fmt)
+                if c then slm_set(key, v) end
+                imgui.SameLine()
+                preset_name = preset_name or name
+                imgui.TextUnformatted(string.format(ref_fmt,
+                    P.realistic[preset_name], P.fast[preset_name], P.veryfast[preset_name]))
+            end
+
+            local REF1  = "-> Realistic: %.1f | Fast: %.1f | Very Fast: %.1f"
+            local REFPM = "-> Realistic: Â±%.1f | Fast: Â±%.1f | Very Fast: Â±%.1f"
+            local REF3  = "-> Realistic: %.3f | Fast: %.3f | Very Fast: %.3f"
+            local REF0  = "-> Realistic: %.0f | Fast: %.0f | Very Fast: %.0f"
+            timing_row("Pax load time (s/pax)",       "pax_time_per_passenger",           "%0.2f", REF1)
+            timing_row("Pax time variation (s)",      "pax_time_variation",               "%0.2f", REFPM)
+            timing_row("Disembark pax time (s/pax)",  "disembark_pax_time_per_passenger", "%0.2f", REF1)
+            timing_row("Disembark pax var. (s)",      "disembark_pax_time_variation",     "%0.2f", REFPM)
+            timing_row("Cargo load min (s/kg)",       "cargo_time_per_kg_min",            "%0.3f", REF3)
+            timing_row("Cargo load max (s/kg)",       "cargo_time_per_kg_max",            "%0.3f", REF3)
+            timing_row("Cargo unload min (s/kg)",     "disembark_cargo_time_per_kg_min",  "%0.3f", REF3)
+            timing_row("Cargo unload max (s/kg)",     "disembark_cargo_time_per_kg_max",  "%0.3f", REF3)
+            timing_row("Fuel time per kg",            "fuel_time_per_kg",                 "%0.3f", REF3)
+            timing_row("Catering time (s/pax)",       "catering_time_per_pax",            "%.1f",  REF1)
+            timing_row("Cleaning time (s/pax)",       "cleaning_time_per_pax",            "%.1f",  REF1)
+            timing_row("Crew briefing min (s)",       "crew_briefing_min",                "%.0f",  REF0, "crew_briefing_time_min")
+            timing_row("Crew briefing max (s)",       "crew_briefing_max",                "%.0f",  REF0, "crew_briefing_time_max")
+
+            imgui.Spacing()
+            local chg_ef, new_ef = imgui.SliderFloat("Event duration factor", C.custom_event_duration_factor or 0.7, 0.1, 1.0, "%.2f")
+            if chg_ef then slm_set("custom_event_duration_factor", new_ef) end
+            imgui.SameLine()
+            imgui.TextUnformatted(string.format("(max ~%.0f min  |  Realistic: 1.0 | Fast: 0.50 | VeryFast: 0.25)", 600 * (C.custom_event_duration_factor or 0.7) / 60))
+
+            imgui.PopItemWidth()
+        end
+
+        if busy then imgui.EndDisabled() end
+
+        imgui.Spacing()
+        if busy then imgui.BeginDisabled() end
+        local ev_pct = C.event_chance * 100.0
+        local chg_evchance, new_evchance = imgui.SliderFloat("Random Events chance", ev_pct, 0.0, 100.0, "%.0f%%")
+        if chg_evchance then
+            slm_set("event_chance", new_evchance / 100.0)
+        end
+        setting_checkbox("Pax variability (no-shows / standbys)", "pax_variability")
+        if busy then imgui.EndDisabled() end
+
+        -- 6. AUDIO
+        section_header("AUDIO")
+
+        local muted = C.muted
+        if muted then imgui.BeginDisabled() end
+        local chg_vol, new_vol = imgui.SliderFloat("Volume", C.volume, 0.0, 1.0, "%.2f")
+        if chg_vol then
+            slm_set("volume", new_vol)
+        end
+        if muted then imgui.EndDisabled() end
+        setting_checkbox("Mute sound", "muted")
+        setting_checkbox("Boarding Music (boarding_music.wav)", "boarding_music")
+        local music_locked = not C.boarding_music
+        if music_locked then imgui.BeginDisabled() end
+        local chg_bvol, new_bvol = imgui.SliderFloat("Music Volume##bm", C.boarding_music_vol, 0.0, 1.0, "%.2f")
+        if chg_bvol then
+            slm_set("boarding_music_vol", new_bvol)
+        end
+        if music_locked then imgui.EndDisabled() end
+
+        -- 7. DEV
+        section_header("DEV")
+        setting_checkbox("Activate Dev mode", "dev_mode")
+    end
+end
+
+function slm_draw_manual_inputs()
+	local C = SLM_State.settings
+	local chg_pax, new_pax = imgui.InputInt("Pax##manual", C.manual_pax)
+	if chg_pax then slm_set("manual_pax", new_pax) end
+
+	local chg_mxp, new_mxp = imgui.InputInt("Max Pax capacity##manual", C.manual_max_pax)
+	if chg_mxp then slm_set("manual_max_pax", new_mxp) end
+	imgui.SameLine()
+	imgui.PushStyleColor(imgui.constant.Col.Text, 0xFFAAAAAA)
+	imgui.TextUnformatted("(0 = disable standbys)")
+	imgui.PopStyleColor()
+
+	local chg_cargo, new_cargo = imgui.InputFloat("Cargo (kg)##manual", C.manual_cargo, 10, 100, "%.0f")
+	if chg_cargo then slm_set("manual_cargo", new_cargo) end
+
+	local chg_fuel, new_fuel = imgui.InputFloat("Fuel (kg)##manual", C.manual_fuel, 100, 1000, "%.0f")
+	if chg_fuel then slm_set("manual_fuel", new_fuel) end
+
+	imgui.Spacing()
+	imgui.PushStyleColor(imgui.constant.Col.Text, 0xFFAAAAAA)
+	imgui.TextUnformatted("Optional flight info:")
+	imgui.PopStyleColor()
+
+	local chg_flt, new_flt = imgui.InputText("Flt Number##manual", C.manual_fltnum, 12)
+	if chg_flt then slm_set("manual_fltnum", new_flt) end
+
+	imgui.PushItemWidth(80)
+	local chg_orig, new_orig = imgui.InputText("ICAO Dep##manual", C.manual_orig, 5)
+	if chg_orig then slm_set("manual_orig", new_orig) end
+	imgui.PopItemWidth()
+	imgui.SameLine()
+	imgui.PushItemWidth(80)
+	local chg_dest, new_dest = imgui.InputText("ICAO Arr##manual", C.manual_dest, 5)
+	if chg_dest then slm_set("manual_dest", new_dest) end
+	imgui.PopItemWidth()
+
+	imgui.PushItemWidth(90)
+	local chg_std, new_std = imgui.InputText("Block-Off##manual", C.manual_std, 8)
+	if chg_std then slm_set("manual_std", new_std) end
+	imgui.PopItemWidth()
+	imgui.SameLine()
+	imgui.PushItemWidth(90)
+	local chg_sta, new_sta = imgui.InputText("Block-On##manual", C.manual_sta, 8)
+	if chg_sta then slm_set("manual_sta", new_sta) end
+	imgui.PopItemWidth()
+
+	imgui.Spacing()
+	if imgui.Button("Load manual data") then
+		slm_action("load_manual")
+	end
+end
+
+function slm_draw_lf_confirm_panel()
+	local S = SLM_State
+	if not S.last_flight_confirm then return end
+	imgui.Spacing()
+	imgui.Separator()
+	imgui.Spacing()
+	imgui.PushStyleColor(imgui.constant.Col.Text, 0xFFFFDD55)
+	imgui.TextUnformatted("Resume last flight?")
+	imgui.PopStyleColor()
+	slm_draw_text_block(nil, S.last_flight.lines)
+	imgui.Spacing()
+	imgui.PushStyleColor(imgui.constant.Col.Button, 0xFF1A7A1A)
+	if imgui.Button("Confirm") then
+		slm_action("confirm_last_flight")
+	end
+	imgui.PopStyleColor()
+	imgui.SameLine()
+	if imgui.Button("Cancel") then
+		slm_action("cancel_last_flight")
+	end
+	imgui.Separator()
+	imgui.Spacing()
+end
+
+function slm_draw_times_panel()
+	local T = SLM_State.times
+	imgui.NewLine()
+	imgui.Separator()
+	imgui.TextUnformatted("Current Zulu: " .. T.now)
+	imgui.TextUnformatted("Flight Times (UTC) - Imported via Simbrief ")
+	imgui.NewLine()
+	imgui.TextUnformatted("                | Sched. | Act.")
+	for _, row in ipairs(T.rows) do
+		slm_draw_text_block(row.tone, { row.text })
+	end
+end
+
+function build_embark_window(wnd, x, y)
+    -- imgui_push_font() must always be matched by imgui.PopFont(); routing the whole
+    -- window body through a wrapper guarantees that even if the body returns early.
+    local use_custom_font = imgui_push_font and slm_font_choice and slm_font_choice > 0
+    if use_custom_font then imgui_push_font(slm_font_choice) end
+
+    slm_build_embark_window_body(wnd, x, y)
+
+    if use_custom_font then imgui.PopFont() end
+end
+
+function slm_build_embark_window_body(wnd, x, y)
+    slm_update_state()
+    local S = SLM_State
+    slm_draw_settings_panel()
+
+	slm_draw_text_block(S.update_status.tone, { S.update_status.text })
+
+
+    imgui.Separator()
+	imgui.NewLine()
+	local ops_running = S.ops_running
+	if ops_running then
+		imgui.BeginDisabled()
+	end
+
+	local load_blocked = S.load_blocked
+	if load_blocked then imgui.BeginDisabled() end
+
+	local C = S.settings
+	if C.data_source == "simbrief" then
+		if imgui.Button("Load Simbrief data") then
+			slm_action("load_simbrief")
+		end
+		imgui.SameLine()
+		if imgui.Button("Dispatch") then
+			slm_action("open_dispatch")
+		end
+	elseif C.data_source == "manual" then
+		slm_draw_manual_inputs()
+	elseif C.data_source == "fsd" then
+		if S.fsd_available then
+			imgui.PushStyleColor(imgui.constant.Col.Text, 0xFFAAAAAA)
+			imgui.TextUnformatted("Source: Flight Sim Deck")
+			imgui.PopStyleColor()
+			if imgui.Button("Load FSD data") then
+				slm_action("load_fsd")
+			end
+		else
+			slm_draw_text_block("notice", { "[!] Flight Sim Deck not detected.",
+			                                "    Please switch your data source in Settings." })
+		end
+	end
+
+	if load_blocked then imgui.EndDisabled() end
+
+	-- Load Last Flight: outside load_blocked so it stays available in-flight (script reload recovery)
+	imgui.SameLine()
+	local can_lf = S.can_load_last_flight
+	if not can_lf then imgui.BeginDisabled() end
+	if imgui.Button("Load Last Flight") then
+		slm_action("open_last_flight")
+	end
+	if not can_lf then imgui.EndDisabled() end
+
+	if ops_running then
+		imgui.EndDisabled()
+	end
+
+	-- Last Flight confirmation panel
+	slm_draw_lf_confirm_panel()
+
+	if S.summary then
+		slm_draw_text_block("muted", { S.summary })
+	else
+		slm_draw_text_block("error", { S.data_hint })
+	end
+	if S.exclusion_message then
+		slm_draw_text_block("notice", { "[!] " .. S.exclusion_message })
+	end
+
+	local location_locked = not S.can_change_location
+
+	imgui.Spacing()
+	if location_locked then imgui.BeginDisabled() end
+
+	imgui.TextUnformatted("Select your location :")
+	if imgui.RadioButton("Remote Stand", S.location == "remote") then
+		slm_action("set_location", "remote")
+	end
+	imgui.SameLine()
+	if imgui.RadioButton("Gate W/O Jetway", S.location == "terminal") then
+		slm_action("set_location", "terminal")
+	end
+	imgui.SameLine()
+	if imgui.RadioButton("Gate Jetway", S.location == "jetway") then
+		slm_action("set_location", "jetway")
+	end
+
+	local chg_own, new_own = imgui.Checkbox("Don't call jetway / stairs", S.own_stairs)
+	if chg_own then
+		slm_action("set_own_stairs", new_own)
+	end
+
+	if location_locked then imgui.EndDisabled() end
+
+	imgui.Spacing()
+	imgui.Separator()
+
+	imgui.PushStyleColor(imgui.constant.Col.Text, 0xFFE6D8AD)
+	local mode_label
+	if S.mode == "in_flight" then
+		mode_label = "Mode: In Flight"
+	elseif S.mode == "arrival" then
+		mode_label = "Mode: Arrival"
+	else
+		mode_label = "Mode: Departure"
+	end
+	imgui.TextUnformatted(mode_label)
+	imgui.PopStyleColor()
+
+	if S.beacon_hold then
+		imgui.PushStyleColor(imgui.constant.Col.Text, 0xFF2222FF)
+		imgui.TextUnformatted("Beacon Light On - Ground Ops on Standby")
+		imgui.PopStyleColor()
+	end
+
+	local start_locked = not S.can_start
+	if start_locked then imgui.BeginDisabled() end
+
+	if S.mode == "departure" then
+		if imgui.Button("Start Loading") then
+			slm_action("start_loading")
+		end
+	elseif S.mode == "arrival" then
+		if imgui.Button("Start Turnaround") then
+			slm_action("start_turnaround")
+		end
+		imgui.SameLine()
+		if imgui.Button("Start RON") then
+			slm_action("start_ron")
+		end
+	end
+	if start_locked then imgui.EndDisabled() end
+
+	imgui.SameLine()
+	if imgui.Button("Reset") then
+		slm_action("reset")
+	end
+
+	imgui.Spacing()
+    imgui.Separator()
+	imgui.NewLine()
+
+	if S.steps_visible then
+		slm_draw_sequence_steps()
+	end
+
+	imgui.NewLine()
+
+	-- Fuel Top-Up button
+	local topup_available = S.can_topup
+	if not topup_available then imgui.BeginDisabled() end
+	if imgui.Button("Fuel Top-Up") then
+		slm_action("toggle_topup")
+	end
+	if not topup_available then imgui.EndDisabled() end
+
+	imgui.SameLine()
+
+	if S.can_view_loadsheet then
+		if imgui.Button("View Loadsheet") then
+			slm_action("view_loadsheet")
+		end
+	else
+		imgui.BeginDisabled()
+		imgui.Button("View Loadsheet")
+		imgui.EndDisabled()
+	end
+
+	if S.topup.active then
+		imgui.Spacing()
+		imgui.Separator()
+		imgui.Spacing()
+		imgui.TextUnformatted("--- Fuel Top-Up ---")
+		imgui.Spacing()
+		imgui.TextUnformatted(string.format("Current on board : %d %s", S.topup.current, S.unit))
+		imgui.TextUnformatted(string.format("Plan target      : %d %s", S.topup.plan, S.unit))
+		imgui.Spacing()
+		local ch, nv = imgui.InputFloat(string.format("New target (%s)##topup", S.unit), S.topup.target, 0, 0, "%.0f")
+		if ch then slm_action("set_topup_target", nv) end
+		imgui.Spacing()
+		if imgui.Button("Apply##topup") then
+			slm_action("apply_topup", S.topup.target)
+		end
+		imgui.SameLine()
+		if imgui.Button("Cancel##topup") then
+			slm_action("cancel_topup")
+		end
+		imgui.Separator()
+	end
+
+	if S.acars_status then
+		imgui.SameLine()
+		slm_draw_text_block(S.acars_status.tone, { S.acars_status.text })
+	end
+
+	slm_draw_times_panel()
+
+    imgui.NewLine()
+    imgui.Separator()
+
+	if imgui.Button("Visit Simchecklist.eu") then
+		slm_action("open_simchecklist")
+	end
+
+	imgui.SameLine()
+
+	if imgui.Button("Buy me a Ko-Fi") then
+		slm_action("open_kofi")
+	end
+
+	imgui.SameLine()
+
+	if imgui.Button("Toggle SGES") then
+		slm_action("toggle_sges")
+	end
+
+	if S.dev_mode then
+		imgui.NewLine()
+		imgui.Separator()
+		imgui.PushStyleColor(imgui.constant.Col.Header,        0xFF2A2A44)
+		imgui.PushStyleColor(imgui.constant.Col.HeaderHovered, 0xFF3A3A66)
+		imgui.PushStyleColor(imgui.constant.Col.Text,          0xFFAAAAFF)
+		local dev_open = imgui.CollapsingHeader("Developer Tools")
+		imgui.PopStyleColor(3)
+		if dev_open then
+			imgui.Spacing()
+			imgui.PushStyleColor(imgui.constant.Col.Button, 0xFF333355)
+			imgui.PushStyleColor(imgui.constant.Col.Text,   0xFFAAAAFF)
+			if imgui.Button(S.dev_cycle_label) then
+				slm_action("dev_cycle")
+			end
+			imgui.SameLine()
+			if not S.can_force_load then imgui.BeginDisabled() end
+			if imgui.Button(S.dev_force_load_label .. "##dev_force_load") then
+				slm_action("dev_force_load")
+			end
+			if not S.can_force_load then imgui.EndDisabled() end
+			imgui.PopStyleColor(2)
+
+			if #S.dev_events > 0 then
+				imgui.Spacing()
+				imgui.PushStyleColor(imgui.constant.Col.Text, 0xFFAAAAFF)
+				imgui.TextUnformatted("Force event:")
+				imgui.PopStyleColor()
+				imgui.SameLine()
+				local items = ""
+				for _, label in ipairs(S.dev_events) do
+					items = items .. label .. "\0"
+				end
+				items = items .. "\0"
+				imgui.SetNextItemWidth(230)
+				local chg_ev, new_ev = imgui.Combo("##dev_ev", slm_dev_event_idx, items)
+				if chg_ev then slm_dev_event_idx = new_ev end
+				imgui.SameLine()
+				local can_force = S.can_force_event
+				if not can_force then imgui.BeginDisabled() end
+				imgui.PushStyleColor(imgui.constant.Col.Button, 0xFF333355)
+				imgui.PushStyleColor(imgui.constant.Col.Text,   0xFFAAAAFF)
+				if imgui.Button("Force##dev_force") then
+					slm_action("dev_force_event", slm_dev_event_idx)
+				end
+				imgui.PopStyleColor(2)
+				if not can_force then imgui.EndDisabled() end
+			end
+			imgui.Spacing()
+		end
+	end
+end
+
+--------------------------------------------------------------------------------
+-- XPLANE COMMANDS
+--------------------------------------------------------------------------------
+-- Shared by the "Apply##topup" UI button and the TopFuel command: sets a new fuel
+-- target (in the active unit_system) and (re)starts the fuel loading state machine.
+function slm_apply_fuel_topup(target_value)
+    fuel_total            = math.floor(target_value or 0)
+    fuel_loaded           = math.floor(from_kg(sim_fuel_total_kg or 0))
+    slm_defuel_performed  = (fuel_total > 0 and fuel_loaded > fuel_total)
+    fuel_done             = false
+    fuel_loading          = false
+    fuel_last_update_time = nil
+    slm_rf_tolerance_checked = false
+    slm_rf_active            = false
+    slm_rf_skipped           = false
+    fuel_loop_playing        = false
+    sound_played.start_fuel_loading    = false
+    sound_played.finished_fuel_loading = false
+    if embark_done then
+        embark_done     = false
+        embark_started  = true
+        loadsheet_ready = false
+        end_time        = nil
+        sound_played.finished_loading_all = false
+    end
+    start_fuel_loading()
+end
+
+-- Top-Fuel command: applies the value written to the "fuel_topup_target" dataref
+-- (same effect as the "Fuel Top-Up" -> "Apply" button in the SLM window).
+function slm_cmd_top_fuel()
+    local target = SLM_fuel_topup_target[0] or 0
+    if target <= 0 then return end
+    slm_action("apply_topup", target)
+end
+
+
+-- Place wheel chocks, unless the user ticked "No Chocks (SLM never places them)".
+-- Removal is governed separately by slm_manual_chocks.
+function slm_place_chocks()
+    if slm_no_chocks then return end
+    show_Chocks = true
+    Chocks_chg  = true
+end
+
+-- BetterPushback detection via its "bp/started" dataref (#SL05). Cached once
+-- found; otherwise re-probed every 5 s in case BPB registers late.
+slm_bpb_started_ref = nil
+slm_bpb_next_probe  = 0
+slm_bpb_was_started = nil
+function slm_bpb_detect()
+    if slm_bpb_started_ref then return true end
+    local now = os.clock()
+    if now < slm_bpb_next_probe then return false end
+    slm_bpb_next_probe  = now + 5
+    slm_bpb_started_ref = XPLMFindDataRef("bp/started")
+    if slm_bpb_started_ref then logMsg("[SLM] BetterPushback detected") end
+    return slm_bpb_started_ref ~= nil
+end
+
+-- "Let BPB remove chocks": remove them on the bp/started 0 -> 1 edge only, so a
+-- reload mid-pushback or ticking the option mid-push doesn't fire retroactively.
+function slm_bpb_watch()
+    if not slm_bpb_detect() then return end
+    local started = XPLMGetDatai(slm_bpb_started_ref) ~= 0
+    local was     = slm_bpb_was_started
+    slm_bpb_was_started = started
+    if was == nil or was or not started then return end
+    if not (slm_manual_chocks and slm_bpb_remove_chocks) then return end
+    show_Chocks = false
+    Chocks_chg  = true
+    logMsg("[SLM] BetterPushback started: chocks removed")
+end
+
+function slm_sync_toliss_chocks()
+    if slm_aircraft_type ~= "toliss" then return end
+    if not Chocks_chg then return end  -- only write on explicit change, not every frame
+    Chocks_chg = false
+    if slm_toliss_chocks_dr == nil then
+        slm_toliss_chocks_dr = XPLMFindDataRef("AirbusFBW/Chocks") or false
+    end
+    if slm_toliss_chocks_dr then
+        XPLMSetDatai(slm_toliss_chocks_dr, show_Chocks and 1 or 0)
+    end
+end
+
+--------------------------------------------------------------------------------
+-- MAIN LOOP
+--------------------------------------------------------------------------------
+add_macro("Open SimLoad Manager",
+          "if embark_wnd == nil then create_embark_window() else close_embark_window() end")
+do_every_frame("manage_embark()")
+do_every_frame("manage_disembark()")
+do_every_frame("slm_dev_force_tick()")
+do_every_frame("update_remaining_time()")
+
+
+-- X-Plane commands (SimLoadManager/...): all go through slm_action(), except
+-- ImportSimbrief which is deferred to the frame loop (see check_simbrief_trigger).
+trigger_simbrief_import = false
+
+for _, c in ipairs({
+    { "ToggleWindow",         "Toggle the SimLoad Manager window",                           "toggle_embark_window()" },
+    { "StartLoading",         "Start loading (Departure mode only)",                         "slm_action('start_loading')" },
+    { "StartTurnaround",      "Start turnaround (Arrival mode only)",                        "slm_action('start_turnaround')" },
+    { "StartRON",             "Start night stop / RON (Arrival mode only)",                  "slm_action('start_ron')" },
+    { "Reset",                "Reset SimLoad Manager",                                       "slm_action('reset')" },
+    { "ImportSimbrief",       "Import SimBrief data",                                        "trigger_simbrief_import = true" },
+    { "LocationRemote",       "Set location: Remote stand",                                  "slm_action('set_location', 'remote')" },
+    { "LocationGateNoJetway", "Set location: Gate without jetway",                           "slm_action('set_location', 'terminal')" },
+    { "LocationJetway",       "Set location: Gate with jetway",                              "slm_action('set_location', 'jetway')" },
+    { "ToggleOwnStairs",      "Toggle: Aircraft has own stairs (do not call external stairs)", "slm_action('toggle_own_stairs')" },
+    { "TopFuel",              "Top-Fuel: apply the fuel_topup_target dataref as the new fuel target", "slm_cmd_top_fuel()" },
+    { "ViewLoadsheet",        "Open the loadsheet",                                          "slm_action('view_loadsheet')" },
+    { "FinishBriefing",       "Finish the crew briefing now",                                "slm_action('finish_briefing')" },
+}) do
+    create_command("SimLoadManager/" .. c[1], c[2], c[3], "", "")
+end
+
+
+-- The ImportSimbrief command is deferred to the frame loop, then does exactly
+-- what the "Load Simbrief data" button does.
+function check_simbrief_trigger()
+    if trigger_simbrief_import then
+        trigger_simbrief_import = false
+        slm_update_rules()
+        if not SLM_State.load_blocked then
+            save_user_settings()
+            slm_action("load_simbrief")
+            logMsg("[SimLoad Manager] SimBrief data imported")
+        end
+    end
+end
+
+do_every_frame("check_simbrief_trigger()")
+
+
+toggle_SGES_flag = false
+
+function simload_toggle_SGES()
+    toggle_SGES_flag = true
+end
+
+function flightloop_check_SGES_toggle()
+    if toggle_SGES_flag then
+        toggle_SGES_flag = false
+        command_once("Simple_Ground_Equipment_and_Services/Window/Toggle")
+    end
+end
+
+do_every_frame("flightloop_check_SGES_toggle()")
+do_every_frame("update_loop_volumes()")
+do_every_frame("detect_block_times()")
+do_every_frame("detect_takeoff_and_landing()")
+do_every_frame("slm_update_init_once()")
+do_every_frame("update_slm_datarefs()")
+do_every_frame("slm_toliss_update_zfwcg()")
+do_every_frame("manage_sequence()")
+do_every_frame("manage_crew_briefing()")
+do_every_frame("manage_catering()")
+do_every_frame("manage_cleaning()")
+do_every_frame("manage_crew_deplane()")
+do_every_frame("slm_rf_update()")
+do_every_frame("slm_rp_update()")
+do_every_frame("slm_rp_unload_update()")
+do_every_frame("slm_update_beacon_state()")
+do_every_frame("slm_bpb_watch()")
+do_every_frame("slm_sync_toliss_chocks()")
+do_every_frame("slm_update_state()")
+
+
+load_user_settings()
+slm_load_aircraft_data()
+
+--------------------------------------------------------------------------------
+-- STARTUP INIT
+--------------------------------------------------------------------------------
+do
+    slm_ensure_custom_fonts()
+    slm_detect_aircraft()
+    slm_detect_fsd()
+    slm_detect_walkaround()
+    if XPLMFindDataRef("laminar/B738/tab/zone1_payload") then
+        for z = 1, 5 do
+            dataref_table("laminar/B738/tab/zone" .. z .. "_payload")[0] = 0
+        end
+        dataref_table("laminar/B738/tab/zone_cargo1_payload")[0] = 0
+        dataref_table("laminar/B738/tab/zone_cargo2_payload")[0] = 0
+    end
+end
