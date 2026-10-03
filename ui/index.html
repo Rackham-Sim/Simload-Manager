@@ -371,6 +371,7 @@ select{font:inherit;font-size:12.5px;padding:5px;border-radius:6px;border:1px so
       <div class="who">
         <div class="cs" id="f-cs"></div>
         <div class="ac" id="f-ac"></div>
+        <div class="ac" id="f-plan"></div>
         <div class="src">
           <span class="src-tag" id="f-src"></span>
           <button class="btn xs ghost" id="btn-load"></button>
@@ -849,9 +850,14 @@ select{font:inherit;font-size:12.5px;padding:5px;border-radius:6px;border:1px so
       text("f-dest", f.dest || "?");
       airportName("f-orig-name", f.orig_name);
       airportName("f-dest-name", f.dest_name);
+      // Planned figures from the flight plan (#SL14): before passenger variability.
+      var unit = " " + (S.unit || "kg");
+      text("f-plan", t("flight.plan", { pax: num(f.pax_scheduled || f.pax_total),
+        cargo: num(f.cargo_planned) + unit, fuel: num(f.fuel_total) + unit }));
     } else {
       text("f-cs", t("flight.none"));
       text("f-ac", "");
+      text("f-plan", "");
     }
     show("f-route", !!f);
 

@@ -1551,6 +1551,12 @@ function apply_custom_timings()
     crew_briefing_time_max = custom_crew_briefing_max or 300
 end
 
+-- Time for one passenger: base +/- variation, drawn once per passenger (#SL13).
+-- Drawing it every frame made the shortest draw win, so the variation was lost.
+function slm_pax_interval(base, variation)
+    return math.max(0.2, base + (math.random() * 2 - 1) * (variation or 0))
+end
+
 
 load_user_settings()
 slm_init_boarding_music()
@@ -2071,11 +2077,13 @@ if fuel_first and not fuel_done then return end
             local pax_frac = (passengers_total > 0) and (passengers_loaded / passengers_total) or 0
             slm_try_apply_event("pax", "departure", pax_frac)
             local pax_elapsed = os.clock() - pax_start_time
-            local pax_time = (pax_time_per_passenger + math.random(0, pax_time_variation)) * slm_event_slow_factor
+            slm_pax_next = slm_pax_next or slm_pax_interval(pax_time_per_passenger, pax_time_variation)
+            local pax_time = slm_pax_next * slm_event_slow_factor
             if pax_elapsed >= pax_time then
                 local inc = math.floor(pax_elapsed / pax_time)
                 passengers_loaded = math.min(passengers_loaded + inc, passengers_total)
                 pax_start_time = os.clock()
+                slm_pax_next = nil
             end
 
 			if passengers_loaded >= math.floor(passengers_total * 0.15)
@@ -2375,12 +2383,14 @@ local est_pax   = estimated_time_pax or 0
 		local pax_frac_both = (passengers_total > 0) and (passengers_loaded / passengers_total) or 0
 		slm_try_apply_event("pax", "departure", pax_frac_both)
 		local pax_elapsed = now_clock - pax_start_time
-		local pax_time = (pax_time_per_passenger + math.random(0, pax_time_variation)) * slm_event_slow_factor
+		slm_pax_next = slm_pax_next or slm_pax_interval(pax_time_per_passenger, pax_time_variation)
+		local pax_time = slm_pax_next * slm_event_slow_factor
 
 		if pax_elapsed >= pax_time then
 			local inc = math.floor(pax_elapsed / pax_time)
 			passengers_loaded = math.min(passengers_loaded + inc, passengers_total)
 			pax_start_time = now_clock
+			slm_pax_next = nil
 		end
 
 		if not pax_loop_playing then
@@ -2724,11 +2734,13 @@ function manage_disembark()
                 local pax_arr_frac = (arr_passengers_total > 0) and (passengers_unloaded / arr_passengers_total) or 0
                 slm_try_apply_event("pax", "arrival", pax_arr_frac)
                 local pax_elapsed = now - pax_unload_start_time
-                local pax_time = (disembark_pax_time_per_passenger + math.random(0, disembark_pax_time_variation)) * slm_event_slow_factor
+                slm_dis_pax_next = slm_dis_pax_next or slm_pax_interval(disembark_pax_time_per_passenger, disembark_pax_time_variation)
+                local pax_time = slm_dis_pax_next * slm_event_slow_factor
                 if pax_elapsed >= pax_time then
                     local increment = math.floor(pax_elapsed / pax_time)
                     passengers_unloaded = math.min(passengers_unloaded + increment, arr_passengers_total)
                     pax_unload_start_time = now
+                    slm_dis_pax_next = nil
                 end
             end
 
@@ -4896,7 +4908,7 @@ function update_remaining_time()
                 avg_cargo_time_local = avg_cargo_time_local / 2.20462
             end
 
-			local avg_pax_time_local = (pax_time_per_passenger + pax_time_variation) / 2
+			local avg_pax_time_local = pax_time_per_passenger -- variation is +/- (#SL13)
 			local time_cargo = (cargo_total - cargo_loaded) * avg_cargo_time_local
 			local time_pax = 0
 			if pax_load_started then
@@ -4917,7 +4929,7 @@ function update_remaining_time()
 
         if disembark_started then
             local avg_dis_cargo = (disembark_cargo_time_per_kg_min + disembark_cargo_time_per_kg_max) / 2
-            local avg_dis_pax   = (disembark_pax_time_per_passenger + disembark_pax_time_variation) / 2
+            local avg_dis_pax   = disembark_pax_time_per_passenger
             if unit_system == "lbs" then
                 avg_dis_cargo = avg_dis_cargo / 2.20462
             end
@@ -6141,6 +6153,7 @@ function slm_update_display_state()
             pax_scheduled = SB_pax_count or 0,
             cargo_total   = cargo_total or 0,
             cargo_loaded  = cargo_loaded or 0,
+            cargo_planned = slm_planned_cargo_display or cargo_total or 0,
             fuel_total    = fuel_total or 0,
             fuel_loaded   = fuel_loaded or 0,
         }
@@ -6979,7 +6992,7 @@ end
 
 -- Estimate of remaining boarding time (used by turnaround + departure)
 function H.boarding_eta()
-    local avg_pax_t = (pax_time_per_passenger + pax_time_variation) / 2
+    local avg_pax_t = pax_time_per_passenger
     local avg_cargo_t = (cargo_time_per_kg_min + cargo_time_per_kg_max) / 2
     if unit_system == "lbs" then avg_cargo_t = avg_cargo_t / 2.20462 end
     if embark_started then

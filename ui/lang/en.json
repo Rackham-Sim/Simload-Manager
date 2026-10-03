@@ -22,6 +22,7 @@
 
   "flight.no_callsign": "Flight",
   "flight.none": "No flight loaded",
+  "flight.plan": "Planned: {pax} pax · {cargo} cargo · {fuel} fuel",
 
   "source.simbrief": "SimBrief {time}",
   "source.manual": "Manual data {time}",
