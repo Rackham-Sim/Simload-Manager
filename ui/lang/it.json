@@ -72,6 +72,7 @@
   "seq.empty": "Avviare una sequenza per vedere qui le operazioni di terra.",
 
   "progress.remaining": "Circa {min} min rimanenti",
+  "progress.end": "Fine prevista verso le {time}",
   "progress.done": "Completato",
 
   "compact.opacity": "Opacità",

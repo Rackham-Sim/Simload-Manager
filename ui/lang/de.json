@@ -72,6 +72,7 @@
   "seq.empty": "Starten Sie eine Sequenz, um hier die Bodenabfertigung zu sehen.",
 
   "progress.remaining": "Noch ca. {min} min",
+  "progress.end": "Ende gegen {time}",
   "progress.done": "Abgeschlossen",
 
   "compact.opacity": "Deckkraft",

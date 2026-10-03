@@ -72,6 +72,7 @@
   "seq.empty": "Start a sequence to see the ground operations here.",
 
   "progress.remaining": "About {min} min left",
+  "progress.end": "Ends around {time}",
   "progress.done": "Complete",
 
   "compact.opacity": "Opacity",

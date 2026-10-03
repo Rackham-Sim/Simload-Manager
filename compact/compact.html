@@ -293,6 +293,8 @@ button:focus-visible,input:focus-visible{outline:1px solid var(--cyan);outline-o
     dragging = false;
     win("drop");
   }
+  // X-Plane gives the keyboard to the page on every click: hand it back (#SL24).
+  document.addEventListener("mouseup", function (e) { if (e.button === 0) win("release"); });
   $("tb").addEventListener("mousedown", function (e) {
     if (e.button !== 0 || e.target.closest("button, input")) return;
     e.preventDefault();

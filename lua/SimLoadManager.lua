@@ -228,7 +228,7 @@ end
 load_controllers = {
     "Xavier24", "james.C", "Furax84", "Dudley.B", "Jugac64",
     "Mark", "Othmar", "Pea", "Christy.D", "Guilb'Air", "Sydney.M",
-	"bagolu", "Gritsch", "N. Reichel", "Feliciano", "JF.Caviglioli"
+	"bagolu", "Gritsch", "N. Reichel", "Feliciano", "JF.Caviglioli", "Jean-Claude H"
 }
 
 --------------------------------------------------------------------------------
@@ -6658,14 +6658,15 @@ function H.arrival_steps(items, mode)
 
             if arr_passengers_total <= 0 or passengers_unloaded >= arr_passengers_total then  -- nothing to unload = done
                 H.figure(H.step(items, "Passenger Deboarding", "done"), "pax", "Passenger Deboarding",
-                    arr_passengers_total, arr_passengers_total, "pax")
+                    0, arr_passengers_total, "pax")
             else
                 local pax_cur = arr_passengers_total - passengers_unloaded
                 local frac_pax = (arr_passengers_total > 0) and math.min(1, pax_cur / arr_passengers_total) or 0
                 local it = H.add(items, { kind = "step", status = "active", header = ">> Passenger Deboarding",
-                    bar = { frac = frac_pax }, blocks = {},
+                    bar = { frac = frac_pax, tone = "warn" }, blocks = {},
                     counter = string.format("%d / %d PAX", pax_cur, arr_passengers_total) })
-                H.figure(it, "pax", "Passenger Deboarding", passengers_unloaded, arr_passengers_total, "pax")
+                -- Figures count what is still on board, as the bar (#SL28).
+                H.figure(it, "pax", "Passenger Deboarding", pax_cur, arr_passengers_total, "pax")
                 if slm_event_arr_active and slm_event_arr_active.category == "pax" then
                     local parts = { H.event(slm_event_arr_active) }
                     if slm_event_delay_until and os.clock() < slm_event_delay_until then
@@ -6681,14 +6682,14 @@ function H.arrival_steps(items, mode)
 
             if arr_cargo_total <= 0 or cargo_unloaded >= arr_cargo_total then  -- nothing to unload = done
                 H.figure(H.step(items, "Cargo Unloading", "done"), "cargo", "Cargo Unloading",
-                    arr_cargo_total, arr_cargo_total, unit_system)
+                    0, arr_cargo_total, unit_system)
             else
                 local cargo_cur = arr_cargo_total - cargo_unloaded
                 local frac_cargo = (arr_cargo_total > 0) and math.min(1, cargo_cur / arr_cargo_total) or 0
                 local it = H.add(items, { kind = "step", status = "active", header = ">> Cargo Unloading",
-                    bar = { frac = frac_cargo }, blocks = {},
+                    bar = { frac = frac_cargo, tone = "warn" }, blocks = {},
                     counter = string.format("%.0f / %.0f %s", cargo_cur, arr_cargo_total, unit_system) })
-                H.figure(it, "cargo", "Cargo Unloading", cargo_unloaded, arr_cargo_total, unit_system)
+                H.figure(it, "cargo", "Cargo Unloading", cargo_cur, arr_cargo_total, unit_system)
                 if slm_event_arr_active and slm_event_arr_active.category == "cargo" then
                     it.blocks[#it.blocks + 1] = H.block("event", "  ", { H.event(slm_event_arr_active) })
                 end
@@ -6698,9 +6699,9 @@ function H.arrival_steps(items, mode)
             end
         else
             H.figure(H.step(items, "Passenger Deboarding", "pending"), "pax", "Passenger Deboarding",
-                0, arr_passengers_total, "pax")
+                arr_passengers_total, arr_passengers_total, "pax")
             H.figure(H.step(items, "Cargo Unloading",      "pending"), "cargo", "Cargo Unloading",
-                0, arr_cargo_total, unit_system)
+                arr_cargo_total, arr_cargo_total, unit_system)
         end
         H.newline(items)
     end
@@ -7120,6 +7121,7 @@ function slm_update_steps()
     SLM_State.steps_visible = slm_steps_visible
     SLM_State.steps = items
     SLM_State.total_eta = nil
+    SLM_State.total_eta_end = nil
 
     local mode = H.steps_mode()
     if not mode then return end
@@ -7141,6 +7143,9 @@ function slm_update_steps()
     local total_eta_secs = H.total_eta(mode)
     if total_eta_secs and total_eta_secs > 0 then
         SLM_State.total_eta = total_eta_secs
+        -- Expected end of the operations, sim zulu time, to the minute.
+        local end_min = ((zulu_hours or 0) * 60 + (zulu_minutes or 0) + math.ceil(total_eta_secs / 60)) % 1440
+        SLM_State.total_eta_end = string.format("%02d:%02dZ", math.floor(end_min / 60), end_min % 60)
         local text
         if total_eta_secs < 60 then
             text = "  Total Estimated: < 1 minute"

@@ -134,6 +134,7 @@ select{font:inherit;font-size:12.5px;padding:5px;border-radius:6px;border:1px so
 
 /* command strip */
 .cmd{display:flex;flex-wrap:wrap;align-items:center;gap:14px 20px;padding:12px 16px;background:var(--panel);border:1px solid var(--line);border-radius:10px}
+.cmd-btns{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:inherit;flex:1 1 0;min-width:min-content}
 .prog{display:flex;align-items:center;gap:12px}
 .ring-box{position:relative;width:56px;height:56px;flex:none}
 .ring-box svg{display:block}
@@ -427,7 +428,7 @@ select{font:inherit;font-size:12.5px;padding:5px;border-radius:6px;border:1px so
             <path d="M33 42.5l6 6 12-13" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
         </div>
-        <div><div class="pct" id="pct">0%</div><div class="rem" id="remain"></div></div>
+        <div><div class="pct" id="pct">0%</div><div class="rem" id="remain"></div><div class="rem" id="remain-end"></div></div>
       </div>
       <span class="vsep"></span>
       <div class="stack" style="gap:6px">
@@ -441,12 +442,14 @@ select{font:inherit;font-size:12.5px;padding:5px;border-radius:6px;border:1px so
           <label class="check"><button class="sw" role="switch" id="own-stairs" aria-checked="false"></button><span data-i18n="stand.own_stairs"></span></label>
         </div>
       </div>
-      <span class="sp"></span>
-      <span class="hint" id="in-flight-note" hidden data-i18n="seq.in_flight"></span>
-      <button class="btn primary big" data-act="start_loading" id="btn-start" data-i18n="seq.start_loading"></button>
-      <button class="btn primary big" data-act="start_turnaround" id="btn-turn" data-i18n="seq.turnaround"></button>
-      <button class="btn primary big" data-act="start_ron" id="btn-ron" data-i18n="seq.ron"></button>
-      <button class="btn ghost" style="margin-left:16px" data-act="reset" data-i18n="seq.reset"></button>
+      <!-- Takes the rest of the line: when it is too short (long FR/DE labels), only Reset wraps, on the right (#SL30). -->
+      <div class="cmd-btns">
+        <span class="hint" id="in-flight-note" hidden data-i18n="seq.in_flight"></span>
+        <button class="btn primary big" data-act="start_loading" id="btn-start" data-i18n="seq.start_loading"></button>
+        <button class="btn primary big" data-act="start_turnaround" id="btn-turn" data-i18n="seq.turnaround"></button>
+        <button class="btn primary big" data-act="start_ron" id="btn-ron" data-i18n="seq.ron"></button>
+        <button class="btn ghost" style="margin-left:16px" data-act="reset" data-i18n="seq.reset"></button>
+      </div>
     </div>
 
     <!-- Operations (steps and their figures) | ground services -->
@@ -827,7 +830,8 @@ select{font:inherit;font-size:12.5px;padding:5px;border-radius:6px;border:1px so
     else if (S.busy)                 { key = "pill.running"; cls += " live"; }
     else                             { key = "pill.standby"; }
     p.className = cls;
-    text("pill", t(key) + " · " + t("mode." + S.mode));
+    // In flight, the mode says the same thing as the state (#SL27).
+    text("pill", key === "pill.in_flight" ? t(key) : t(key) + " · " + t("mode." + S.mode));
   }
 
   // ---- Flight header -------------------------------------------
@@ -975,6 +979,7 @@ select{font:inherit;font-size:12.5px;padding:5px;border-radius:6px;border:1px so
     if (S.total_eta && S.total_eta > 0) rem = t("progress.remaining", { min: Math.ceil(S.total_eta / 60) });
     else if (steps.length && frac >= 1) rem = t("progress.done");
     text("remain", rem);
+    text("remain-end", S.total_eta > 0 && S.total_eta_end ? t("progress.end", { time: S.total_eta_end }) : "");
 
     var locked = !S.can_change_location;
     $("stand").classList.toggle("locked", locked);
@@ -1618,6 +1623,23 @@ select{font:inherit;font-size:12.5px;padding:5px;border-radius:6px;border:1px so
   document.addEventListener("mouseup", drop);
   document.addEventListener("mousemove", function (e) { if (dragging && !(e.buttons & 1)) drop(); });
   window.addEventListener("blur", drop);
+
+  // Keyboard (#SL24, #SL25): X-Plane gives it to the page on every click; the
+  // plugin hands it back (views, key bindings) except while typing in a field.
+  function typingField(el) {
+    return el && el.matches && el.matches("input:not([type=range]):not([type=checkbox]):not([type=radio]), textarea");
+  }
+  function typing(v) {
+    if (window.xplane && typeof xplane.slmWindow === "function") xplane.slmWindow({ op: "typing", v: v });
+  }
+  document.addEventListener("focusin", function (e) { if (typingField(e.target)) typing(1); });
+  document.addEventListener("focusout", function (e) { if (typingField(e.target)) typing(0); });
+  document.addEventListener("mousedown", function (e) { if (typingField(e.target)) typing(1); });
+  // Any other click: the plugin hands the keyboard back to X-Plane (a dropdown
+  // stays open, it would close).
+  document.addEventListener("mouseup", function (e) {
+    if (e.button === 0 && !typingField(e.target) && !e.target.closest("select")) win("release");
+  });
 
   // ---- Events --------------------------------------------------
   document.addEventListener("click", function (e) {
