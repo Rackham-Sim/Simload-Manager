@@ -1,6 +1,6 @@
 compact/compact.html|759949289
 FlyWithLua_Scripts/SimLoadManager_SGES_bridge.lua|3769844694
-lin_x64/SimLoadManager.xpl|3801599180
+lin_x64/SimLoadManager.xpl|1654795615
 lua/SimLoadManager.lua|3292916632
 lua/slm5_sges.lua|2973783761
 lua/SLM-Data/aircraft.json|2686857832
@@ -38,11 +38,11 @@ lua/SLM-Data/SimLoad-Manager-Sounds/start_loading_cargo.wav|718720329
 lua/SLM-Data/SimLoad-Manager-Sounds/start_unboarding_passengers.wav|1844533856
 lua/SLM-Data/SimLoad-Manager-Sounds/start_unloading_all.wav|937472384
 lua/SLM-Data/SimLoad-Manager-Sounds/start_unloading_cargo.wav|814276985
-mac_x64/SimLoadManager.xpl|173453315
+mac_x64/SimLoadManager.xpl|1528601447
 ui/index.html|3301579307
 ui/lang/de.json|3113028955
 ui/lang/en.json|2932152315
 ui/lang/es.json|583744123
 ui/lang/fr.json|3925080614
 ui/lang/it.json|780136387
-win_x64/SimLoadManager.xpl|313837243
+win_x64/SimLoadManager.xpl|610035835

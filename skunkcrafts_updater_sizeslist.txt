@@ -1,6 +1,6 @@
 compact/compact.html|16107
 FlyWithLua_Scripts/SimLoadManager_SGES_bridge.lua|2381
-lin_x64/SimLoadManager.xpl|3861192
+lin_x64/SimLoadManager.xpl|3861168
 lua/SimLoadManager.lua|338559
 lua/slm5_sges.lua|2930
 lua/SLM-Data/aircraft.json|8708
