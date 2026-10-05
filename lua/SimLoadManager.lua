@@ -1921,6 +1921,18 @@ local function slm_compute_pax_variability()
     logMsg(string.format("[SLM-VAR] base=%d noshow=%d standby=%d eff=%d", base_pax, noshow_count, standby_count, pax_eff))
 end
 
+-- Bus (remote) or passengers from the terminal, called when the boarding delay starts (#SL33)
+function slm_call_boarding_vehicles()
+    if selected_location_group == "remote" then
+        show_Bus = true
+        Bus_chg = true
+    elseif selected_location_group == "terminal" then
+        boarding_from_the_terminal = true
+        show_Pax = true
+        Pax_chg = true
+    end
+end
+
 function manage_embark()
     if not embark_started then return end
     if slm_beacon_on then return end
@@ -2037,14 +2049,16 @@ end
 
 if cargo_total == 0 then
 if fuel_first and not fuel_done then return end
-    local pax_load_delay = 20
-    if selected_location_group == "terminal" then
-        pax_load_delay = 2
+    local pax_load_delay = 8
+    if selected_location_group == "remote" then
+        pax_load_delay = 25
     end
 
     if not bus_triggered then
         bus_triggered = true
         pax_trigger_time = os.clock() + pax_load_delay
+        -- Call the bus / passengers now: the delay lets them arrive before boarding (#SL33)
+        slm_call_boarding_vehicles()
     end
 
     if os.clock() >= pax_trigger_time then
@@ -2060,14 +2074,6 @@ if fuel_first and not fuel_done then return end
 
         if not sound_played.start_boarding_passengers
            and not (slm_event_delay_until and os.clock() < slm_event_delay_until) then
-            if selected_location_group == "remote" then
-                show_Bus = true
-                Bus_chg = true
-            elseif selected_location_group == "terminal" then
-                boarding_from_the_terminal = true
-                show_Pax = true
-                Pax_chg = true
-            end
             play_sound_by_key("start_boarding_passengers")
             sound_played.start_boarding_passengers = true
             slm_start_boarding_music()
@@ -2340,14 +2346,16 @@ local est_pax   = estimated_time_pax or 0
 
 				local delay_pax = 0
 				if selected_location_group == "remote" then
-					delay_pax = 20
+					delay_pax = 25
 				elseif selected_location_group == "terminal" then
-					delay_pax = 4
+					delay_pax = 8
 				elseif selected_location_group == "jetway" then
-					delay_pax = 4
+					delay_pax = 8
 				end
 
 				pax_trigger_time = os.clock() + delay_pax
+				-- Call the bus / passengers now: the delay lets them arrive before boarding (#SL33)
+				slm_call_boarding_vehicles()
 			end
 		end
 
@@ -2364,15 +2372,9 @@ local est_pax   = estimated_time_pax or 0
 	if pax_load_started and bus_triggered and pax_trigger_time
 	   and os.clock() >= pax_trigger_time
 	   and not sound_played.start_boarding_passengers
-	   and not (slm_event_delay_until and os.clock() < slm_event_delay_until) then
-		if selected_location_group == "remote" then
-			show_Bus = true
-			Bus_chg = true
-		elseif selected_location_group == "terminal" then
-			show_Pax = true
-			Pax_chg = true
-			boarding_from_the_terminal = true
-		end
+	   -- A cargo-only delay does not hold passengers (see top of manage_embark)
+	   and not (slm_event_delay_until and os.clock() < slm_event_delay_until
+	            and not (slm_event_dep_active and slm_event_dep_active.category == "cargo")) then
 		play_sound_by_key("start_boarding_passengers")
 		sound_played.start_boarding_passengers = true
 		slm_start_boarding_music()
@@ -2436,6 +2438,47 @@ end
 --------------------------------------------------------------------------------
 -- DISEMBARKATION
 --------------------------------------------------------------------------------
+-- Ground crew, stairs / bus / jetway and passengers for deboarding
+function slm_call_disembark_vehicles()
+	show_People4 = true; People4_chg = true
+	show_People3 = true; People3_chg = true
+	show_People2 = true; People2_chg = true
+	show_People1 = true; People1_chg = true
+	slm_place_chocks()
+	if selected_location_group == "remote" then
+		if not aircraft_has_own_stairs then
+			show_StairsXPJ  = true; StairsXPJ_chg  = true
+			show_StairsXPJ2 = true; StairsXPJ2_chg = true
+			option_StairsXPJ_override = true
+			DualBoard = true
+		else
+			-- Own stairs / "Don't call jetway / stairs": stay hands-off,
+			-- never retract stairs the user placed manually (e.g. via SGES)
+			option_StairsXPJ_override = false
+			DualBoard = false
+		end
+		show_Bus = true; Bus_chg = true
+	elseif selected_location_group == "jetway" then
+		if not slm_opensam_jetway_check() then
+			if not aircraft_has_own_stairs then
+				command_once("sim/ground_ops/jetway")
+			end
+		end
+	elseif selected_location_group == "terminal" then
+		if not aircraft_has_own_stairs then
+			show_StairsXPJ  = true; StairsXPJ_chg  = true
+			show_StairsXPJ2 = true; StairsXPJ2_chg = true
+			option_StairsXPJ_override = true
+			DualBoard = true
+		else
+			-- Own stairs / "Don't call jetway / stairs": stay hands-off,
+			-- never retract stairs the user placed manually (e.g. via SGES)
+			option_StairsXPJ_override = false
+			DualBoard = false
+		end
+	end
+end
+
 function start_disembarkation()
     disembark_started = true
     disembark_done = false
@@ -2464,6 +2507,7 @@ function start_disembarkation()
 	fuel_loaded = math.floor(from_kg(sim_fuel_total_kg or 0))
     disembark_start_time = os.clock()
     disembark_last_update_time = disembark_start_time
+    start_disembarkation_pax_delay = nil   -- set below with cargo, else by manage_disembark
     pax_unload_started = false
     pax_unload_start_time = 0
     estimated_time_pax = 0
@@ -2675,7 +2719,13 @@ function manage_disembark()
     end
 
     if arr_passengers_total > 0 then
-        if arr_cargo_total > 0 and now < start_disembarkation_pax_delay then
+        if not start_disembarkation_pax_delay then
+            -- No cargo: call the bus / stairs / jetway now, passengers leave after the delay (#SL33)
+            slm_call_disembark_vehicles()
+            start_disembarkation_pax_delay = now + ((selected_location_group == "remote" and 15)
+                or (selected_location_group == "jetway" and 25) or 8)
+        end
+        if now < start_disembarkation_pax_delay then
         else
             if not pax_unload_started then
                 pax_unload_started = true
@@ -2685,46 +2735,10 @@ function manage_disembark()
 
 			if not sound_played.start_unboarding_passengers
 			   and not (slm_event_delay_until and os.clock() < slm_event_delay_until) then
-				show_People4 = true; People4_chg = true
-				show_People3 = true; People3_chg = true
-				show_People2 = true; People2_chg = true
-				show_People1 = true; People1_chg = true
-				slm_place_chocks()
-				if selected_location_group == "remote" then
-					if not aircraft_has_own_stairs then
-						show_StairsXPJ  = true; StairsXPJ_chg  = true
-						show_StairsXPJ2 = true; StairsXPJ2_chg = true
-						option_StairsXPJ_override = true
-						DualBoard = true
-					else
-						-- Own stairs / "Don't call jetway / stairs": stay hands-off,
-						-- never retract stairs the user placed manually (e.g. via SGES)
-						option_StairsXPJ_override = false
-						DualBoard = false
-					end
-					show_Bus = true; Bus_chg = true
-					show_Pax = true; Pax_chg = true
-				elseif selected_location_group == "jetway" then
-					if not slm_opensam_jetway_check() then
-						if not aircraft_has_own_stairs then
-							command_once("sim/ground_ops/jetway")
-						end
-					end
-				elseif selected_location_group == "terminal" then
-					if not aircraft_has_own_stairs then
-						show_StairsXPJ  = true; StairsXPJ_chg  = true
-						show_StairsXPJ2 = true; StairsXPJ2_chg = true
-						option_StairsXPJ_override = true
-						DualBoard = true
-					else
-						-- Own stairs / "Don't call jetway / stairs": stay hands-off,
-						-- never retract stairs the user placed manually (e.g. via SGES)
-						option_StairsXPJ_override = false
-						DualBoard = false
-					end
-					boarding_from_the_terminal = true
-					show_Pax = true; Pax_chg = true
-				end
+				-- Without cargo the vehicles were called when the delay started
+				if cargo_total > 0 then slm_call_disembark_vehicles() end
+				if selected_location_group == "terminal" then boarding_from_the_terminal = true end
+				if selected_location_group ~= "jetway" then show_Pax = true; Pax_chg = true end
 				play_sound_by_key("start_unboarding_passengers")
 				sound_played.start_unboarding_passengers = true
 				slm_start_boarding_music()
@@ -2784,6 +2798,9 @@ function manage_disembark()
         end
         if slm_aircraft_type == "toliss" and slm_rp_enabled and not slm_rp_excluded then
             command_once("AirbusFBW/SetWeightAndCG")
+        end
+        if slm_aircraft_type == "rotate" and slm_rp_enabled and not slm_rp_excluded then
+            slm_rotate_payload(0, 0, true)
         end
         disembark_started = false
         disembark_done = true
@@ -3020,6 +3037,9 @@ function slm_rf_start()
         slm_rf_groups = {}
         logMsg("[SLM-RF] ToLiss (ICAO=" .. slm_get_live_icao() ..
                "): writing fuel deltas to m_fuel, ToLiss distributes")
+    elseif slm_aircraft_type == "rotate" then
+        slm_rf_groups, slm_rotate_fuel_kg = {}, nil
+        logMsg("[SLM-RF] Rotate: writing block fuel to the load manager, Rotate distributes")
     elseif slm_aircraft_type == "zibo" then
         slm_rf_groups = {{0,2},{1}}
         logMsg("[SLM-RF] Zibo: wing groups=[0,2] then center=[1]")
@@ -3124,6 +3144,24 @@ function slm_rf_update()
             slm_rf_active = false
             logMsg("[SLM-RF] ToLiss done: total set to " ..
                    string.format("%.0f", to_kg(fuel_total or 0)) .. " kg via m_fuel")
+        end
+        return
+    end
+
+    -- Rotate MD-11 (#SL31): block fuel total + load command, see slm_rotate_payload
+    if slm_aircraft_type == "rotate" then
+        local now = os.clock()
+        if now - slm_rf_last_t < slm_rf_interval and fuel_loaded ~= fuel_total then return end
+        slm_rf_last_t = now
+        local kg = to_kg(fuel_loaded or 0)
+        if math.abs(kg - (slm_rotate_fuel_kg or -1e9)) > 1.0 then
+            slm_rotate_fuel_kg = kg
+            dataref_table(SLM_ROTATE_LM .. "mgr_total_block_fuel_kg")[0] = kg
+            command_once("Rotate/aircraft/ui_c/load_mgr_put_fuel_to_acf")
+        end
+        if fuel_loaded == fuel_total then
+            slm_rf_active = false
+            logMsg(string.format("[SLM-RF] Rotate done: block fuel set to %.0f kg", kg))
         end
         return
     end
@@ -3278,6 +3316,10 @@ function slm_detect_aircraft()
     elseif XPLMFindDataRef("AirbusFBW/NoPax") then
         slm_aircraft_type = "toliss"
         logMsg("[SLM] Aircraft type: ToLiss")
+    elseif icao == "MD11" and XPLMFindDataRef("Rotate/aircraft/load_manager/mgr_total_pax_kg") then
+        -- MD-11 only: the Rotate MD-80 loads through the X-Plane datarefs (#SL31)
+        slm_aircraft_type = "rotate"
+        logMsg("[SLM] Aircraft type: Rotate MD-11 (load manager)")
     else
         slm_aircraft_type = "default"
         logMsg("[SLM] Aircraft type: default (Laminar)")
@@ -3588,6 +3630,28 @@ local function slm_toliss_cargo()
     return from_kg(math.max(0, cargo_kg))
 end
 
+-- Rotate MD-11 (#SL31): the aircraft ignores m_stations / m_fuel. Its load
+-- manager (EFB) takes totals in kg and loads them instantly on a command, so
+-- SLM writes the running totals and sends the command every few seconds.
+-- Rotate weighs every passenger at 86 kg: the gap with the OFP pax weight goes
+-- into the cargo so the aircraft's ZFW matches the loadsheet (as ToLiss).
+-- Globals: the main chunk is at the 200-local limit.
+SLM_ROTATE_PAX_KG = 86
+SLM_ROTATE_LM     = "Rotate/aircraft/load_manager/"
+slm_rotate_last_t, slm_rotate_last_pax, slm_rotate_last_cargo = 0, nil, nil
+function slm_rotate_payload(pax_n, cargo_units, force)
+    local now = os.clock()
+    if not force and now - slm_rotate_last_t < 5 then return end
+    local gap      = ((SB_pax_weight or 0) > 0) and (SB_pax_weight - SLM_ROTATE_PAX_KG) or 0
+    local pax_kg   = pax_n * SLM_ROTATE_PAX_KG
+    local cargo_kg = math.max(0, to_kg(cargo_units) + pax_n * gap)
+    if not force and pax_kg == slm_rotate_last_pax and cargo_kg == slm_rotate_last_cargo then return end
+    slm_rotate_last_t, slm_rotate_last_pax, slm_rotate_last_cargo = now, pax_kg, cargo_kg
+    dataref_table(SLM_ROTATE_LM .. "mgr_total_pax_kg")[0]   = pax_kg
+    dataref_table(SLM_ROTATE_LM .. "mgr_total_cargo_kg")[0] = cargo_kg
+    command_once("Rotate/aircraft/ui_c/load_mgr_put_payload_to_acf")
+end
+
 -- Empty the aircraft once per flight before boarding, even when there is
 -- nothing to load: whatever was left in it (previous flight, EFB, add-on
 -- default load) would otherwise stay on board and the aircraft's ZFW would
@@ -3607,6 +3671,8 @@ function slm_rp_clear_payload()
         dataref_table("AirbusFBW/FwdCargo")[0] = 0
         dataref_table("AirbusFBW/AftCargo")[0] = 0
         command_once("AirbusFBW/SetWeightAndCG")
+    elseif slm_aircraft_type == "rotate" then
+        slm_rotate_payload(0, 0, true)
     else
         return
     end
@@ -3660,6 +3726,10 @@ function slm_rp_start()
         slm_rp_toliss_last_setweight = os.clock()
         logMsg(string.format("[SLM-RP] ToLiss: started pax=%d cargo=%.0f",
             passengers_total or 0, slm_rp_target_cargo_kg))
+
+    elseif slm_aircraft_type == "rotate" then
+        logMsg(string.format("[SLM-RP] Rotate: started pax=%d (%.0f/pax, Rotate %d) cargo=%.0f",
+            passengers_total or 0, SB_pax_weight or 0, SLM_ROTATE_PAX_KG, slm_rp_target_cargo_kg))
     end
 end
 
@@ -3825,6 +3895,11 @@ function slm_rp_update()
             slm_rp_toliss_last_setweight = now
             command_once("AirbusFBW/SetWeightAndCG")
         end
+
+    elseif slm_aircraft_type == "rotate" then
+        pax_done_rp   = (passengers_loaded or 0) >= (passengers_total or 0)
+        cargo_done_rp = (cargo_loaded or 0) >= (cargo_total or 0)
+        slm_rotate_payload(passengers_loaded or 0, cargo_loaded or 0, pax_done_rp and cargo_done_rp)
     end
 
     if pax_done_rp and cargo_done_rp then
@@ -3952,6 +4027,12 @@ function slm_rp_unload_update()
             slm_rp_toliss_last_setweight = now
             command_once("AirbusFBW/SetWeightAndCG")
         end
+
+    elseif slm_aircraft_type == "rotate" then
+        local pax0   = (arr_passengers_total > 0) and arr_passengers_total or (passengers_total or 0)
+        local cargo0 = (arr_cargo_total > 0) and arr_cargo_total or (cargo_total or 0)
+        slm_rotate_payload(math.max(0, pax0 - (passengers_unloaded or 0)),
+                           math.max(0, cargo0 - (cargo_unloaded or 0)))
     end
 end
 
@@ -4120,7 +4201,8 @@ function slm_dev_force_tick()
     if not slm_dev_forcing then return end
     if not embark_started then slm_dev_forcing = false; return end
     if fuel_loading and not fuel_done and fuel_loaded ~= fuel_total then
-        local instant = not slm_rf_enabled or slm_rf_excluded or slm_aircraft_type == "toliss"
+        local instant = not slm_rf_enabled or slm_rf_excluded
+                        or slm_aircraft_type == "toliss" or slm_aircraft_type == "rotate"
         -- wait for slm_rf_update to take its baseline, or the first step is lost
         if instant or (slm_rf_active and slm_rf_last_fuel_loaded ~= nil) then
             local diff = (fuel_total or 0) - (fuel_loaded or 0)
@@ -5340,6 +5422,11 @@ end
 function slm_toliss_update_zfwcg()
     if not SLM_Loadsheet_Data then return end
     SLM_Loadsheet_Data.towcg = nil
+    if slm_aircraft_type == "rotate" then   -- Rotate MD-11: live value from the aircraft (#SL31)
+        local dr = XPLMFindDataRef("Rotate/aircraft/load/ac_zfw_cg_mac")
+        SLM_Loadsheet_Data.zfwcg = dr and string.format("%.1f", XPLMGetDataf(dr)) or nil
+        return
+    end
     if slm_aircraft_type ~= "toliss" then
         local zf, to
         if slm_rp_enabled and not slm_rp_excluded then
