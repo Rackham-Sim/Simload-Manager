@@ -383,8 +383,10 @@
   "set.mute": "Couper le son",
   "set.mute.d": "Coupe tous les sons de SimLoad Manager",
   "set.music": "Musique d'embarquement",
-  "set.music.d": "Joue boarding_music.wav pendant l'embarquement. Placez le fichier dans Resources/plugins/SimLoadManager/lua/SLM-Data/",
+  "set.music.d": "Joue un fichier .wav (PCM 16 bits) pendant l'embarquement. Placez vos fichiers dans Resources/plugins/SimLoadManager/lua/SLM-Data/Music/",
   "set.music_vol": "Volume de la musique",
+  "set.music_file": "Morceau",
+  "set.music_random": "Aléatoire",
 
   "set.acars": "Sortie ACARS",
   "set.acars.d": "Où la loadsheet est envoyée",

@@ -1,15 +1,6 @@
 --SIMLOAD MANAGER V5.0 (branche slm-5.0, base 4.8)
 
 --------------------------------------------------------------------------------
--- IMGUI CHECK
---------------------------------------------------------------------------------
-if not SUPPORTS_FLOATING_WINDOWS then
-    logMsg("imgui not supported by your FlyWithLua version")
-    return
-end
-
-
---------------------------------------------------------------------------------
 -- UPDATE CHECK
 --------------------------------------------------------------------------------
 SLM_VERSION = "4.8"
@@ -19,7 +10,7 @@ logMsg("[SLM] SimLoad Manager v" .. SLM_VERSION .. " loaded")
 slm_dev_mode = false
 
 -- Translations of the texts built by the logic (SLM 5 web UI, #SL17).
--- slm_tr returns the English text unchanged (ImGui shows it) and remembers its
+-- slm_tr returns the English text unchanged (logs, English fallback) and remembers its
 -- language-file key: SLM_TR[text] = { key = "...", vars = {...} }. The web page
 -- shows the translated key, or the English text when the language lacks it.
 SLM_TR = {}
@@ -144,14 +135,6 @@ end
 --------------------------------------------------------------------------------
 embark_wnd = nil
 unit_system = "kg"
--- Plugin UI font size: 0 = default (no custom font), 1-9 = FlyWithLua custom font slot
--- (imgui_push_font, requires FlyWithLua NG 2.8.15+ with fonts installed in Custom_Fonts/)
-slm_font_choice = 0
-SLM_FONT_LABELS = {
-    [1] = "ProFontWindows 13", [2] = "ProFontWindows 16", [3] = "ProFontWindows 20",
-    [4] = "Roboto-Light 13",   [5] = "Roboto-Light 16",   [6] = "Roboto-Light 20",
-    [7] = "Roboto-Regular 13", [8] = "Roboto-Regular 16", [9] = "Roboto-Regular 20",
-}
 -- SLM 5 web window: interface language (code of a lang/<code>.json file) and
 -- text size in percent. The FlyWithLua 4.x version reads and saves them unused.
 slm_language = "en"
@@ -159,58 +142,6 @@ slm_ui_scale = 100
 -- SLM 5 web version on the local network (server in the plugin), off by default.
 slm_web_enabled = false
 slm_web_port = 8074
--- true once the 3 custom font files are confirmed present in FlyWithLua's Custom_Fonts folder
--- (auto-copied from X-Plane's own Resources/fonts by slm_ensure_custom_fonts() below)
-slm_custom_fonts_ready = false
-
-local SLM_CUSTOM_FONT_FILES = {"ProFontWindows.ttf", "Roboto-Light.ttf", "Roboto-Regular.ttf"}
-
-local function slm_file_exists(path)
-    local f = io.open(path, "rb")
-    if f then f:close(); return true end
-    return false
-end
-
-local function slm_copy_file(src, dst)
-    local sf = io.open(src, "rb")
-    if not sf then return false end
-    local data = sf:read("*a")
-    sf:close()
-    if not data or data == "" then return false end
-    local df = io.open(dst, "wb")
-    if not df then return false end
-    df:write(data)
-    df:close()
-    return true
-end
-
--- X-Plane already ships ProFontWindows.ttf / Roboto-Light.ttf / Roboto-Regular.ttf in
--- Resources/fonts; FlyWithLua NG 2.8.15+ just needs them mirrored into its own
--- Custom_Fonts/ folder to make them selectable via imgui_push_font(). Files that
--- merely sit in that folder are inert until a script explicitly pushes one, so this
--- is safe to run automatically (idempotent: skips files already present).
-function slm_ensure_custom_fonts()
-    if not imgui_push_font then
-        slm_custom_fonts_ready = false
-        return
-    end
-    local fonts_src_dir = SYSTEM_DIRECTORY .. "Resources" .. DIRECTORY_SEPARATOR .. "fonts" .. DIRECTORY_SEPARATOR
-    local fonts_dst_dir = SYSTEM_DIRECTORY .. "Resources" .. DIRECTORY_SEPARATOR .. "plugins" .. DIRECTORY_SEPARATOR
-        .. "FlyWithLua" .. DIRECTORY_SEPARATOR .. "Custom_Fonts" .. DIRECTORY_SEPARATOR
-    local all_ready = true
-    for _, fname in ipairs(SLM_CUSTOM_FONT_FILES) do
-        local dst = fonts_dst_dir .. fname
-        if not slm_file_exists(dst) then
-            if slm_copy_file(fonts_src_dir .. fname, dst) then
-                logMsg("[SLM] Custom font installed: " .. fname)
-            else
-                logMsg("[SLM] Could not install custom font " .. fname .. " (source or destination unavailable)")
-                all_ready = false
-            end
-        end
-    end
-    slm_custom_fonts_ready = all_ready
-end
 
 local function to_kg(v)   return (unit_system == "lbs") and ((v or 0) * 0.453592) or (v or 0) end
 local function from_kg(v) return (unit_system == "lbs") and ((v or 0) * 2.20462)  or (v or 0) end
@@ -714,6 +645,7 @@ slm_bpb_remove_chocks     = false   -- with slm_manual_chocks: remove chocks whe
 slm_lc_cleaning_required  = false
 slm_boarding_music_enabled = false
 slm_boarding_music_vol     = 0.5
+slm_boarding_music_file    = ""     -- "" = random track, else a name from slm_music_files()
 slm_sequence_mode     = nil
 slm_sequence_phase    = nil
 
@@ -1051,6 +983,22 @@ function update_loop_volumes()
 end
 
 
+-- Boarding music tracks, as paths under SLM-Data/: every .wav in SLM-Data/Music/
+-- plus the former SLM-Data/boarding_music.wav (any case). Under FlyWithLua (no
+-- directory listing) only the former fixed name.
+function slm_music_files()
+    if not slm_list_wav then return { "boarding_music.wav" } end
+    local list = {}
+    for _, n in ipairs(slm_list_wav(SCRIPT_DIRECTORY .. "SLM-Data/Music")) do
+        list[#list + 1] = "Music/" .. n
+    end
+    for _, n in ipairs(slm_list_wav(SCRIPT_DIRECTORY .. "SLM-Data")) do
+        if n:lower() == "boarding_music.wav" then list[#list + 1] = n end
+    end
+    return list
+end
+
+-- Loads the chosen track, or a random one when none is chosen (or it is gone).
 function slm_init_boarding_music()
     if slm_music_handle and slm_music_handle ~= 0 then
         stop_sound(slm_music_handle)
@@ -1058,7 +1006,16 @@ function slm_init_boarding_music()
     end
     slm_music_playing = false
     if not slm_boarding_music_enabled then return end
-    local path = SCRIPT_DIRECTORY .. "SLM-Data/boarding_music.wav"
+    local files, pick = slm_music_files(), nil
+    for _, f in ipairs(files) do
+        if f == slm_boarding_music_file then pick = f end
+    end
+    if not pick and #files > 0 then pick = files[math.random(#files)] end
+    if not pick then
+        logMsg("[SLM] Boarding music: no .wav file in " .. SCRIPT_DIRECTORY .. "SLM-Data/Music/")
+        return
+    end
+    local path = SCRIPT_DIRECTORY .. "SLM-Data/" .. pick
     slm_music_handle = load_WAV_file(path)
     if slm_music_handle == 0 then
         slm_music_handle = nil
@@ -1079,6 +1036,7 @@ function slm_stop_boarding_music()
     slm_music_playing = false
     let_sound_loop(slm_music_handle, false)
     stop_sound(slm_music_handle)
+    if slm_boarding_music_file == "" then slm_init_boarding_music() end  -- next random track
 end
 
 --------------------------------------------------------------------------------
@@ -1171,6 +1129,8 @@ function load_user_settings()
                 slm_boarding_music_enabled = (value == "true")
             elseif key == "slm_boarding_music_vol" then
                 slm_boarding_music_vol = tonumber(value) or 0.5
+            elseif key == "slm_boarding_music_file" then
+                slm_boarding_music_file = value
             elseif key == "custom_catering_time_per_pax" then
                 custom_catering_time_per_pax = tonumber(value)
             elseif key == "custom_cleaning_time_per_pax" then
@@ -1205,9 +1165,6 @@ function load_user_settings()
                 slm_pax_variability_enabled = (value == "true")
             elseif key == "manual_max_pax" then
                 slm_manual_max_pax = tonumber(value) or 0
-            elseif key == "slm_font_choice" then
-                local n = tonumber(value) or 0
-                slm_font_choice = (n >= 0 and n <= 9) and math.floor(n) or 0
             elseif key == "language" then
                 if value:match("^%a%a$") then slm_language = value:lower() end
             elseif key == "ui_scale" then
@@ -1258,6 +1215,7 @@ function save_user_settings()
         file:write("slm_bpb_remove_chocks=" .. tostring(slm_bpb_remove_chocks) .. "\n")
         file:write("slm_boarding_music_enabled=" .. tostring(slm_boarding_music_enabled) .. "\n")
         file:write("slm_boarding_music_vol=" .. tostring(slm_boarding_music_vol or 0.5) .. "\n")
+        file:write("slm_boarding_music_file=" .. tostring(slm_boarding_music_file or "") .. "\n")
         file:write("custom_catering_time_per_pax=" .. tostring(custom_catering_time_per_pax or 4.0) .. "\n")
         file:write("custom_cleaning_time_per_pax=" .. tostring(custom_cleaning_time_per_pax or 4.0) .. "\n")
         file:write("custom_crew_briefing_min=" .. tostring(custom_crew_briefing_min or 120) .. "\n")
@@ -1272,7 +1230,6 @@ function save_user_settings()
         file:write("event_chance=" .. tostring(slm_event_chance) .. "\n")
         file:write("pax_variability_enabled=" .. tostring(slm_pax_variability_enabled) .. "\n")
         file:write("manual_max_pax=" .. tostring(slm_manual_max_pax) .. "\n")
-        file:write("slm_font_choice=" .. tostring(slm_font_choice or 0) .. "\n")
         file:write("language=" .. tostring(slm_language) .. "\n")
         file:write("ui_scale=" .. tostring(slm_ui_scale) .. "\n")
         file:write("dev_mode=" .. tostring(slm_dev_mode) .. "\n")
@@ -3459,6 +3416,50 @@ function slm_zibo_drain_to(remaining)
     for z = 1, 5 do slm_rp_zibo_zone_dr[z][0] = cur[z] end
 end
 
+-- Board the Zibo zones up to a target total (#SL36): each new passenger takes
+-- a random seat among the zones still short of their final quota, so no one
+-- already seated is moved and the cabin ends on the biased distribution.
+function slm_zibo_board_to(target)
+    local caps  = slm_zibo_caps or {36, 36, 36, 36, 36}
+    local final = slm_zibo_zone_quotas(passengers_total or 0)
+    local cur, sum = {}, 0
+    for z = 1, 5 do
+        cur[z] = math.max(0, math.floor((slm_rp_zibo_zone_dr[z][0] or 0) + 0.5))
+        sum = sum + cur[z]
+    end
+    while sum < target do
+        -- room left in the final quotas, else any free seat
+        local room, total = {}, 0
+        for z = 1, 5 do room[z] = math.max(0, final[z] - cur[z]); total = total + room[z] end
+        if total == 0 then
+            for z = 1, 5 do room[z] = math.max(0, caps[z] - cur[z]); total = total + room[z] end
+        end
+        if total == 0 then break end
+        local r = math.random() * total
+        local pick = 5
+        for z = 1, 5 do
+            if r < room[z] then pick = z; break end
+            r = r - room[z]
+        end
+        cur[pick] = cur[pick] + 1
+        sum = sum + 1
+    end
+    for z = 1, 5 do slm_rp_zibo_zone_dr[z][0] = cur[z] end
+end
+
+-- Move kg (signed) in or out of the two Zibo holds, split evenly (#SL36). The
+-- holds are kept in Lua: the Zibo payload datarefs round to whole kg, so
+-- adding half of a 1 kg step to them was lost every time.
+function slm_zibo_cargo_add(kg)
+    if not slm_zibo_hold then
+        slm_zibo_hold = { slm_rp_zibo_cargo1_dr[0] or 0, slm_rp_zibo_cargo2_dr[0] or 0 }
+    end
+    slm_zibo_hold[1] = math.max(0, slm_zibo_hold[1] + kg / 2)
+    slm_zibo_hold[2] = math.max(0, slm_zibo_hold[2] + kg / 2)
+    slm_rp_zibo_cargo1_dr[0] = math.floor(slm_zibo_hold[1] + 0.5)
+    slm_rp_zibo_cargo2_dr[0] = math.floor(slm_zibo_hold[2] + 0.5)
+end
+
 -- X-Crafts E-Jets (#SL19): balance model of their EFB, read from
 -- plugins/efb/data/acf/<ICAO>.perf.db in the aircraft folder. OEW and its arm,
 -- MAC (leading edge, chord), CG limits, cabin zones {arm, seats} and holds
@@ -3713,6 +3714,7 @@ function slm_rp_start()
         end
         slm_rp_zibo_cargo1_dr = dataref_table("laminar/B738/tab/zone_cargo1_payload")
         slm_rp_zibo_cargo2_dr = dataref_table("laminar/B738/tab/zone_cargo2_payload")
+        slm_zibo_hold = nil
         logMsg(string.format("[SLM-RP] Zibo: started pax=%d (%.0f/pax) cargo=%.0f layout_caps=%d/%d/%d/%d/%d",
             passengers_total or 0, SB_pax_weight or 0, slm_rp_target_cargo_kg,
             slm_zibo_caps[1], slm_zibo_caps[2], slm_zibo_caps[3], slm_zibo_caps[4], slm_zibo_caps[5]))
@@ -3757,6 +3759,7 @@ function slm_rp_stop()
     slm_rp_ejet_shares, slm_rp_ejet_cw = nil, nil
     slm_zibo_caps            = nil
     slm_zibo_cabin_max       = nil
+    slm_zibo_hold            = nil
 end
 
 function slm_rp_update()
@@ -3832,8 +3835,8 @@ function slm_rp_update()
             slm_ensure_pax_bias()
             local loaded = passengers_loaded or 0
             if loaded ~= slm_rp_last_pax_loaded then
-                local q = slm_zibo_zone_quotas(loaded)
-                for z = 1, 5 do slm_rp_zibo_zone_dr[z][0] = q[z] end
+                slm_zibo_board_to(loaded)
+                slm_zibo_drain_to(loaded)
                 slm_rp_last_pax_loaded = loaded
             end
             pax_done_rp = loaded >= (passengers_total or 0)
@@ -3846,14 +3849,7 @@ function slm_rp_update()
                 local delta_units = (cargo_loaded or 0) - slm_rp_last_cargo_loaded
                 if delta_units ~= 0 then
                     slm_rp_last_cargo_loaded = cargo_loaded
-                    local half = to_kg(math.abs(delta_units)) / 2
-                    if delta_units > 0 then
-                        slm_rp_zibo_cargo1_dr[0] = (slm_rp_zibo_cargo1_dr[0] or 0) + half
-                        slm_rp_zibo_cargo2_dr[0] = (slm_rp_zibo_cargo2_dr[0] or 0) + half
-                    else
-                        slm_rp_zibo_cargo1_dr[0] = math.max(0, (slm_rp_zibo_cargo1_dr[0] or 0) - half)
-                        slm_rp_zibo_cargo2_dr[0] = math.max(0, (slm_rp_zibo_cargo2_dr[0] or 0) - half)
-                    end
+                    slm_zibo_cargo_add(to_kg(delta_units))
                 end
             end
             cargo_done_rp = (cargo_loaded or 0) >= (cargo_total or 0)
@@ -3997,9 +3993,7 @@ function slm_rp_unload_update()
                 local delta_units = (cargo_unloaded or 0) - slm_rp_last_cargo_unloaded
                 if delta_units > 0 then
                     slm_rp_last_cargo_unloaded = cargo_unloaded
-                    local half = to_kg(delta_units) / 2
-                    slm_rp_zibo_cargo1_dr[0] = math.max(0, (slm_rp_zibo_cargo1_dr[0] or 0) - half)
-                    slm_rp_zibo_cargo2_dr[0] = math.max(0, (slm_rp_zibo_cargo2_dr[0] or 0) - half)
+                    slm_zibo_cargo_add(-to_kg(delta_units))
                 end
             end
         end
@@ -4915,6 +4909,7 @@ function reset_loads()
 	slm_pax_bias              = nil
 	slm_rp_ejet_shares, slm_rp_ejet_cw = nil, nil
 	slm_zibo_caps             = nil
+	slm_zibo_hold             = nil
 	slm_zibo_cabin_max        = nil
 	slm_planned_cargo_display = nil
 	slm_catering_elapsed_at_pause = nil
@@ -5348,27 +5343,10 @@ preset_values.veryfast  = capture_preset(apply_veryfast_timings)
 --------------------------------------------------------------------------------
 -- WINDOW MANAGEMENT
 --------------------------------------------------------------------------------
-function create_embark_window()
-    if embark_wnd == nil then
-        embark_wnd = float_wnd_create(500, 900, 1, true)
-        float_wnd_set_title(embark_wnd, "SimLoad Manager")
-        float_wnd_set_imgui_builder(embark_wnd, "build_embark_window")
-        float_wnd_set_onclose(embark_wnd, "on_close_embark_window")
-        logMsg("[SLM] Embark window created.")
-    end
-end
-
-function on_close_embark_window(wnd)
-    close_embark_window()
-end
-
-function close_embark_window()
-    if embark_wnd ~= nil then
-        float_wnd_destroy(embark_wnd)
-        embark_wnd = nil
-        logMsg("[SLM] Embark window closed by script.")
-    end
-end
+-- The SLM 5 plugin replaces these three with its web window (web_ui_bind_lua);
+-- these versions only track the open flag, for the tests outside X-Plane.
+function create_embark_window() embark_wnd = true end
+function close_embark_window()  embark_wnd = nil  end
 
 function toggle_embark_window()
     if embark_wnd == nil then
@@ -5680,9 +5658,9 @@ end
 --------------------------------------------------------------------------------
 -- SLM STATE & ACTIONS
 --------------------------------------------------------------------------------
--- Single contract between the logic and any UI (ImGui today, CEF in SLM 5):
+-- Single contract between the logic and the UI (CEF web page in SLM 5):
 -- the logic fills SLM_State (rules, phases, progress), and every user action,
--- whether an ImGui button or an X-Plane command, goes through slm_action().
+-- whether a page button or an X-Plane command, goes through slm_action().
 -- UI code only reads SLM_State and calls slm_action(); it never decides or
 -- changes the operational state itself.
 SLM_State   = {}
@@ -5875,7 +5853,7 @@ end
 -- Every user-editable value, as { get, set, enabled }. SLM_State.settings mirrors
 -- the current values (updated in place, so a reference stays valid), and
 -- slm_action("set", { key = k, value = v }) changes one, with the side effects
--- and persistence the ImGui widgets always had. "enabled" (optional) mirrors
+-- and persistence the former ImGui widgets had. "enabled" (optional) mirrors
 -- when the UI allows the change; SLM_State.settings_enabled exposes it.
 SLM_SETTING_KEYS = {}
 SLM_SETTING_DEFS = {}
@@ -5907,6 +5885,11 @@ function slm_update_settings_state()
         local d = SLM_SETTING_DEFS[key]
         S.settings[key] = d.get()
         S.settings_enabled[key] = (d.enabled == nil) or d.enabled()
+    end
+    -- Tracks offered in Settings, rescanned every 5 s (files added while X-Plane runs)
+    if not S.music_files or os.clock() - (SLM_MUSIC_SCAN_T or 0) > 5 then
+        SLM_MUSIC_SCAN_T = os.clock()
+        S.music_files = slm_music_files()
     end
 end
 
@@ -5943,9 +5926,6 @@ do
     slm_setting_def("unit_system",
         function() return unit_system end,
         function(v) unit_system = v; save_user_settings() end, idle)
-    slm_setting_def("font_choice",
-        function() return slm_font_choice end,
-        function(v) slm_font_choice = math.max(0, math.min(9, v)); save_user_settings() end)
     slm_setting_def("language",
         function() return slm_language end,
         function(v)
@@ -6071,6 +6051,14 @@ do
     slm_setting_def("boarding_music_vol",
         function() return slm_boarding_music_vol end,
         function(v) slm_boarding_music_vol = v; save_user_settings() end,
+        function() return slm_boarding_music_enabled end)
+    slm_setting_def("boarding_music_file",
+        function() return slm_boarding_music_file end,
+        function(v)
+            slm_boarding_music_file = tostring(v or "")
+            if not slm_music_playing then slm_init_boarding_music() end  -- else from the next boarding
+            save_user_settings()
+        end,
         function() return slm_boarding_music_enabled end)
 
     -- Web version (SLM 5 plugin only: FlyWithLua has no server, the settings are unused there)
@@ -6624,11 +6612,11 @@ end
 --               | { segments = { { text = "...", tone = <tone|nil> }, ... } } },
 --     buttons = { { label = "...", action = "<slm_action name>" } } | nil }
 -- Quantity steps (passengers, cargo, fuel) also carry, for UIs that lay the
--- figures out themselves (SLM 5 web UI; ImGui ignores them):
+-- figures out themselves (SLM 5 web UI):
 --     id = "pax" | "cargo" | "fuel", title = "..." (name without figures),
 --     figure = { actual = n, schd = n, unit = "pax" | unit_system }
 -- Tones are semantic ("done", "pending", "event", "muted", "info", "ok", "warn",
--- "eta"); each UI maps them to its own colours (SLM_TONE_COLORS for ImGui).
+-- "eta"); the page maps them to its own colours.
 do  -- scoped helpers: the file-scope local budget is already near Lua's 200 limit
 local H = {}
 
@@ -6640,7 +6628,7 @@ function H.split_lines(text, prefix)
     return lines
 end
 
--- Translatable text (#SL17): English for ImGui, language-file key and
+-- Translatable text (#SL17): English text, language-file key and
 -- variables for the web page. Blocks built from them carry the list in `tr`.
 function H.tx(key, vars, text) return { key = key, vars = vars, text = text } end
 
@@ -6673,7 +6661,7 @@ end
 -- Estimated line of an active step, as its own block.
 function H.eta_block(part) return H.block(nil, "   ", { part }) end
 
--- Step names (English shown by ImGui -> language-file key of the web page).
+-- Step names (English name -> language-file key of the web page).
 H.NAME_KEYS = {
     ["Passenger Deboarding"]             = "step.pax_deboarding",
     ["Cargo Unloading"]                  = "step.cargo_unloading",
@@ -7247,85 +7235,6 @@ end
 end
 
 --------------------------------------------------------------------------------
--- IMGUI HELPERS
---------------------------------------------------------------------------------
-SLM_TONE_COLORS = {
-    done    = 0xFF00CC00,
-    pending = 0xFF888888,
-    event   = 0xFF0080FF,
-    muted   = 0xFFAAAAAA,
-    info    = 0xFF00A5FF,
-    ok      = 0xFF00FF00,
-    warn    = 0xFFFFA500,
-    eta     = 0xFFFFE080,
-    bad     = 0xFF0000FF,
-    amber   = 0xFF00AAFF,
-    error   = 0xFF4444FF,
-    notice  = 0xFF2255FF,
-}
-
-function slm_draw_text_block(tone, lines)
-    if tone then imgui.PushStyleColor(imgui.constant.Col.Text, SLM_TONE_COLORS[tone]) end
-    for _, line in ipairs(lines) do
-        imgui.TextUnformatted(line)
-    end
-    if tone then imgui.PopStyleColor() end
-end
-
-function slm_draw_step_item(it)
-    if it.status ~= "active" then
-        local prefix = (it.status == "done") and "[DONE] " or "[Pending] "
-        slm_draw_text_block(it.status, { prefix .. it.label })
-        return
-    end
-    imgui.TextUnformatted(it.header)
-    if it.bar then
-        if it.bar.tone then imgui.PushStyleColor(imgui.constant.Col.PlotHistogram, SLM_TONE_COLORS[it.bar.tone]) end
-        imgui.ProgressBar(it.bar.frac, 200, 20, "")
-        if it.bar.tone then imgui.PopStyleColor() end
-    end
-    if it.counter then
-        imgui.SameLine()
-        imgui.TextUnformatted(it.counter)
-    end
-    for _, block in ipairs(it.blocks) do
-        if block.segments then
-            for i, seg in ipairs(block.segments) do
-                if i > 1 then imgui.SameLine(nil, 0) end
-                slm_draw_text_block(seg.tone, { seg.text })
-            end
-        else
-            slm_draw_text_block(block.tone, block.lines)
-        end
-    end
-    if it.buttons then
-        for _, btn in ipairs(it.buttons) do
-            imgui.SameLine()
-            if imgui.Button(btn.label) then
-                slm_action(btn.action)
-            end
-        end
-    end
-end
-
-function slm_draw_sequence_steps()
-    -- SLM_State.steps is re-read for every item: a button inside a step (e.g.
-    -- "Finish Briefing") runs an action that rebuilds the list mid-draw.
-    local i = 1
-    while SLM_State.steps[i] do
-        local it = SLM_State.steps[i]
-        if it.kind == "newline" then
-            imgui.NewLine()
-        elseif it.kind == "text" then
-            slm_draw_text_block(it.tone, it.lines)
-        else
-            slm_draw_step_item(it)
-        end
-        i = i + 1
-    end
-end
-
---------------------------------------------------------------------------------
 -- MANUAL DATA LOAD
 --------------------------------------------------------------------------------
 function slm_load_manual_data()
@@ -7417,641 +7326,6 @@ function slm_load_fsd_data()
     SLM_Loadsheet_Data.load_time_str = current_zulu_hhmm()
     logMsg(string.format("[SLM] FSD data loaded: pax=%d cargo=%.0f fuel=%.0f",
         slm_manual_pax, slm_manual_cargo, slm_manual_fuel))
-end
-
---------------------------------------------------------------------------------
--- IMGUI
---------------------------------------------------------------------------------
-function slm_draw_settings_panel()
-    if imgui.CollapsingHeader("Settings") then
-        imgui.Spacing()
-
-        local S = SLM_State
-        local C = S.settings   -- updated in place by every action
-        local busy = S.busy
-
-        local COL = imgui.constant.Col
-        local function section_header(title)
-            imgui.NewLine()
-            imgui.Spacing()
-            imgui.PushStyleColor(COL.Text, 0xFFFFA500)
-            imgui.TextUnformatted(title)
-            imgui.PopStyleColor()
-            imgui.Separator()
-            imgui.Spacing()
-        end
-
-        -- In dev mode, mask sensitive fields (SimBrief ID, API keys) with asterisks so
-        -- they don't leak in screenshots/streams taken while testing; edit them with
-        -- dev mode off, or directly in simload_settings.txt.
-        local function sensitive_input(label, value, maxlen)
-            if S.dev_mode then
-                imgui.BeginDisabled()
-                imgui.InputText(label, string.rep("*", #(value or "")), maxlen)
-                imgui.EndDisabled()
-                return false, value
-            end
-            return imgui.InputText(label, value or "", maxlen)
-        end
-
-        -- Checkbox bound to a setting key.
-        local function setting_checkbox(label, key)
-            local chg, v = imgui.Checkbox(label, C[key])
-            if chg then slm_set(key, v) end
-        end
-
-        -- Radio button selecting one value of a setting key.
-        local function setting_radio(label, key, value)
-            if imgui.RadioButton(label, C[key] == value) then slm_set(key, value) end
-        end
-
-        -- 1. PILOT PROFILE
-        section_header("PILOT PROFILE")
-        if busy then imgui.BeginDisabled() end
-        local changed_capt, new_capt = imgui.InputText("Captain", C.captain or "", 100)
-        if changed_capt then
-            slm_set("captain", new_capt)
-        end
-        if busy then imgui.EndDisabled() end
-
-        -- 2. DATA SOURCE
-        section_header("DATA SOURCE")
-        if busy then imgui.BeginDisabled() end
-        imgui.TextUnformatted("Data source:")
-        setting_radio("SimBrief##src", "data_source", "simbrief")
-        imgui.SameLine()
-        setting_radio("Manual##src", "data_source", "manual")
-        if S.fsd_available then
-            imgui.SameLine()
-            setting_radio("Flight Sim Deck##src", "data_source", "fsd")
-        end
-        if busy then imgui.EndDisabled() end
-
-        local id_locked = busy or C.data_source == "manual" or C.data_source == "fsd"
-        if id_locked then imgui.BeginDisabled() end
-        local changed, new_id = sensitive_input("SimBrief ID", C.simbrief_id, 100)
-        if changed then
-            slm_set("simbrief_id", new_id)
-        end
-        if id_locked then imgui.EndDisabled() end
-
-        imgui.Spacing()
-        if busy then imgui.BeginDisabled() end
-        imgui.TextUnformatted("ACARS output:")
-        imgui.SameLine()
-        setting_radio("None##acars", "acars_output", "none")
-        imgui.SameLine()
-        setting_radio("Hoppie##acars", "acars_output", "hoppie")
-        imgui.SameLine()
-        setting_radio("SayIntentions##acars", "acars_output", "si")
-
-        if C.acars_output == "hoppie" then
-            local chg_logon, new_logon = sensitive_input("Logon code##hoppie", C.hoppie_logon, 32)
-            if chg_logon then slm_set("hoppie_logon", new_logon) end
-            imgui.TextUnformatted("Message type:")
-            imgui.SameLine()
-            setting_radio("TELEX##mtype", "hoppie_msgtype", "telex")
-            imgui.SameLine()
-            setting_radio("CPDLC##mtype", "hoppie_msgtype", "cpdlc")
-        elseif C.acars_output == "si" then
-            local chg_key, new_key = sensitive_input("API Key##si", C.si_key, 64)
-            if chg_key then slm_set("si_key", new_key) end
-        end
-        if busy then imgui.EndDisabled() end
-
-        -- 3. UNITS & DISPLAY
-        section_header("UNITS & DISPLAY")
-        if busy then imgui.BeginDisabled() end
-        imgui.TextUnformatted("Unit System:")
-        local changed_unit_kg = imgui.RadioButton("Kilograms (kg)", C.unit_system == "kg")
-        imgui.SameLine()
-        local changed_unit_lbs = imgui.RadioButton("Pounds (lbs)", C.unit_system == "lbs")
-        if changed_unit_kg then
-            slm_set("unit_system", "kg")
-        elseif changed_unit_lbs then
-            slm_set("unit_system", "lbs")
-        end
-        if busy then imgui.EndDisabled() end
-
-        imgui.Spacing()
-        imgui.TextUnformatted("Plugin font size:")
-        imgui.SameLine()
-        if imgui.Button("<##slm_font_size") then
-            slm_set("font_choice", (C.font_choice or 0) - 1)
-        end
-        imgui.SameLine()
-        imgui.TextUnformatted((C.font_choice and C.font_choice > 0)
-            and (SLM_FONT_LABELS[C.font_choice] or ("Size " .. C.font_choice))
-            or "Default")
-        imgui.SameLine()
-        if imgui.Button(">##slm_font_size") then
-            slm_set("font_choice", (C.font_choice or 0) + 1)
-        end
-        if not imgui_push_font then
-            imgui.PushStyleColor(COL.Text, 0xFF888888)
-            imgui.TextUnformatted("(Requires FlyWithLua NG 2.8.15+)")
-            imgui.PopStyleColor()
-        elseif C.font_choice and C.font_choice > 0 and not slm_custom_fonts_ready then
-            imgui.PushStyleColor(COL.Text, 0xFFFFA500)
-            imgui.TextUnformatted("(Could not auto-install custom fonts. Manually copy")
-            imgui.TextUnformatted("ProFontWindows.ttf, Roboto-Light.ttf and Roboto-Regular.ttf")
-            imgui.TextUnformatted("from Resources/fonts to Resources/plugins/FlyWithLua/Custom_Fonts/,")
-            imgui.TextUnformatted("then reload scripts.)")
-            imgui.PopStyleColor()
-        end
-
-        -- 4. OPERATIONS
-        section_header("OPERATIONS")
-        if busy then imgui.BeginDisabled() end
-        setting_checkbox("Low-Cost Operations", "lowcost")
-        imgui.SameLine()
-        local tankering_locked = not C.lowcost
-        if tankering_locked then imgui.BeginDisabled() end
-        setting_checkbox("Tankering", "tankering")
-        if tankering_locked then imgui.EndDisabled() end
-        local fuel_first_locked = C.lowcost
-        if fuel_first_locked then imgui.BeginDisabled() end
-        setting_checkbox("Fuel First", "fuel_first")
-        if fuel_first_locked then imgui.EndDisabled() end
-        local real_fill_locked = S.real_fill_excluded
-        if real_fill_locked then imgui.BeginDisabled() end
-        setting_checkbox("Real Fuel Fill (writes datarefs)", "rf_enabled")
-        setting_checkbox("Real Payload Fill (writes datarefs)", "rp_enabled")
-        if real_fill_locked then imgui.EndDisabled() end
-        setting_checkbox("Skip Crew Briefing", "skip_crew_briefing")
-        setting_checkbox("Chocks: SLM never removes them", "manual_chocks")
-        if S.bpb_option_available then
-            imgui.TextUnformatted("   ")
-            imgui.SameLine()
-            setting_checkbox("Let BPB remove chocks", "bpb_remove_chocks")
-        end
-        setting_checkbox("Chocks: SLM never places them", "no_chocks")
-        if busy then imgui.EndDisabled() end
-
-        -- 5. SIMULATION
-        section_header("SIMULATION")
-        if busy then imgui.BeginDisabled() end
-        imgui.TextUnformatted("Timing preset:")
-        imgui.SameLine()
-        local preset = C.timing_preset  -- the three presets show the value from before any click
-        if imgui.RadioButton("Realistic", preset == "realistic") then slm_set("timing_preset", "realistic") end
-        imgui.SameLine()
-        if imgui.RadioButton("Fast", preset == "fast") then slm_set("timing_preset", "fast") end
-        imgui.SameLine()
-        if imgui.RadioButton("Very Fast", preset == "veryfast") then slm_set("timing_preset", "veryfast") end
-        imgui.SameLine()
-        setting_radio("Custom", "timing_preset", "custom")
-
-        if C.timing_preset == "custom" then
-            local P = S.preset_values
-            imgui.Separator()
-            imgui.TextUnformatted("Custom timing parameters:")
-            imgui.PushItemWidth(120)
-
-            -- One custom timing input, followed by the three presets for reference.
-            local function timing_row(label, name, input_fmt, ref_fmt, preset_name)
-                local key = "custom_" .. name
-                local c, v = imgui.InputFloat(label, C[key], 0, 0, input_fmt)
-                if c then slm_set(key, v) end
-                imgui.SameLine()
-                preset_name = preset_name or name
-                imgui.TextUnformatted(string.format(ref_fmt,
-                    P.realistic[preset_name], P.fast[preset_name], P.veryfast[preset_name]))
-            end
-
-            local REF1  = "-> Realistic: %.1f | Fast: %.1f | Very Fast: %.1f"
-            local REFPM = "-> Realistic: Â±%.1f | Fast: Â±%.1f | Very Fast: Â±%.1f"
-            local REF3  = "-> Realistic: %.3f | Fast: %.3f | Very Fast: %.3f"
-            local REF0  = "-> Realistic: %.0f | Fast: %.0f | Very Fast: %.0f"
-            timing_row("Pax load time (s/pax)",       "pax_time_per_passenger",           "%0.2f", REF1)
-            timing_row("Pax time variation (s)",      "pax_time_variation",               "%0.2f", REFPM)
-            timing_row("Disembark pax time (s/pax)",  "disembark_pax_time_per_passenger", "%0.2f", REF1)
-            timing_row("Disembark pax var. (s)",      "disembark_pax_time_variation",     "%0.2f", REFPM)
-            timing_row("Cargo load min (s/kg)",       "cargo_time_per_kg_min",            "%0.3f", REF3)
-            timing_row("Cargo load max (s/kg)",       "cargo_time_per_kg_max",            "%0.3f", REF3)
-            timing_row("Cargo unload min (s/kg)",     "disembark_cargo_time_per_kg_min",  "%0.3f", REF3)
-            timing_row("Cargo unload max (s/kg)",     "disembark_cargo_time_per_kg_max",  "%0.3f", REF3)
-            timing_row("Fuel time per kg",            "fuel_time_per_kg",                 "%0.3f", REF3)
-            timing_row("Catering time (s/pax)",       "catering_time_per_pax",            "%.1f",  REF1)
-            timing_row("Cleaning time (s/pax)",       "cleaning_time_per_pax",            "%.1f",  REF1)
-            timing_row("Crew briefing min (s)",       "crew_briefing_min",                "%.0f",  REF0, "crew_briefing_time_min")
-            timing_row("Crew briefing max (s)",       "crew_briefing_max",                "%.0f",  REF0, "crew_briefing_time_max")
-
-            imgui.Spacing()
-            local chg_ef, new_ef = imgui.SliderFloat("Event duration factor", C.custom_event_duration_factor or 0.7, 0.1, 1.0, "%.2f")
-            if chg_ef then slm_set("custom_event_duration_factor", new_ef) end
-            imgui.SameLine()
-            imgui.TextUnformatted(string.format("(max ~%.0f min  |  Realistic: 1.0 | Fast: 0.50 | VeryFast: 0.25)", 600 * (C.custom_event_duration_factor or 0.7) / 60))
-
-            imgui.PopItemWidth()
-        end
-
-        if busy then imgui.EndDisabled() end
-
-        imgui.Spacing()
-        if busy then imgui.BeginDisabled() end
-        local ev_pct = C.event_chance * 100.0
-        local chg_evchance, new_evchance = imgui.SliderFloat("Random Events chance", ev_pct, 0.0, 100.0, "%.0f%%")
-        if chg_evchance then
-            slm_set("event_chance", new_evchance / 100.0)
-        end
-        setting_checkbox("Pax variability (no-shows / standbys)", "pax_variability")
-        if busy then imgui.EndDisabled() end
-
-        -- 6. AUDIO
-        section_header("AUDIO")
-
-        local muted = C.muted
-        if muted then imgui.BeginDisabled() end
-        local chg_vol, new_vol = imgui.SliderFloat("Volume", C.volume, 0.0, 1.0, "%.2f")
-        if chg_vol then
-            slm_set("volume", new_vol)
-        end
-        if muted then imgui.EndDisabled() end
-        setting_checkbox("Mute sound", "muted")
-        setting_checkbox("Boarding Music (boarding_music.wav)", "boarding_music")
-        local music_locked = not C.boarding_music
-        if music_locked then imgui.BeginDisabled() end
-        local chg_bvol, new_bvol = imgui.SliderFloat("Music Volume##bm", C.boarding_music_vol, 0.0, 1.0, "%.2f")
-        if chg_bvol then
-            slm_set("boarding_music_vol", new_bvol)
-        end
-        if music_locked then imgui.EndDisabled() end
-
-        -- 7. DEV
-        section_header("DEV")
-        setting_checkbox("Activate Dev mode", "dev_mode")
-    end
-end
-
-function slm_draw_manual_inputs()
-	local C = SLM_State.settings
-	local chg_pax, new_pax = imgui.InputInt("Pax##manual", C.manual_pax)
-	if chg_pax then slm_set("manual_pax", new_pax) end
-
-	local chg_mxp, new_mxp = imgui.InputInt("Max Pax capacity##manual", C.manual_max_pax)
-	if chg_mxp then slm_set("manual_max_pax", new_mxp) end
-	imgui.SameLine()
-	imgui.PushStyleColor(imgui.constant.Col.Text, 0xFFAAAAAA)
-	imgui.TextUnformatted("(0 = disable standbys)")
-	imgui.PopStyleColor()
-
-	local chg_cargo, new_cargo = imgui.InputFloat("Cargo (kg)##manual", C.manual_cargo, 10, 100, "%.0f")
-	if chg_cargo then slm_set("manual_cargo", new_cargo) end
-
-	local chg_fuel, new_fuel = imgui.InputFloat("Fuel (kg)##manual", C.manual_fuel, 100, 1000, "%.0f")
-	if chg_fuel then slm_set("manual_fuel", new_fuel) end
-
-	imgui.Spacing()
-	imgui.PushStyleColor(imgui.constant.Col.Text, 0xFFAAAAAA)
-	imgui.TextUnformatted("Optional flight info:")
-	imgui.PopStyleColor()
-
-	local chg_flt, new_flt = imgui.InputText("Flt Number##manual", C.manual_fltnum, 12)
-	if chg_flt then slm_set("manual_fltnum", new_flt) end
-
-	imgui.PushItemWidth(80)
-	local chg_orig, new_orig = imgui.InputText("ICAO Dep##manual", C.manual_orig, 5)
-	if chg_orig then slm_set("manual_orig", new_orig) end
-	imgui.PopItemWidth()
-	imgui.SameLine()
-	imgui.PushItemWidth(80)
-	local chg_dest, new_dest = imgui.InputText("ICAO Arr##manual", C.manual_dest, 5)
-	if chg_dest then slm_set("manual_dest", new_dest) end
-	imgui.PopItemWidth()
-
-	imgui.PushItemWidth(90)
-	local chg_std, new_std = imgui.InputText("Block-Off##manual", C.manual_std, 8)
-	if chg_std then slm_set("manual_std", new_std) end
-	imgui.PopItemWidth()
-	imgui.SameLine()
-	imgui.PushItemWidth(90)
-	local chg_sta, new_sta = imgui.InputText("Block-On##manual", C.manual_sta, 8)
-	if chg_sta then slm_set("manual_sta", new_sta) end
-	imgui.PopItemWidth()
-
-	imgui.Spacing()
-	if imgui.Button("Load manual data") then
-		slm_action("load_manual")
-	end
-end
-
-function slm_draw_lf_confirm_panel()
-	local S = SLM_State
-	if not S.last_flight_confirm then return end
-	imgui.Spacing()
-	imgui.Separator()
-	imgui.Spacing()
-	imgui.PushStyleColor(imgui.constant.Col.Text, 0xFFFFDD55)
-	imgui.TextUnformatted("Resume last flight?")
-	imgui.PopStyleColor()
-	slm_draw_text_block(nil, S.last_flight.lines)
-	imgui.Spacing()
-	imgui.PushStyleColor(imgui.constant.Col.Button, 0xFF1A7A1A)
-	if imgui.Button("Confirm") then
-		slm_action("confirm_last_flight")
-	end
-	imgui.PopStyleColor()
-	imgui.SameLine()
-	if imgui.Button("Cancel") then
-		slm_action("cancel_last_flight")
-	end
-	imgui.Separator()
-	imgui.Spacing()
-end
-
-function slm_draw_times_panel()
-	local T = SLM_State.times
-	imgui.NewLine()
-	imgui.Separator()
-	imgui.TextUnformatted("Current Zulu: " .. T.now)
-	imgui.TextUnformatted("Flight Times (UTC) - Imported via Simbrief ")
-	imgui.NewLine()
-	imgui.TextUnformatted("                | Sched. | Act.")
-	for _, row in ipairs(T.rows) do
-		slm_draw_text_block(row.tone, { row.text })
-	end
-end
-
-function build_embark_window(wnd, x, y)
-    -- imgui_push_font() must always be matched by imgui.PopFont(); routing the whole
-    -- window body through a wrapper guarantees that even if the body returns early.
-    local use_custom_font = imgui_push_font and slm_font_choice and slm_font_choice > 0
-    if use_custom_font then imgui_push_font(slm_font_choice) end
-
-    slm_build_embark_window_body(wnd, x, y)
-
-    if use_custom_font then imgui.PopFont() end
-end
-
-function slm_build_embark_window_body(wnd, x, y)
-    slm_update_state()
-    local S = SLM_State
-    slm_draw_settings_panel()
-
-	slm_draw_text_block(S.update_status.tone, { S.update_status.text })
-
-
-    imgui.Separator()
-	imgui.NewLine()
-	local ops_running = S.ops_running
-	if ops_running then
-		imgui.BeginDisabled()
-	end
-
-	local load_blocked = S.load_blocked
-	if load_blocked then imgui.BeginDisabled() end
-
-	local C = S.settings
-	if C.data_source == "simbrief" then
-		if imgui.Button("Load Simbrief data") then
-			slm_action("load_simbrief")
-		end
-		imgui.SameLine()
-		if imgui.Button("Dispatch") then
-			slm_action("open_dispatch")
-		end
-	elseif C.data_source == "manual" then
-		slm_draw_manual_inputs()
-	elseif C.data_source == "fsd" then
-		if S.fsd_available then
-			imgui.PushStyleColor(imgui.constant.Col.Text, 0xFFAAAAAA)
-			imgui.TextUnformatted("Source: Flight Sim Deck")
-			imgui.PopStyleColor()
-			if imgui.Button("Load FSD data") then
-				slm_action("load_fsd")
-			end
-		else
-			slm_draw_text_block("notice", { "[!] Flight Sim Deck not detected.",
-			                                "    Please switch your data source in Settings." })
-		end
-	end
-
-	if load_blocked then imgui.EndDisabled() end
-
-	-- Load Last Flight: outside load_blocked so it stays available in-flight (script reload recovery)
-	imgui.SameLine()
-	local can_lf = S.can_load_last_flight
-	if not can_lf then imgui.BeginDisabled() end
-	if imgui.Button("Load Last Flight") then
-		slm_action("open_last_flight")
-	end
-	if not can_lf then imgui.EndDisabled() end
-
-	if ops_running then
-		imgui.EndDisabled()
-	end
-
-	-- Last Flight confirmation panel
-	slm_draw_lf_confirm_panel()
-
-	if S.summary then
-		slm_draw_text_block("muted", { S.summary })
-	else
-		slm_draw_text_block("error", { S.data_hint })
-	end
-	if S.exclusion_message then
-		slm_draw_text_block("notice", { "[!] " .. S.exclusion_message })
-	end
-
-	local location_locked = not S.can_change_location
-
-	imgui.Spacing()
-	if location_locked then imgui.BeginDisabled() end
-
-	imgui.TextUnformatted("Select your location :")
-	if imgui.RadioButton("Remote Stand", S.location == "remote") then
-		slm_action("set_location", "remote")
-	end
-	imgui.SameLine()
-	if imgui.RadioButton("Gate W/O Jetway", S.location == "terminal") then
-		slm_action("set_location", "terminal")
-	end
-	imgui.SameLine()
-	if imgui.RadioButton("Gate Jetway", S.location == "jetway") then
-		slm_action("set_location", "jetway")
-	end
-
-	local chg_own, new_own = imgui.Checkbox("Don't call jetway / stairs", S.own_stairs)
-	if chg_own then
-		slm_action("set_own_stairs", new_own)
-	end
-
-	if location_locked then imgui.EndDisabled() end
-
-	imgui.Spacing()
-	imgui.Separator()
-
-	imgui.PushStyleColor(imgui.constant.Col.Text, 0xFFE6D8AD)
-	local mode_label
-	if S.mode == "in_flight" then
-		mode_label = "Mode: In Flight"
-	elseif S.mode == "arrival" then
-		mode_label = "Mode: Arrival"
-	else
-		mode_label = "Mode: Departure"
-	end
-	imgui.TextUnformatted(mode_label)
-	imgui.PopStyleColor()
-
-	if S.beacon_hold then
-		imgui.PushStyleColor(imgui.constant.Col.Text, 0xFF2222FF)
-		imgui.TextUnformatted("Beacon Light On - Ground Ops on Standby")
-		imgui.PopStyleColor()
-	end
-
-	local start_locked = not S.can_start
-	if start_locked then imgui.BeginDisabled() end
-
-	if S.mode == "departure" then
-		if imgui.Button("Start Loading") then
-			slm_action("start_loading")
-		end
-	elseif S.mode == "arrival" then
-		if imgui.Button("Start Turnaround") then
-			slm_action("start_turnaround")
-		end
-		imgui.SameLine()
-		if imgui.Button("Start RON") then
-			slm_action("start_ron")
-		end
-	end
-	if start_locked then imgui.EndDisabled() end
-
-	imgui.SameLine()
-	if imgui.Button("Reset") then
-		slm_action("reset")
-	end
-
-	imgui.Spacing()
-    imgui.Separator()
-	imgui.NewLine()
-
-	if S.steps_visible then
-		slm_draw_sequence_steps()
-	end
-
-	imgui.NewLine()
-
-	-- Fuel Top-Up button
-	local topup_available = S.can_topup
-	if not topup_available then imgui.BeginDisabled() end
-	if imgui.Button("Fuel Top-Up") then
-		slm_action("toggle_topup")
-	end
-	if not topup_available then imgui.EndDisabled() end
-
-	imgui.SameLine()
-
-	if S.can_view_loadsheet then
-		if imgui.Button("View Loadsheet") then
-			slm_action("view_loadsheet")
-		end
-	else
-		imgui.BeginDisabled()
-		imgui.Button("View Loadsheet")
-		imgui.EndDisabled()
-	end
-
-	if S.topup.active then
-		imgui.Spacing()
-		imgui.Separator()
-		imgui.Spacing()
-		imgui.TextUnformatted("--- Fuel Top-Up ---")
-		imgui.Spacing()
-		imgui.TextUnformatted(string.format("Current on board : %d %s", S.topup.current, S.unit))
-		imgui.TextUnformatted(string.format("Plan target      : %d %s", S.topup.plan, S.unit))
-		imgui.Spacing()
-		local ch, nv = imgui.InputFloat(string.format("New target (%s)##topup", S.unit), S.topup.target, 0, 0, "%.0f")
-		if ch then slm_action("set_topup_target", nv) end
-		imgui.Spacing()
-		if imgui.Button("Apply##topup") then
-			slm_action("apply_topup", S.topup.target)
-		end
-		imgui.SameLine()
-		if imgui.Button("Cancel##topup") then
-			slm_action("cancel_topup")
-		end
-		imgui.Separator()
-	end
-
-	if S.acars_status then
-		imgui.SameLine()
-		slm_draw_text_block(S.acars_status.tone, { S.acars_status.text })
-	end
-
-	slm_draw_times_panel()
-
-    imgui.NewLine()
-    imgui.Separator()
-
-	if imgui.Button("Visit Simchecklist.eu") then
-		slm_action("open_simchecklist")
-	end
-
-	imgui.SameLine()
-
-	if imgui.Button("Buy me a Ko-Fi") then
-		slm_action("open_kofi")
-	end
-
-	imgui.SameLine()
-
-	if imgui.Button("Toggle SGES") then
-		slm_action("toggle_sges")
-	end
-
-	if S.dev_mode then
-		imgui.NewLine()
-		imgui.Separator()
-		imgui.PushStyleColor(imgui.constant.Col.Header,        0xFF2A2A44)
-		imgui.PushStyleColor(imgui.constant.Col.HeaderHovered, 0xFF3A3A66)
-		imgui.PushStyleColor(imgui.constant.Col.Text,          0xFFAAAAFF)
-		local dev_open = imgui.CollapsingHeader("Developer Tools")
-		imgui.PopStyleColor(3)
-		if dev_open then
-			imgui.Spacing()
-			imgui.PushStyleColor(imgui.constant.Col.Button, 0xFF333355)
-			imgui.PushStyleColor(imgui.constant.Col.Text,   0xFFAAAAFF)
-			if imgui.Button(S.dev_cycle_label) then
-				slm_action("dev_cycle")
-			end
-			imgui.SameLine()
-			if not S.can_force_load then imgui.BeginDisabled() end
-			if imgui.Button(S.dev_force_load_label .. "##dev_force_load") then
-				slm_action("dev_force_load")
-			end
-			if not S.can_force_load then imgui.EndDisabled() end
-			imgui.PopStyleColor(2)
-
-			if #S.dev_events > 0 then
-				imgui.Spacing()
-				imgui.PushStyleColor(imgui.constant.Col.Text, 0xFFAAAAFF)
-				imgui.TextUnformatted("Force event:")
-				imgui.PopStyleColor()
-				imgui.SameLine()
-				local items = ""
-				for _, label in ipairs(S.dev_events) do
-					items = items .. label .. "\0"
-				end
-				items = items .. "\0"
-				imgui.SetNextItemWidth(230)
-				local chg_ev, new_ev = imgui.Combo("##dev_ev", slm_dev_event_idx, items)
-				if chg_ev then slm_dev_event_idx = new_ev end
-				imgui.SameLine()
-				local can_force = S.can_force_event
-				if not can_force then imgui.BeginDisabled() end
-				imgui.PushStyleColor(imgui.constant.Col.Button, 0xFF333355)
-				imgui.PushStyleColor(imgui.constant.Col.Text,   0xFFAAAAFF)
-				if imgui.Button("Force##dev_force") then
-					slm_action("dev_force_event", slm_dev_event_idx)
-				end
-				imgui.PopStyleColor(2)
-				if not can_force then imgui.EndDisabled() end
-			end
-			imgui.Spacing()
-		end
-	end
 end
 
 --------------------------------------------------------------------------------
@@ -8232,7 +7506,6 @@ slm_load_aircraft_data()
 -- STARTUP INIT
 --------------------------------------------------------------------------------
 do
-    slm_ensure_custom_fonts()
     slm_detect_aircraft()
     slm_detect_fsd()
     slm_detect_walkaround()

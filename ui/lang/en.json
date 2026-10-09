@@ -383,8 +383,10 @@
   "set.mute": "Mute",
   "set.mute.d": "Silences every SimLoad Manager sound",
   "set.music": "Boarding music",
-  "set.music.d": "Plays boarding_music.wav during boarding. Put the file in Resources/plugins/SimLoadManager/lua/SLM-Data/",
+  "set.music.d": "Plays a .wav file (16-bit PCM) during boarding. Put your files in Resources/plugins/SimLoadManager/lua/SLM-Data/Music/",
   "set.music_vol": "Music volume",
+  "set.music_file": "Track",
+  "set.music_random": "Random",
 
   "set.acars": "ACARS output",
   "set.acars.d": "Where the loadsheet is sent",

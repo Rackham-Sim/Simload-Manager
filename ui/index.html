@@ -585,6 +585,8 @@ select{font:inherit;font-size:12.5px;padding:5px;border-radius:6px;border:1px so
             <button class="sw" role="switch" data-key="boarding_music"></button></div>
           <div class="set-row sub"><div><div class="h" data-i18n="set.music_vol"></div></div>
             <div class="rng"><input type="range" min="0" max="1" step="0.01" data-set="boarding_music_vol"><span class="mono" data-out="boarding_music_vol"></span></div></div>
+          <div class="set-row sub"><div><div class="h" data-i18n="set.music_file"></div></div>
+            <select id="music-sel" data-set="boarding_music_file"></select></div>
         </div>
 
         <div class="set-pane" id="p-acars" hidden>
@@ -1384,6 +1386,7 @@ select{font:inherit;font-size:12.5px;padding:5px;border-radius:6px;border:1px so
     if (S) render();
   };
   var langKey = null;
+  var musicKey = null;
 
   // Custom timing parameters: setting "custom_<name>", reference value in
   // SLM_State.preset_values.<preset>[ref], shown with <dec> decimals.
@@ -1479,6 +1482,19 @@ select{font:inherit;font-size:12.5px;padding:5px;border-radius:6px;border:1px so
       var f = Number(C.custom_event_duration_factor) || 0.7;
       text("ef-d", t("set.event_factor.d", { min: Math.round(600 * f / 60) }));
     }
+
+    // Boarding music track ("" = random), from SLM_State.music_files
+    var files = S.music_files || [], cur = C.boarding_music_file || "";
+    var mk = JSON.stringify([files, cur, t("set.music_random")]);
+    if (mk !== musicKey) {
+      musicKey = mk;
+      $("music-sel").innerHTML = [""].concat(files).map(function (f) {
+        var name = f ? f.replace(/^.*\//, "").replace(/\.wav$/i, "") : t("set.music_random");
+        return "<option value=\"" + esc(f) + "\"" + (f === cur ? " selected" : "") + ">" + esc(name) + "</option>";
+      }).join("");
+    }
+    $("music-sel").disabled = !on("boarding_music_file");
+    setRowOff($("music-sel"), $("music-sel").disabled);
 
     // Language
     var key = JSON.stringify([C.language, langFiles]);

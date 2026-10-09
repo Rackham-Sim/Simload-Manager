@@ -383,8 +383,10 @@
   "set.mute": "Muto",
   "set.mute.d": "Disattiva tutti i suoni di SimLoad Manager",
   "set.music": "Musica d'imbarco",
-  "set.music.d": "Riproduce boarding_music.wav durante l'imbarco. Inserisca il file in Resources/plugins/SimLoadManager/lua/SLM-Data/",
+  "set.music.d": "Riproduce un file .wav (PCM a 16 bit) durante l'imbarco. Inserisca i suoi file in Resources/plugins/SimLoadManager/lua/SLM-Data/Music/",
   "set.music_vol": "Volume musica",
+  "set.music_file": "Brano",
+  "set.music_random": "Casuale",
 
   "set.acars": "Uscita ACARS",
   "set.acars.d": "Destinazione del loadsheet",
