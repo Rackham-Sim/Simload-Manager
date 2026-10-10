@@ -1,2 +1,2 @@
-10.09.2026
-Simload Manager V5.0.5
+10.10.2026
+Simload Manager V5.0.6
