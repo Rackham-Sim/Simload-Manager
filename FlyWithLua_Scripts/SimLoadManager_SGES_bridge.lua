@@ -14,7 +14,7 @@
 local VEHICLES = {
     "Bus", "Pax", "FUEL", "Catering", "Cleaning", "Cones", "Chocks",
     "StairsXPJ", "StairsXPJ2", "BeltLoader", "RearBeltLoader", "Cart",
-    "People1", "People2", "People3", "People4",
+    "People1", "People2", "People3", "People4", "GPU",
 }
 local PREFIX = "SimLoadManager/SGES/"
 

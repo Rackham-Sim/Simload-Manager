@@ -19,7 +19,7 @@
 local VEHICLES = {
     "Bus", "Pax", "FUEL", "Catering", "Cleaning", "Cones", "Chocks",
     "StairsXPJ", "StairsXPJ2", "BeltLoader", "RearBeltLoader", "Cart",
-    "People1", "People2", "People3", "People4",
+    "People1", "People2", "People3", "People4", "GPU",
 }
 local OVERRIDE = "option_StairsXPJ_override"
 local PREFIX = "SimLoadManager/SGES/"

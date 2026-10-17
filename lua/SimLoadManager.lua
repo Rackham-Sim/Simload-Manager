@@ -505,6 +505,14 @@ slm_rp_cargo_written_kg  = 0
 -- per-station kg when unloading began
 slm_rp_st_pax          = nil
 slm_rp_st_pax_unload0  = nil
+-- default stations with a main deck (#SL43): cargo kg written per station
+slm_rp_st_cargo        = nil
+-- payload fill started for this boarding: with 0 pax nothing else tells it,
+-- and it restarted every frame, adding the whole cargo again (#SL43)
+slm_rp_started         = false
+-- ICAO used for the aircraft.json lookups (slm_detect_aircraft), nil = PLANE_ICAO
+slm_data_icao          = nil
+slm_laminar_a330_deriv = false   -- Laminar A330 derivative detected (#SL43)
 -- E-Jets (#SL19): balance model (nil = not read yet, false = none), this
 -- flight's seating shares and hold split
 slm_ejet_perf, slm_rp_ejet_shares, slm_rp_ejet_cw = nil, nil, nil
@@ -642,6 +650,7 @@ slm_tankering_mode        = false
 slm_manual_chocks         = false
 slm_no_chocks             = false   -- SLM never places chocks (independent of slm_manual_chocks, which governs removal)
 slm_bpb_remove_chocks     = false   -- with slm_manual_chocks: remove chocks when BetterPushback starts (#SL05)
+slm_gpu_enabled           = true    -- ground power handling (#SL40)
 slm_lc_cleaning_required  = false
 slm_boarding_music_enabled = false
 slm_boarding_music_vol     = 0.5
@@ -827,6 +836,21 @@ SLM_event_category = create_dataref_table("SimLoadManager/event_category", "Int"
 SLM_event_paused   = create_dataref_table("SimLoadManager/event_paused",   "Int")
 SLM_event_slowed   = create_dataref_table("SimLoadManager/event_slowed",   "Int")
 
+-- mute_gate_calls: written by other plugins (XP CabinState, which plays its own
+-- gate announcements). 1 = skip the calls the gate already announces; 0 = normal.
+-- Back to 0 on every script load (aircraft change, Reload).
+SLM_mute_gate_calls = create_dataref_table("SimLoadManager/mute_gate_calls", "Int")
+SLM_mute_gate_calls[0] = 0
+SLM_GATE_CALLS = {
+    start_boarding_passengers              = true,
+    finished_loading_pax                   = true,
+    event_pax_gate_opening_delay           = true,
+    event_pax_bus_breakdown                = true,
+    event_pax_no_show_baggage_removal      = true,
+    event_more_pax_no_show_baggage_removal = true,
+    event_pax_cabin_bin_saturation         = true,
+}
+
 --------------------------------------------------------------------------------
 -- DEFAULT TIMING
 --------------------------------------------------------------------------------
@@ -881,7 +905,12 @@ sounds = {
 	fuel_loop 					   = { path = sound_dir .. "fuel-Loop.wav", id = nil },
     briefing                       = { path = sound_dir .. "Briefing.wav", id = nil },
     catering_loop                  = { path = sound_dir .. "Catering-Loop.wav", id = nil },
-    cleaning_loop                  = { path = sound_dir .. "Cleaning-Loop.wav", id = nil }
+    cleaning_loop                  = { path = sound_dir .. "Cleaning-Loop.wav", id = nil },
+    -- Ground crew only (#SL40): the user is the captain, cockpit actions answer them.
+    gpu_gnd_connected              = { path = sound_dir .. "gpu_gnd_connected.wav", id = nil },
+    gpu_gnd_ready_to_disconnect    = { path = sound_dir .. "gpu_gnd_ready_to_disconnect.wav", id = nil },
+    gpu_gnd_disconnecting          = { path = sound_dir .. "gpu_gnd_disconnecting.wav", id = nil },
+    gpu_gnd_disconnected           = { path = sound_dir .. "gpu_gnd_disconnected.wav", id = nil }
 }
 
 local function slm_load_events_db()
@@ -914,6 +943,7 @@ function init_sounds()
 end
 
 function play_sound_by_key(sound_key)
+    if SLM_GATE_CALLS[sound_key] and SLM_mute_gate_calls[0] == 1 then return end
     if sounds[sound_key] then
         local this_id = sounds[sound_key].id
         if this_id and this_id ~= 0 then
@@ -1125,6 +1155,8 @@ function load_user_settings()
                 slm_no_chocks = (value == "true")
             elseif key == "slm_bpb_remove_chocks" then
                 slm_bpb_remove_chocks = (value == "true")
+            elseif key == "slm_gpu_enabled" then
+                slm_gpu_enabled = (value == "true")
             elseif key == "slm_boarding_music_enabled" then
                 slm_boarding_music_enabled = (value == "true")
             elseif key == "slm_boarding_music_vol" then
@@ -1213,6 +1245,7 @@ function save_user_settings()
         file:write("slm_manual_chocks=" .. tostring(slm_manual_chocks) .. "\n")
         file:write("slm_no_chocks=" .. tostring(slm_no_chocks) .. "\n")
         file:write("slm_bpb_remove_chocks=" .. tostring(slm_bpb_remove_chocks) .. "\n")
+        file:write("slm_gpu_enabled=" .. tostring(slm_gpu_enabled) .. "\n")
         file:write("slm_boarding_music_enabled=" .. tostring(slm_boarding_music_enabled) .. "\n")
         file:write("slm_boarding_music_vol=" .. tostring(slm_boarding_music_vol or 0.5) .. "\n")
         file:write("slm_boarding_music_file=" .. tostring(slm_boarding_music_file or "") .. "\n")
@@ -1689,17 +1722,7 @@ function slm_try_apply_event(category, phase_mode, current_pct)
     local span = (pending.duration_max or 0) - (pending.duration_min or 0)
     local base_dur = (pending.duration_min or 0) + math.random() * (span > 0 and span or 0)
     local lc = (slm_lowcost_mode and pending.lc_factor) and pending.lc_factor or 1.0
-    local preset_mult
-    if timing_preset == "veryfast" then
-        preset_mult = 0.25
-    elseif timing_preset == "fast" and not slm_lowcost_mode then
-        preset_mult = 0.5
-    elseif timing_preset == "custom" then
-        preset_mult = custom_event_duration_factor or 0.7
-    else
-        preset_mult = 1.0  -- realistic, or fast in lowcost mode
-    end
-    local duration = base_dur * lc * preset_mult
+    local duration = base_dur * lc * slm_preset_mult()
 
     if phase_mode == "departure" then
         slm_event_dep_active    = pending
@@ -1985,7 +2008,7 @@ function manage_embark()
         end
     end
 
-    if not slm_rp_active and slm_rp_last_pax_loaded == nil then slm_rp_start() end
+    if not slm_rp_active and not slm_rp_started then slm_rp_start() end
 
     local now = os.clock()
     local elapsed = now - last_update_time
@@ -3001,7 +3024,7 @@ function slm_rf_start()
         slm_rf_groups = {{0,2},{1}}
         logMsg("[SLM-RF] Zibo: wing groups=[0,2] then center=[1]")
     else
-        slm_rf_groups = (slm_aircraft_data.tank_groups or {})[PLANE_ICAO or ""] or {{0,1}}
+        slm_rf_groups = (slm_aircraft_data.tank_groups or {})[slm_data_icao or PLANE_ICAO or ""] or {{0,1}}
     end
 
     slm_rf_initial_real_kg = slm_rf_total_current()
@@ -3012,7 +3035,7 @@ function slm_rf_start()
     slm_rf_last_fuel_loaded   = nil
     slm_rf_last_t             = 0
 
-    local tank_max = (slm_aircraft_data.tank_max or {})[PLANE_ICAO or ""]
+    local tank_max = slm_tank_max()
     logMsg("[SLM-RF] Saturation mode: " .. (tank_max and "precise (defined max)" or "sliding history (fallback)"))
     logMsg("[SLM-RF] Real fuel fill started: target=" ..
            string.format("%.0f", slm_rf_target_kg) ..
@@ -3050,7 +3073,7 @@ local function slm_rf_is_sat(h)
 end
 
 local function slm_rf_is_sat_for_tank(ti, h, cur)
-    local tank_max = (slm_aircraft_data.tank_max or {})[PLANE_ICAO or ""]
+    local tank_max = slm_tank_max()
     if tank_max and tank_max[ti] then
         return cur >= tank_max[ti]
     end
@@ -3258,6 +3281,12 @@ function slm_detect_aircraft()
     slm_rp_excluded       = false
 
     local icao = PLANE_ICAO or ""
+    -- Derivatives of the Laminar A330-300 declared under another ICAO (ex.
+    -- A330-200 Family, A332): own aircraft.json key, tank capacities read
+    -- from the aircraft (#SL43). The A333 itself keeps its own data.
+    slm_laminar_a330_deriv = icao ~= "A333"
+        and XPLMFindDataRef("laminar/A330/buttons/hyd/elec_blue_on_pos") ~= nil
+    slm_data_icao = slm_laminar_a330_deriv and "LAMINAR_A330_DERIVATIVE" or icao
     if (slm_aircraft_data.excluded_icao or {})[icao] then
         slm_exclusion_message = slm_tr("excluded." .. icao, nil, (slm_aircraft_data.excluded_icao or {})[icao])
         slm_rf_excluded = true
@@ -3292,6 +3321,24 @@ function slm_detect_aircraft()
         slm_ff_a320      = false
         slm_ff_beacon_dr = nil
     end
+end
+
+-- Tank capacities (kg, by m_fuel index) of the loaded aircraft, nil when unknown.
+-- Laminar A330 derivatives: read from the aircraft (acf_tank_rat x
+-- acf_m_fuel_tot), their tanks differ from the A333's (#SL43). Others:
+-- tank_max of aircraft.json.
+function slm_tank_max()
+    if slm_laminar_a330_deriv and XPLMFindDataRef("sim/aircraft/overflow/acf_tank_rat") then
+        local rat = dataref_table("sim/aircraft/overflow/acf_tank_rat")
+        local tot = tonumber(dataref_table("sim/aircraft/weight/acf_m_fuel_tot")[0]) or 0
+        local caps
+        for i = 0, 8 do
+            local r = tonumber(rat[i]) or 0
+            if r > 0 and tot > 0 then caps = caps or {}; caps[i] = r * tot end
+        end
+        if caps then return caps end
+    end
+    return ((slm_aircraft_data and slm_aircraft_data.tank_max) or {})[slm_data_icao or PLANE_ICAO or ""]
 end
 
 --------------------------------------------------------------------------------
@@ -3470,7 +3517,7 @@ function slm_ejet_model()
     if slm_aircraft_type ~= "default" then return nil end
     if slm_ejet_perf == nil then
         slm_ejet_perf = false
-        local map = (slm_aircraft_data.rp_stations or {})[PLANE_ICAO or ""]
+        local map = (slm_aircraft_data.rp_stations or {})[slm_data_icao or PLANE_ICAO or ""]
         local f = map and AIRCRAFT_PATH
                   and io.open(AIRCRAFT_PATH .. "plugins/efb/data/acf/" .. PLANE_ICAO .. ".perf.db", "r")
         if not f then return nil end
@@ -3611,6 +3658,51 @@ function slm_rp_pax_shares(map, pax_idx)
     return shares
 end
 
+-- Cargo of an rp_stations aircraft with a main deck (map.deck, #SL43):
+-- station index -> kg for total_kg on board. The holds fill in the
+-- cargo_weights ratio up to their acf_m_station_max, the rest goes to the deck
+-- stations up to theirs (freighter), anything left over spread on the deck.
+function slm_rp_cargo_split(map, total_kg)
+    local maxdr = XPLMFindDataRef("sim/aircraft/weight/acf_m_station_max")
+                  and dataref_table("sim/aircraft/weight/acf_m_station_max")
+    local out = {}
+    local function fill(idx, w, capped, kg)
+        local open = {}
+        for j, i in ipairs(idx) do out[i], open[j] = out[i] or 0, true end
+        while kg > 0 and next(open) do
+            local sum, k0, full = 0, kg, false
+            for j in pairs(open) do sum = sum + ((w and w[j]) or 1) end
+            for j in pairs(open) do
+                local i   = idx[j]
+                local cap = capped and maxdr and tonumber(maxdr[i]) or 0
+                local room = (cap > 0) and math.max(0, cap - out[i]) or math.huge
+                if k0 * ((w and w[j]) or 1) / sum >= room then
+                    out[i], kg, open[j], full = out[i] + room, kg - room, nil, true
+                end
+            end
+            if not full then
+                for j in pairs(open) do out[idx[j]] = out[idx[j]] + kg * ((w and w[j]) or 1) / sum end
+                kg = 0
+            end
+        end
+        return kg
+    end
+    local left = fill(map.cargo or {}, slm_rp_cargo_weights(map), true, total_kg)
+    left = fill(map.deck, nil, true, left)
+    fill(map.deck, nil, false, left)
+    return out
+end
+
+-- Write the cargo stations for kg on board, against what SLM wrote so far.
+function slm_rp_cargo_to(dr, map, kg)
+    local want = slm_rp_cargo_split(map, kg)
+    slm_rp_st_cargo = slm_rp_st_cargo or {}
+    for i, v in pairs(want) do
+        dr[i] = math.max(0, (dr[i] or 0) + v - (slm_rp_st_cargo[i] or 0))
+    end
+    slm_rp_st_cargo = want
+end
+
 --------------------------------------------------------------------------------
 -- REAL PAYLOAD FILL
 --------------------------------------------------------------------------------
@@ -3691,14 +3783,16 @@ function slm_rp_start()
     slm_rp_last_pax_loaded   = nil
     slm_rp_last_cargo_loaded = 0     -- payload just cleared: count from zero
     slm_rp_active            = true
+    slm_rp_started           = true
     slm_pax_bias             = nil   -- fresh seating draw for this boarding
     slm_rp_st_pax            = nil
     slm_rp_st_pax_unload0    = nil
+    slm_rp_st_cargo          = nil
     slm_rp_ejet_shares, slm_rp_ejet_cw = nil, nil
 
     if slm_aircraft_type == "default" then
         slm_rp_station_dr = dataref_table("sim/flightmodel/weight/m_stations")
-        local rp_map = slm_aircraft_data.rp_stations and slm_aircraft_data.rp_stations[PLANE_ICAO or ""]
+        local rp_map = slm_aircraft_data.rp_stations and slm_aircraft_data.rp_stations[slm_data_icao or PLANE_ICAO or ""]
         slm_rp_station_map = rp_map or nil
         slm_rp_pax_written_kg   = 0
         slm_rp_cargo_written_kg = 0
@@ -3739,6 +3833,7 @@ function slm_rp_stop()
     if slm_rp_active then logMsg("[SLM-RP] Payload fill stopped") end
     slm_rp_active            = false
     slm_rp_cleared           = false
+    slm_rp_started           = false
     slm_rp_last_pax_loaded   = nil
     slm_rp_last_cargo_loaded = nil
     slm_rp_target_pax_kg     = 0
@@ -3756,6 +3851,7 @@ function slm_rp_stop()
     slm_pax_bias             = nil
     slm_rp_st_pax            = nil
     slm_rp_st_pax_unload0    = nil
+    slm_rp_st_cargo          = nil
     slm_rp_ejet_shares, slm_rp_ejet_cw = nil, nil
     slm_zibo_caps            = nil
     slm_zibo_cabin_max       = nil
@@ -3806,7 +3902,9 @@ function slm_rp_update()
                     local cargo_weights = slm_rp_cargo_weights(slm_rp_station_map)
                     local total_kg = to_kg(math.abs(delta_units))
                     slm_rp_cargo_written_kg = math.max(0, slm_rp_cargo_written_kg + (delta_units > 0 and total_kg or -total_kg))
-                    if cargo_weights then
+                    if slm_rp_station_map and slm_rp_station_map.deck then
+                        slm_rp_cargo_to(dr, slm_rp_station_map, slm_rp_cargo_written_kg)
+                    elseif cargo_weights then
                         local total_w = 0
                         for _, w in ipairs(cargo_weights) do total_w = total_w + w end
                         for j, i in ipairs(cargo_indices) do
@@ -3959,12 +4057,22 @@ function slm_rp_unload_update()
                 local delta_units = (cargo_unloaded or 0) - slm_rp_last_cargo_unloaded
                 if delta_units > 0 then
                     slm_rp_last_cargo_unloaded = cargo_unloaded
+                    local map = slm_rp_station_map
+                        or (slm_aircraft_data.rp_stations or {})[slm_data_icao or PLANE_ICAO or ""]
+                    if map and map.deck then
+                        -- main deck aircraft (#SL43): drain to the split of what is left
+                        local arr = (arr_cargo_total > 0) and arr_cargo_total or (cargo_total or 0)
+                        slm_rp_st_cargo = slm_rp_st_cargo   -- fill not tracked: assume this flight's split
+                            or slm_rp_cargo_split(map, to_kg(arr))
+                        slm_rp_cargo_to(dr, map, to_kg(math.max(0, arr - (cargo_unloaded or 0))))
+                    else
                     -- same split as the fill, so every hold reaches zero
                     local cw, sum = slm_rp_cargo_weights(slm_rp_station_map), 0
                     for j = 1, #cargo_indices do sum = sum + ((cw and cw[j]) or 1) end
                     for j, i in ipairs(cargo_indices) do
                         local kg = to_kg(delta_units) * ((cw and cw[j]) or 1) / sum
                         dr[i] = math.max(0, (dr[i] or 0) - kg)
+                    end
                     end
                 end
             end
@@ -4170,7 +4278,7 @@ function slm_dev_force_load()
         slm_pax_var_applied = true
         slm_compute_pax_variability()
     end
-    if not slm_rp_active and slm_rp_last_pax_loaded == nil then slm_rp_start() end
+    if not slm_rp_active and not slm_rp_started then slm_rp_start() end
     slm_rp_last_pax_loaded   = slm_rp_last_pax_loaded or passengers_loaded or 0
     slm_rp_last_cargo_loaded = slm_rp_last_cargo_loaded or cargo_loaded or 0
     bus_triggered, pax_trigger_time = true, os.clock()
@@ -4570,6 +4678,7 @@ end
 
 function start_departure_sequence(is_after_flight)
     slm_detect_aircraft()
+    slm_gpu_start()
     slm_place_chocks()
     slm_sync_toliss_chocks()
     slm_initial_fuel_kg       = sim_fuel_total_kg
@@ -4601,6 +4710,7 @@ end
 
 function start_turnaround()
     slm_detect_aircraft()
+    slm_gpu_start(true)
     if slm_lowcost_mode and timing_preset == "realistic" then
         apply_fast_timings()
         slm_lc_forced_fast = true
@@ -4628,6 +4738,7 @@ end
 
 function start_night_stop()
     slm_detect_aircraft()
+    slm_gpu_start(true)
     slm_place_chocks()
     slm_sync_toliss_chocks()
     slm_sequence_mode      = "night_stop"
@@ -4727,6 +4838,8 @@ end
 --------------------------------------------------------------------------------
 function reset_loads()
     slm_stop_boarding_music()
+    SLM_GPU.state = nil
+    SLM_GPU.done = false
     slm_rf_stop()
     slm_rp_stop()
     slm_rp_last_pax_unloaded     = nil
@@ -5976,6 +6089,9 @@ do
     slm_setting_def("no_chocks",
         function() return slm_no_chocks end,
         function(v) slm_no_chocks = v; save_user_settings() end, idle)
+    slm_setting_def("gpu_enabled",
+        function() return slm_gpu_enabled end,
+        function(v) slm_gpu_enabled = v; save_user_settings() end)
 
     -- Simulation
     slm_setting_def("timing_preset",
@@ -6322,7 +6438,7 @@ do
 
     function slm_loadsheet_tanks()
         if not tank_refs() then return nil end
-        local defined = ((slm_aircraft_data and slm_aircraft_data.tank_max) or {})[PLANE_ICAO or ""]
+        local defined = slm_tank_max()
         local total = tonumber(TK.tot[0]) or 0
         local list, span = {}, 0
         for i = 0, 8 do
@@ -6428,7 +6544,7 @@ do
             holds[2] = { w = read("AirbusFBW/AftCargo") or 0 }
 
         else
-            local map = (slm_aircraft_data.rp_stations or {})[PLANE_ICAO or ""]
+            local map = (slm_aircraft_data.rp_stations or {})[slm_data_icao or PLANE_ICAO or ""]
             if not map or not XPLMFindDataRef("sim/flightmodel/weight/m_stations") then return nil end
             local kg  = dataref_table("sim/flightmodel/weight/m_stations")
             local pz  = XPLMFindDataRef("sim/aircraft/weight/acf_stations_ref_z")
@@ -6446,9 +6562,11 @@ do
             local pax_kg_total   = (SLM_real_pax or 0) * (SB_pax_weight or 0)
             local cargo_kg_total = to_kg(SLM_real_cargo or 0)
             local pax_shares     = slm_rp_pax_shares(map, pax_idx)
+            local deck_kg        = map.deck and slm_rp_cargo_split(map, cargo_kg_total)
             local function split(i)
                 local p = pax_kg_total * (pax_shares[i] or 0)
-                local c = cargo_kg_total * share(cargo_idx, slm_rp_cargo_weights(map), i)
+                local c = deck_kg and (deck_kg[i] or 0)
+                          or cargo_kg_total * share(cargo_idx, slm_rp_cargo_weights(map), i)
                 local on = math.max(0, tonumber(kg[i]) or 0)
                 if p + c <= 0 then return 0, 0 end
                 return on * p / (p + c), on * c / (p + c)
@@ -6676,6 +6794,7 @@ H.NAME_KEYS = {
     ["Fuel already at sufficient level"] = "step.fuel_sufficient",
     ["Passenger Boarding"]               = "step.pax_boarding",
     ["Cargo Loading"]                    = "step.cargo_loading",
+    ["Ground Power"]                     = "step.gpu",
 }
 function H.name(it, name)
     local key = H.NAME_KEYS[name]
@@ -7175,6 +7294,25 @@ function H.total_eta(mode)
     return total_eta_secs
 end
 
+-- Ground power (#SL40): what the ground crew is doing or waiting for.
+function H.gpu_step(items)
+    local g = SLM_GPU
+    if g.done then H.step(items, "Ground Power", "done"); return end
+    if not g.state then return end
+    local msg
+    if g.state == "connect" then
+        local rem = H.remaining_text(math.max(0, g.t - os.clock()))
+        msg = H.tx("gpu.arriving", { rem = rem }, "GPU on its way: " .. rem)
+    elseif g.state == "wait_apu" or g.state == "announce" then
+        msg = H.tx("gpu.wait_apu", nil, "Connected. Ground will offer to disconnect once the APU is running")
+    elseif g.state == "wait_off" then
+        msg = H.tx("gpu.wait_off", nil, "Switch external power off to release the GPU")
+    else
+        msg = H.tx("gpu.removing", nil, "Ground crew disconnecting the GPU")
+    end
+    H.step(items, "Ground Power", "active", nil, nil, { msg })
+end
+
 -- Which sequence the step list describes, or nil when there is nothing to show.
 function H.steps_mode()
     local mode = slm_last_sequence_mode
@@ -7214,6 +7352,7 @@ function slm_update_steps()
             H.fuel_step(items)
         end
     end
+    H.gpu_step(items)
 
     local total_eta_secs = H.total_eta(mode)
     if total_eta_secs and total_eta_secs > 0 then
@@ -7415,6 +7554,143 @@ function slm_sync_toliss_chocks()
 end
 
 --------------------------------------------------------------------------------
+-- GROUND POWER (#SL40)
+--------------------------------------------------------------------------------
+-- Zibo/LevelUp 737, ToLiss and X-Crafts E-Jets. When a sequence starts, SLM
+-- brings a GPU if none is there, waits for the APU, the ground crew asks to
+-- disconnect, the captain (the user) answers by switching external power off,
+-- the ground crew acknowledges, then removes it (Zibo:
+-- its own gpu_toggle, never SGES; ToLiss/E-Jets: the aircraft's GPU and the
+-- SGES one). Cockpit switches are never touched. Delays follow the preset.
+
+-- Duration factor of the timing preset (events, GPU delays).
+function slm_preset_mult()
+    if timing_preset == "veryfast" then return 0.25 end
+    if timing_preset == "fast" and not slm_lowcost_mode then return 0.5 end
+    if timing_preset == "custom" then return custom_event_duration_factor or 0.7 end
+    return 1.0  -- realistic, or fast in lowcost mode
+end
+
+-- state: nil (off), "connect", "wait_apu", "announce", "wait_off", "ack", "remove", "removed"
+SLM_GPU = { state = nil, t = 0, done = false }  -- done: removed, step shown as done
+-- Realistic delays in seconds (min, max), scaled by slm_preset_mult().
+SLM_GPU_DELAYS = {
+    connect  = { 30, 60 },   -- sequence start -> GPU in place
+    announce = { 10, 20 },   -- APU running -> ground invites the captain to switch external power off
+    ack      = { 2, 5 },     -- external power off -> ground acknowledges
+    remove   = { 20, 40 },   -- acknowledgement -> GPU removed
+    removed  = { 5, 10 },    -- GPU removed -> ground confirms
+}
+
+-- Datarefs of the current aircraft (#SL40 ticket), or nil when unsupported.
+function slm_gpu_profile()
+    local function dr(path)
+        return XPLMFindDataRef(path) and dataref_table(path) or nil
+    end
+    local p
+    if slm_aircraft_type == "zibo" then
+        p = { placed = dr("laminar/B738/fmod/gpu_deployed"), used = dr("sim/cockpit/electrical/gpu_on"),
+              apu = dr("sim/cockpit/engine/APU_N1"), zibo = true }
+    elseif slm_aircraft_type == "toliss" then
+        p = { placed = dr("AirbusFBW/EnableExternalPower"), used = dr("sim/cockpit2/electrical/GPU_generator_on"),
+              apu = dr("AirbusFBW/APUN") }
+    elseif XPLMFindDataRef("XCrafts/other/GPU") then
+        -- XCrafts/other/GPU: 0 = in place, 1 = removed
+        p = { placed = dr("XCrafts/other/GPU"), placed_inv = true, used = dr("XCrafts/electric/GPU_sw"),
+              apu = dr("sim/cockpit2/electrical/APU_N1_percent") }
+    end
+    if p and p.placed and p.used and p.apu then return p end
+    return nil
+end
+
+function slm_gpu_placed(p)
+    local v = p.placed[0] ~= 0
+    if p.placed_inv then return not v end
+    return v
+end
+
+-- Puts the GPU in place (on) or removes it.
+function slm_gpu_set(p, on)
+    if p.zibo then
+        if slm_gpu_placed(p) ~= on then command_once("laminar/B738/gpu_toggle") end
+    else
+        local v = on and 1 or 0
+        if p.placed_inv then v = 1 - v end
+        p.placed[0] = v
+        show_GPU = on
+        GPU_chg  = true
+    end
+    logMsg("[SLM-GPU] GPU " .. (on and "connected" or "removed"))
+end
+
+function slm_gpu_wait(next_state, key)
+    local d = SLM_GPU_DELAYS[key]
+    SLM_GPU.state = next_state
+    SLM_GPU.t = os.clock() + random_range(d[1], d[2]) * slm_preset_mult()
+end
+
+-- arrival (turnaround / RON): bring the GPU only, it stays until the departure.
+function slm_gpu_start(arrival)
+    SLM_GPU.state = nil
+    SLM_GPU.done = false
+    SLM_GPU.arrival = arrival and true or false
+    if not slm_gpu_enabled then return end
+    SLM_GPU.p = slm_gpu_profile()
+    if not SLM_GPU.p then return end
+    if slm_gpu_placed(SLM_GPU.p) then
+        if arrival then
+            SLM_GPU.done = true
+            logMsg("[SLM-GPU] Arrival: GPU already in place")
+            return
+        end
+        SLM_GPU.state = "wait_apu"
+    else
+        slm_gpu_wait("connect", "connect")
+    end
+    logMsg("[SLM-GPU] Started (" .. slm_aircraft_type .. ", " .. SLM_GPU.state .. ")")
+end
+
+function slm_gpu_update()
+    local g = SLM_GPU
+    if not g.state then return end
+    if not slm_gpu_enabled or onground ~= 1 then g.state = nil; return end
+    local p, now = g.p, os.clock()
+    if g.state == "connect" then
+        if now < g.t then return end
+        slm_gpu_set(p, true)
+        play_sound_by_key("gpu_gnd_connected")
+        if g.arrival then
+            g.state, g.done = nil, true
+            return
+        end
+        g.state = "wait_apu"
+    elseif g.state == "wait_apu" then
+        if p.apu[0] >= 95 then slm_gpu_wait("announce", "announce") end
+    elseif g.state == "announce" then
+        if now < g.t then return end
+        play_sound_by_key("gpu_gnd_ready_to_disconnect")
+        g.state = "wait_off"
+    elseif g.state == "wait_off" then
+        if p.used[0] == 0 then slm_gpu_wait("ack", "ack") end
+    elseif g.state == "ack" or g.state == "remove" then
+        if p.used[0] ~= 0 then g.state = "wait_off"; return end  -- switched back on
+        if now < g.t then return end
+        if g.state == "ack" then
+            play_sound_by_key("gpu_gnd_disconnecting")
+            slm_gpu_wait("remove", "remove")
+            return
+        end
+        slm_gpu_set(p, false)
+        slm_gpu_wait("removed", "removed")
+    elseif g.state == "removed" then
+        if now < g.t then return end
+        play_sound_by_key("gpu_gnd_disconnected")
+        g.state = nil
+        g.done = true
+    end
+end
+
+--------------------------------------------------------------------------------
 -- MAIN LOOP
 --------------------------------------------------------------------------------
 add_macro("Open SimLoad Manager",
@@ -7495,6 +7771,7 @@ do_every_frame("slm_rp_update()")
 do_every_frame("slm_rp_unload_update()")
 do_every_frame("slm_update_beacon_state()")
 do_every_frame("slm_bpb_watch()")
+do_every_frame("slm_gpu_update()")
 do_every_frame("slm_sync_toliss_chocks()")
 do_every_frame("slm_update_state()")
 
