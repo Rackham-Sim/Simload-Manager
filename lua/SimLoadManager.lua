@@ -7382,11 +7382,14 @@ function slm_load_manual_data()
     passengers_total     = slm_manual_pax
     cargo_total          = slm_manual_cargo
     fuel_total           = slm_manual_fuel
-    SB_pax_weight        = 70
+    -- ToLiss weighs every pax at 100 kg: at 70 kg the gap folded into the
+    -- holds (slm_toliss_cargo) ate the whole manual cargo, holds stayed empty
+    local pax_w          = (slm_aircraft_type == "toliss") and SLM_TOLISS_PAX_KG or 70
+    SB_pax_weight        = pax_w
     SB_bag_weight        = 0
     SB_pax_count         = slm_manual_pax
     SB_bag_count         = 0
-    SB_pax_mass_planned  = slm_manual_pax * 70
+    SB_pax_mass_planned  = slm_manual_pax * pax_w
     SB_bag_mass_planned  = 0
 
     local idx1 = math.random(1, #load_controllers)
@@ -7411,14 +7414,14 @@ function slm_load_manual_data()
         manual_controller = manual_controller,
         pax_total         = slm_manual_pax,
         cargo_total       = slm_manual_cargo,
-        pax_weight        = 70,
+        pax_weight        = pax_w,
         bag_weight        = 0,
-        pax_mass_planned  = slm_manual_pax * 70,
+        pax_mass_planned  = slm_manual_pax * pax_w,
         bag_mass_planned  = 0,
         pax_count_sb      = slm_manual_pax,
         bag_count_sb      = 0,
         fuel_block        = slm_manual_fuel,
-        payload_planned   = slm_manual_pax * 70 + slm_manual_cargo,
+        payload_planned   = slm_manual_pax * pax_w + slm_manual_cargo,
         slm_source        = "manual",
         load_time_str     = current_zulu_hhmm(),
     }
