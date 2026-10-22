@@ -10,6 +10,9 @@
 --   SimLoadManager/SGES/<Vehicule>_show  (0/1)
 --   SimLoadManager/SGES/<Vehicule>_seq   (compteur de demandes)
 --   SimLoadManager/SGES/StairsXPJ_override (+ _seq)
+--   SimLoadManager/SGES/walking_direction (+ _seq), 1 = deboarding,
+--   walking_direction_changed_armed et boarding_from_the_terminal
+--   (+ _seq) : sens des passagers et des bagages dans SGES (#SL43)
 -- Le script FlyWithLua SimLoadManager_SGES_bridge.lua les relit et
 -- recree les variables globales attendues par SGES.
 -- SimLoadManager.lua n'est pas modifie : il lit et ecrit ces variables
@@ -21,7 +24,13 @@ local VEHICLES = {
     "StairsXPJ", "StairsXPJ2", "BeltLoader", "RearBeltLoader", "Cart",
     "People1", "People2", "People3", "People4", "GPU",
 }
-local OVERRIDE = "option_StairsXPJ_override"
+-- Variables d'etat lues par SGES -> nom du dataref publie
+local STATE = {
+    option_StairsXPJ_override       = "StairsXPJ_override",
+    walking_direction               = "walking_direction",
+    walking_direction_changed_armed = "walking_direction_changed_armed",
+    boarding_from_the_terminal      = "boarding_from_the_terminal",
+}
 local PREFIX = "SimLoadManager/SGES/"
 
 local show_dr, seq_dr = {}, {}
@@ -29,11 +38,15 @@ for _, v in ipairs(VEHICLES) do
     show_dr[v] = create_dataref_table(PREFIX .. v .. "_show", "Int")
     seq_dr[v]  = create_dataref_table(PREFIX .. v .. "_seq", "Int")
 end
-local override_dr     = create_dataref_table(PREFIX .. "StairsXPJ_override", "Int")
-local override_seq_dr = create_dataref_table(PREFIX .. "StairsXPJ_override_seq", "Int")
+local state_dr, state_seq_dr = {}, {}
+for key, name in pairs(STATE) do
+    state_dr[key]     = create_dataref_table(PREFIX .. name, "Int")
+    state_seq_dr[key] = create_dataref_table(PREFIX .. name .. "_seq", "Int")
+end
 
--- Nom de variable globale -> vehicule concerne
-local watched = { [OVERRIDE] = true }
+-- Nom de variable globale -> vehicule concerne (true : variable d'etat)
+local watched = {}
+for key in pairs(STATE) do watched[key] = true end
 for _, v in ipairs(VEHICLES) do
     watched["show_" .. v] = v
     watched[v .. "_chg"]  = v
@@ -54,9 +67,9 @@ setmetatable(_G, {
             return
         end
         shadow[key] = value
-        if key == OVERRIDE then
-            override_dr[0] = value and 1 or 0
-            override_seq_dr[0] = override_seq_dr[0] + 1
+        if STATE[key] then
+            state_dr[key][0] = (value == true or value == "deboarding") and 1 or 0
+            state_seq_dr[key][0] = state_seq_dr[key][0] + 1
         elseif key == vehicle .. "_chg" and value then
             pending[vehicle] = true
         end

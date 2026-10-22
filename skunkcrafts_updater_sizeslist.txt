@@ -1,8 +1,8 @@
 compact/compact.html|16107
-FlyWithLua_Scripts/SimLoadManager_SGES_bridge.lua|2452
+FlyWithLua_Scripts/SimLoadManager_SGES_bridge.lua|3245
 lin_x64/SimLoadManager.xpl|2975496
 lua/SimLoadManager.lua|329927
-lua/slm5_sges.lua|3011
+lua/slm5_sges.lua|3662
 lua/SLM-Data/aircraft.json|8689
 lua/SLM-Data/events.json|7087
 lua/SLM-Data/Music/README.txt|343
@@ -51,4 +51,4 @@ ui/lang/es.json|19088
 ui/lang/fr.json|19110
 ui/lang/it.json|18504
 vehicles/box.png|78
-win_x64/SimLoadManager.xpl|1487360
+win_x64/SimLoadManager.xpl|1491456

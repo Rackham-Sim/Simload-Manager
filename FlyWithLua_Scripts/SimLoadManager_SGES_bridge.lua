@@ -16,6 +16,13 @@ local VEHICLES = {
     "StairsXPJ", "StairsXPJ2", "BeltLoader", "RearBeltLoader", "Cart",
     "People1", "People2", "People3", "People4", "GPU",
 }
+-- Variables d'etat de SGES -> dataref publie par SLM 5
+local STATE = {
+    option_StairsXPJ_override       = "StairsXPJ_override",
+    walking_direction               = "walking_direction",
+    walking_direction_changed_armed = "walking_direction_changed_armed",
+    boarding_from_the_terminal      = "boarding_from_the_terminal",
+}
 local PREFIX = "SimLoadManager/SGES/"
 
 local refs = nil          -- datarefs de SLM 5, une fois trouves
@@ -32,9 +39,16 @@ local function attach()
         }
         last_seq[v] = refs[v].seq[0]
     end
-    refs.override     = dataref_table(PREFIX .. "StairsXPJ_override")
-    refs.override_seq = dataref_table(PREFIX .. "StairsXPJ_override_seq")
-    last_seq.override = refs.override_seq[0]
+    refs.state = {}
+    for key, name in pairs(STATE) do
+        if XPLMFindDataRef(PREFIX .. name .. "_seq") then
+            refs.state[key] = {
+                value = dataref_table(PREFIX .. name),
+                seq   = dataref_table(PREFIX .. name .. "_seq"),
+            }
+            last_seq[key] = refs.state[key].seq[0]
+        end
+    end
     logMsg("[SLM SGES bridge] SimLoad Manager detected, SGES bridge active")
     return true
 end
@@ -46,6 +60,18 @@ function slm5_sges_bridge_frame()
         next_probe = os.clock() + 2
         if not attach() then return end
     end
+    -- Etat d'abord : le sens doit etre en place quand SGES traite Pax_chg / Cart_chg
+    for key, r in pairs(refs.state) do
+        local seq = r.seq[0]
+        if seq ~= last_seq[key] then
+            last_seq[key] = seq
+            if key == "walking_direction" then
+                walking_direction = (r.value[0] == 1) and "deboarding" or "boarding"
+            else
+                _G[key] = (r.value[0] == 1)
+            end
+        end
+    end
     for _, v in ipairs(VEHICLES) do
         local seq = refs[v].seq[0]
         if seq ~= last_seq[v] then
@@ -53,11 +79,6 @@ function slm5_sges_bridge_frame()
             _G["show_" .. v] = (refs[v].show[0] == 1)
             _G[v .. "_chg"] = true
         end
-    end
-    local oseq = refs.override_seq[0]
-    if oseq ~= last_seq.override then
-        last_seq.override = oseq
-        option_StairsXPJ_override = (refs.override[0] == 1)
     end
 end
 
