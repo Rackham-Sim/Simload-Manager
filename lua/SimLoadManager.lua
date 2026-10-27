@@ -159,7 +159,7 @@ end
 load_controllers = {
     "Xavier24", "james.C", "Furax84", "Dudley.B", "Jugac64",
     "Mark", "Othmar", "Pea", "Christy.D", "Guilb'Air", "Sydney.M",
-	"bagolu", "Gritsch", "N. Reichel", "Feliciano", "JF.Caviglioli", "Jean-Claude H"
+	"bagolu", "Gritsch", "N. Reichel", "Feliciano", "JF.Caviglioli", "Jean-Claude H", "FG2122"
 }
 
 --------------------------------------------------------------------------------
@@ -597,6 +597,7 @@ dataref("slm_flight_id_dr",    "sim/cockpit2/radios/actuators/flight_id", "reado
 -- was already cached -- so for CG variant resolution we read this live
 -- instead of trusting PLANE_ICAO.
 dataref("slm_live_icao_dr",    "sim/aircraft/view/acf_ICAO",              "readonly")
+dataref("slm_acf_author_dr",   "sim/aircraft/view/acf_author",            "readonly")
 slm_zibo_fmc_line_dr = nil
 if XPLMFindDataRef("laminar/B738/fmc1/Line02_L") then
     dataref("slm_zibo_fmc_line_dr", "laminar/B738/fmc1/Line02_L", "readonly")
@@ -651,6 +652,8 @@ slm_manual_chocks         = false
 slm_no_chocks             = false   -- SLM never places chocks (independent of slm_manual_chocks, which governs removal)
 slm_bpb_remove_chocks     = false   -- with slm_manual_chocks: remove chocks when BetterPushback starts (#SL05)
 slm_gpu_enabled           = true    -- ground power handling (#SL40)
+slm_gpu_xcrafts           = true    -- off: the X-Crafts E-Jets GPU is left to the user
+slm_people_detail         = "full"  -- characters on foot: "full", "reduced" (40 at once), "minimal" (15), read by the plugin (SLM 6.0)
 slm_lc_cleaning_required  = false
 slm_boarding_music_enabled = false
 slm_boarding_music_vol     = 0.5
@@ -743,12 +746,45 @@ local slm_lf_confirm_open = false
 local slm_ff_a320       = false
 local slm_ff_beacon_dr  = nil
 
-show_Catering   = false
-Catering_chg    = true
-show_Cleaning   = false
-Cleaning_chg    = true
-show_StairsXPJ2 = false
-StairsXPJ2_chg  = true
+-- Vehicle phase boundaries (#SL38): key = "arrival", "deboarding", "refuelling",
+-- "catering", "cleaning", "boarding", "departure" or "gpu"; on = phase starts (true) / ends (false).
+-- Optional moment for boarding / deboarding: "access" (stairs), "cargo" (belts, carts), "pax" (bus);
+-- with on = false, the cargo or passenger part is over (its vehicles leave, the phase goes on).
+-- Provided by the plugin's vehicle module (slm5/src/vehicles/phases.cpp) before this file runs;
+-- empty when it is absent (FlyWithLua, tests).
+slm_vehicles_phase = slm_vehicles_phase or function(key, on, moment) end
+-- Read by the vehicle module: stand configuration.
+function slm_location_group() return selected_location_group end
+-- Work counted only once its vehicles are in place (#SL38, 2026-10-25): group "cargo" (belts,
+-- loaders, carts), "fuel", "catering" or "cleaning". slm_vehicles_ready(group) comes from the plugin's
+-- vehicle module (true when every vehicle called for the group is at its stand, or none is
+-- called); without it, ready at once and nothing changes. 5 min of waiting at most, so that a
+-- stuck vehicle never blocks the turnaround. slm_veh_wait[group] = waiting since (os.clock()).
+slm_veh_wait = {}
+function slm_vehicles_waiting(group)
+    if not slm_vehicles_ready or slm_vehicles_ready(group) then slm_veh_wait[group] = nil return false end
+    slm_veh_wait[group] = slm_veh_wait[group] or os.clock()
+    if os.clock() - slm_veh_wait[group] < 300 then return true end
+    slm_veh_wait[group] = nil
+    return false
+end
+-- Cargo start (departure / arrival): vehicles called first, start sound once they are in place.
+-- Returns true once started. Without the module: sound, then vehicles, as before.
+function slm_start_cargo(key, sound_key)
+    if slm_vehicles_ready and not slm_veh_wait.cargo_called then
+        slm_veh_wait.cargo_called = true
+        slm_vehicles_phase(key, true, "cargo")
+        slm_place_chocks()
+    end
+    if slm_vehicles_waiting("cargo") then return false end
+    play_sound_by_key(sound_key)
+    sound_played[sound_key] = true
+    if not slm_veh_wait.cargo_called then
+        slm_vehicles_phase(key, true, "cargo")
+        slm_place_chocks()
+    end
+    return true
+end
 
 
 custom_catering_time_per_pax  = 4.0
@@ -940,6 +976,12 @@ function init_sounds()
             set_sound_gain(sound.id, Volume)
         end
     end
+    -- SLM 6.0 plugin: these loops are heard from their vehicle once it is at its stand (3D).
+    if slm_sound_place then
+        slm_sound_place(sounds.cargo_loop.id, "cargo")
+        slm_sound_place(sounds.fuel_loop.id, "fuel")
+        slm_sound_place(sounds.passengers_loop.id, "cabin")  -- behind the cockpit, at the front door
+    end
 end
 
 function play_sound_by_key(sound_key)
@@ -980,14 +1022,16 @@ function update_loop_volumes()
             set_sound_gain(sounds.cleaning_loop.id, 0.0001)
         end
     else
+        -- Placed on a vehicle (SLM 6.0): X-Plane's exterior bus already muffles them inside, no extra cut.
+        local out_in = (view_is_external == 1 or slm_sound_place) and 1.0 or 0.3
         if cargo_loop_playing then
-            set_sound_gain(sounds.cargo_loop.id, (view_is_external == 1 and 1.0 or 0.3) * vol)
+            set_sound_gain(sounds.cargo_loop.id, out_in * vol)
         end
         if fuel_loop_playing then
-            set_sound_gain(sounds.fuel_loop.id, (view_is_external == 1 and 1.0 or 0.3) * vol)
+            set_sound_gain(sounds.fuel_loop.id, out_in * vol)
         end
         if pax_loop_playing then
-            set_sound_gain(sounds.passengers_loop.id, (view_is_external == 1 and 0.0001 or 0.9) * vol)
+            set_sound_gain(sounds.passengers_loop.id, (view_is_external == 1 and 0.0001 or 0.6) * vol)
         end
         if briefing_playing and sounds.briefing.id and sounds.briefing.id ~= 0 then
             set_sound_gain(sounds.briefing.id, (view_is_external == 1 and 0.0001 or 0.9) * vol)
@@ -1050,6 +1094,8 @@ function slm_init_boarding_music()
     if slm_music_handle == 0 then
         slm_music_handle = nil
         logMsg("[SLM] Boarding music not found: " .. path)
+    elseif slm_sound_place then
+        slm_sound_place(slm_music_handle, "cabin")
     end
 end
 
@@ -1157,6 +1203,10 @@ function load_user_settings()
                 slm_bpb_remove_chocks = (value == "true")
             elseif key == "slm_gpu_enabled" then
                 slm_gpu_enabled = (value == "true")
+            elseif key == "slm_gpu_xcrafts" then
+                slm_gpu_xcrafts = (value == "true")
+            elseif key == "slm_people_detail" then
+                if value == "reduced" or value == "minimal" then slm_people_detail = value else slm_people_detail = "full" end
             elseif key == "slm_boarding_music_enabled" then
                 slm_boarding_music_enabled = (value == "true")
             elseif key == "slm_boarding_music_vol" then
@@ -1246,6 +1296,8 @@ function save_user_settings()
         file:write("slm_no_chocks=" .. tostring(slm_no_chocks) .. "\n")
         file:write("slm_bpb_remove_chocks=" .. tostring(slm_bpb_remove_chocks) .. "\n")
         file:write("slm_gpu_enabled=" .. tostring(slm_gpu_enabled) .. "\n")
+        file:write("slm_gpu_xcrafts=" .. tostring(slm_gpu_xcrafts) .. "\n")
+        file:write("slm_people_detail=" .. tostring(slm_people_detail) .. "\n")
         file:write("slm_boarding_music_enabled=" .. tostring(slm_boarding_music_enabled) .. "\n")
         file:write("slm_boarding_music_vol=" .. tostring(slm_boarding_music_vol or 0.5) .. "\n")
         file:write("slm_boarding_music_file=" .. tostring(slm_boarding_music_file or "") .. "\n")
@@ -1474,8 +1526,9 @@ end
 function apply_realistic_timings()
     pax_time_per_passenger = 5
     pax_time_variation = 3
-    disembark_pax_time_per_passenger = 4
-    disembark_pax_time_variation = 3
+    -- ~24 pax/min per door: everyone is already standing in the aisle (#SL38, 2026-10-23; was 4 +/- 3)
+    disembark_pax_time_per_passenger = 2.5
+    disembark_pax_time_variation = 1
     cargo_time_per_kg_min = 0.3
     cargo_time_per_kg_max = 0.6
     disembark_cargo_time_per_kg_min = 0.2
@@ -1492,8 +1545,9 @@ end
 function apply_fast_timings()
     pax_time_per_passenger = 3
     pax_time_variation = 2
-    disembark_pax_time_per_passenger = 2
-    disembark_pax_time_variation = 2
+    -- Between Realistic (2.5) and VeryFast (1) (#SL38, 2026-10-23; was 2 +/- 2)
+    disembark_pax_time_per_passenger = 1.5
+    disembark_pax_time_variation = 0.5
     cargo_time_per_kg_min = 0.09
     cargo_time_per_kg_max = 0.11
     disembark_cargo_time_per_kg_min = 0.05
@@ -1543,8 +1597,16 @@ end
 
 -- Time for one passenger: base +/- variation, drawn once per passenger (#SL13).
 -- Drawing it every frame made the shortest draw win, so the variation was lost.
+-- Deux escaliers ou plus (profil de vehicules, avant / arriere) : passagers 1,25 fois plus vite, pas 2 (les
+-- allees restent le goulot ; 1,6 rendait Realistic trop rapide : 138 passagers en 7 min) (#SL38, Etienne
+-- 2026-10-23). Sans module de vehicules (FlyWithLua, tests) : 1.
+function slm_door_factor()
+    local n = slm_vehicles_doors and slm_vehicles_doors() or 0
+    return n >= 2 and 1.25 or 1
+end
+
 function slm_pax_interval(base, variation)
-    return math.max(0.2, base + (math.random() * 2 - 1) * (variation or 0))
+    return math.max(0.2, base + (math.random() * 2 - 1) * (variation or 0)) / slm_door_factor()
 end
 
 
@@ -1580,8 +1642,6 @@ end
 
 function start_embarkation()
     slm_rp_stop()
-    walking_direction = "boarding"
-    walking_direction_changed_armed = false
     embark_started = true
     embark_done = false
     disembark_started = false
@@ -1628,6 +1688,7 @@ function start_embarkation()
     slm_event_dep_active     = nil
     slm_event_dep_triggered  = false
     slm_event_delay_until    = nil
+    slm_boarding_call_at, slm_fuel_call_pending, slm_catering_call_pending = nil, nil, nil
     slm_event_fuel_delay_until = nil
     slm_event_slow_factor    = 1.0
     slm_event_slow_until     = nil
@@ -1640,17 +1701,8 @@ function start_embarkation()
     -- Roll one departure event (applied lazily when category+pct conditions are met)
     slm_roll_event("departure")
 
-    if selected_location_group == "remote" or selected_location_group == "terminal" then
-        if not aircraft_has_own_stairs then
-            show_StairsXPJ        = true
-            StairsXPJ_chg         = true
-            show_StairsXPJ2       = true
-            StairsXPJ2_chg        = true
-            option_StairsXPJ_override = true
-            DualBoard = true
-
-        end
-    elseif selected_location_group == "jetway" then
+    slm_vehicles_phase("boarding", true, "access")
+    if selected_location_group == "jetway" then
         if not crew_briefing_done and not crew_briefing_started then
             if not aircraft_has_own_stairs then
                 command_once("sim/ground_ops/jetway")
@@ -1670,6 +1722,7 @@ function start_embarkation()
     end
 
     for k in pairs(sound_played) do sound_played[k] = false end
+    slm_veh_wait = {}
     init_sounds()
 end
 
@@ -1796,6 +1849,10 @@ function slm_try_apply_event(category, phase_mode, current_pct)
         end
     end
 
+    -- Reduced mobility passenger: the PRM lift comes for the passenger part (#SL38)
+    if pending.id == "pax_prm_slow_boarding" then
+        slm_vehicles_phase(phase_mode == "departure" and "boarding" or "deboarding", true, "prm")
+    end
     play_sound_by_key("event_" .. pending.id)
     logMsg("[SLM-EVENT] Applied: " .. pending.id .. " | " .. pending.effect .. " | dur=" .. string.format("%.0f", duration) .. "s")
 end
@@ -1901,21 +1958,29 @@ local function slm_compute_pax_variability()
     logMsg(string.format("[SLM-VAR] base=%d noshow=%d standby=%d eff=%d", base_pax, noshow_count, standby_count, pax_eff))
 end
 
--- Bus (remote) or passengers from the terminal, called when the boarding delay starts (#SL33)
+-- Bus (remote) or passengers from the terminal, called when the boarding delay starts (#SL33).
+-- A pax delay_start event (bus breakdown, gate opening delay) is applied here and the bus only comes
+-- once it is over, instead of arriving and waiting (2026-10-26); boarding is pushed back as much.
 function slm_call_boarding_vehicles()
-    if selected_location_group == "remote" then
-        show_Bus = true
-        Bus_chg = true
-    elseif selected_location_group == "terminal" then
-        boarding_from_the_terminal = true
-        show_Pax = true
-        Pax_chg = true
+    local ev = slm_event_dep_pending
+    if ev and ev.category == "pax" and ev.effect == "delay_start" and (ev.trigger_after_pct or 0) <= 0 then
+        slm_try_apply_event("pax", "departure", 0.0)
     end
+    if slm_event_delay_until and os.clock() < slm_event_delay_until then
+        if pax_trigger_time then pax_trigger_time = pax_trigger_time + (slm_event_delay_until - os.clock()) end
+        slm_boarding_call_at = slm_event_delay_until
+        return
+    end
+    slm_vehicles_phase("boarding", true, "pax")
 end
 
 function manage_embark()
     if not embark_started then return end
     if slm_beacon_on then return end
+    if slm_boarding_call_at and os.clock() >= slm_boarding_call_at then  -- delay over: bus called
+        slm_boarding_call_at = nil
+        slm_vehicles_phase("boarding", true, "pax")
+    end
 
     -- Event: cargo_pause (no-show bag search) — freeze cargo timer, pax continues
     if slm_cargo_penalty_until then
@@ -1959,6 +2024,7 @@ function manage_embark()
             else
                 last_update_time = os.clock()
                 if pax_load_started then pax_start_time = os.clock() end
+                manage_fuel_loading()  -- fuel (started at 15 % pax) is not held by a pax / cargo event
                 return
             end
         else
@@ -1977,6 +2043,7 @@ function manage_embark()
         else
             last_update_time = os.clock()
             if pax_load_started then pax_start_time = os.clock() end
+            manage_fuel_loading()
             return
         end
     end
@@ -1985,8 +2052,7 @@ function manage_embark()
         if not fuel_loading then
             if (fuel_total or 0) - (fuel_loaded or 0) == 0 then
                 fuel_done = true
-                show_FUEL = false
-                FUEL_chg = true
+                slm_vehicles_phase("refuelling", false)
             else
                 start_fuel_loading()
             end
@@ -2041,7 +2107,8 @@ if fuel_first and not fuel_done then return end
         slm_call_boarding_vehicles()
     end
 
-    if os.clock() >= pax_trigger_time then
+    -- The bus (remote) at its stand too, when the vehicle module drives it (SLM 6.0).
+    if os.clock() >= pax_trigger_time and not slm_vehicles_waiting("pax") then
         if not pax_load_started then
             pax_load_started = true
             pax_start_time = os.clock()
@@ -2078,8 +2145,7 @@ if fuel_first and not fuel_done then return end
             then
                 if (fuel_total or 0) - (fuel_loaded or 0) == 0 then
                     fuel_done = true
-                    show_FUEL = false
-                    FUEL_chg = true
+                    slm_vehicles_phase("refuelling", false)
                 else
                     start_fuel_loading()
                 end
@@ -2101,11 +2167,8 @@ if fuel_first and not fuel_done then return end
                     slm_stop_boarding_music()
                     play_sound_by_key("finished_loading_pax")
                     sound_played.finished_loading_pax = true
-                    show_Bus = false
-                    Bus_chg = true
-                    boarding_from_the_terminal = false
-                    show_Pax = false
-                    Pax_chg = true
+                    slm_vehicles_phase("boarding", false, "pax")
+                    -- bus / passenger walk ends: no phase key (#SL45, lot 5a)
                 end
             end
         end
@@ -2122,50 +2185,11 @@ end
     local eff_ct_co = cargo_time_per_unit * slm_event_slow_factor
     if not sound_played.start_loading_cargo
        and not (slm_event_delay_until and os.clock() < slm_event_delay_until) then
-        play_sound_by_key("start_loading_cargo")
-        sound_played.start_loading_cargo = true
-
-        show_BeltLoader = true
-        BeltLoader_chg = true
-        show_RearBeltLoader = true
-        RearBeltLoader_chg = true
-        show_Cart = true
-        Cart_chg = true
-        show_People4 = true
-        People4_chg = true
-        show_People3 = true
-        People3_chg = true
-        show_People2 = true
-        People2_chg = true
-        show_People1 = true
-        People1_chg = true
-        slm_place_chocks()
-
-        if selected_location_group == "remote" then
-			if not aircraft_has_own_stairs then
-				show_StairsXPJ  = true
-				StairsXPJ_chg   = true
-				show_StairsXPJ2 = true
-				StairsXPJ2_chg  = true
-				option_StairsXPJ_override = true
-			else
-				-- Own stairs / "Don't call jetway / stairs": stay hands-off,
-				-- never retract stairs the user placed manually (e.g. via SGES)
-				option_StairsXPJ_override = false
-			end
-        elseif selected_location_group == "terminal"  then
-			if not aircraft_has_own_stairs then
-				show_StairsXPJ  = true
-				StairsXPJ_chg   = true
-				show_StairsXPJ2 = true
-				StairsXPJ2_chg  = true
-				option_StairsXPJ_override = true
-			else
-				-- Own stairs / "Don't call jetway / stairs": stay hands-off,
-				-- never retract stairs the user placed manually (e.g. via SGES)
-				option_StairsXPJ_override = false
-			end
-        end
+        slm_start_cargo("boarding", "start_loading_cargo")
+    end
+    if slm_veh_wait.cargo then  -- vehicles not in place yet: nothing counted
+        last_update_time = now
+        elapsed = 0
     end
 
     if cargo_loaded < cargo_total and elapsed >= eff_ct_co then
@@ -2175,7 +2199,7 @@ end
     end
 
     if cargo_loaded < cargo_total then
-        if not cargo_loop_playing then
+        if not cargo_loop_playing and not slm_veh_wait.cargo then
             cargo_loop_playing = true
             let_sound_loop(sounds.cargo_loop.id, true)
             play_sound(sounds.cargo_loop.id)
@@ -2189,12 +2213,8 @@ end
         if not sound_played.finished_loading_cargo then
             play_sound_by_key("finished_loading_cargo")
             sound_played.finished_loading_cargo = true
-            show_BeltLoader = false
-            BeltLoader_chg = true
-            show_RearBeltLoader = false
-            RearBeltLoader_chg = true
-            show_Cart = false
-            Cart_chg = true
+            slm_vehicles_phase("boarding", false, "cargo")
+            -- belt loaders and cart leave: no phase key (#SL45, lot 5a)
         end
 
         if not fuel_loading and not fuel_done then
@@ -2214,8 +2234,7 @@ end
 if fuel_first and not fuel_done then
     if (fuel_total or 0) - (fuel_loaded or 0) == 0 then
         fuel_done = true
-        show_FUEL = false
-        FUEL_chg = true
+        slm_vehicles_phase("refuelling", false)
     else
         start_fuel_loading()
     end
@@ -2233,53 +2252,11 @@ local eff_ct_both = cargo_time_per_unit * slm_event_slow_factor
 
 if not sound_played.start_loading_cargo
    and not (slm_event_delay_until and os.clock() < slm_event_delay_until) then
-    play_sound_by_key("start_loading_cargo")
-    sound_played.start_loading_cargo = true
-    show_BeltLoader = true
-    BeltLoader_chg = true
-    show_RearBeltLoader = true
-    RearBeltLoader_chg = true
-    show_Cart = true
-    Cart_chg = true
-    show_People4 = true
-    People4_chg = true
-    show_People3 = true
-    People3_chg = true
-    show_People2 = true
-    People2_chg = true
-    show_People1 = true
-    People1_chg = true
-    slm_place_chocks()
-
-    if selected_location_group == "remote" then
-		if not aircraft_has_own_stairs then
-			show_StairsXPJ  = true
-			StairsXPJ_chg   = true
-			show_StairsXPJ2 = true
-			StairsXPJ2_chg  = true
-			option_StairsXPJ_override = true
-			DualBoard = true
-		else
-			-- Own stairs / "Don't call jetway / stairs": stay hands-off,
-			-- never retract stairs the user placed manually (e.g. via SGES)
-			option_StairsXPJ_override = false
-			DualBoard = false
-		end
-    elseif selected_location_group == "terminal" then
-		if not aircraft_has_own_stairs then
-			show_StairsXPJ  = true
-			StairsXPJ_chg   = true
-			show_StairsXPJ2 = true
-			StairsXPJ2_chg  = true
-			option_StairsXPJ_override = true
-			DualBoard = true
-		else
-			-- Own stairs / "Don't call jetway / stairs": stay hands-off,
-			-- never retract stairs the user placed manually (e.g. via SGES)
-			option_StairsXPJ_override = false
-			DualBoard = false
-		end
-    end
+    slm_start_cargo("boarding", "start_loading_cargo")
+end
+if slm_veh_wait.cargo then  -- vehicles not in place yet: nothing counted
+    last_update_time = now
+    elapsed = 0
 end
 
 if cargo_loaded < cargo_total and elapsed >= eff_ct_both then
@@ -2289,7 +2266,7 @@ if cargo_loaded < cargo_total and elapsed >= eff_ct_both then
 end
 
 if cargo_loaded < cargo_total then
-    if not cargo_loop_playing then
+    if not cargo_loop_playing and not slm_veh_wait.cargo then
         cargo_loop_playing = true
         let_sound_loop(sounds.cargo_loop.id, true)
         play_sound(sounds.cargo_loop.id)
@@ -2303,12 +2280,8 @@ else
     if not sound_played.finished_loading_cargo then
         play_sound_by_key("finished_loading_cargo")
         sound_played.finished_loading_cargo = true
-        show_BeltLoader = false
-        BeltLoader_chg = true
-        show_RearBeltLoader = false
-        RearBeltLoader_chg = true
-        show_Cart = false
-        Cart_chg = true
+        slm_vehicles_phase("boarding", false, "cargo")
+        -- belt loaders and cart leave: no phase key (#SL45, lot 5a)
     end
 end
 
@@ -2339,7 +2312,8 @@ local est_pax   = estimated_time_pax or 0
 			end
 		end
 
-		if bus_triggered and pax_trigger_time and os.clock() >= pax_trigger_time then
+		if bus_triggered and pax_trigger_time and os.clock() >= pax_trigger_time
+		   and not slm_vehicles_waiting("pax") then  -- bus at its stand too (SLM 6.0)
 			pax_load_started = true
 			pax_start_time = os.clock()
 			if not slm_pax_var_applied then
@@ -2390,11 +2364,8 @@ local est_pax   = estimated_time_pax or 0
 			slm_stop_boarding_music()
 			play_sound_by_key("finished_loading_pax")
 			sound_played.finished_loading_pax = true
-			show_Bus = false
-			Bus_chg = true
-			boarding_from_the_terminal = false
-			show_Pax = false
-			Pax_chg = true
+			slm_vehicles_phase("boarding", false, "pax")
+			-- bus / passenger walk ends: no phase key (#SL45, lot 5a)
 		end
 	end
 
@@ -2404,8 +2375,7 @@ local est_pax   = estimated_time_pax or 0
 		then
 			if (fuel_total or 0) - (fuel_loaded or 0) == 0 then
 				fuel_done = true
-				show_FUEL = false
-				FUEL_chg = true
+				slm_vehicles_phase("refuelling", false)
 			else
 				start_fuel_loading()
 			end
@@ -2420,24 +2390,12 @@ end
 --------------------------------------------------------------------------------
 -- Ground crew, stairs / bus / jetway and passengers for deboarding
 function slm_call_disembark_vehicles()
-	show_People4 = true; People4_chg = true
-	show_People3 = true; People3_chg = true
-	show_People2 = true; People2_chg = true
-	show_People1 = true; People1_chg = true
-	slm_place_chocks()
+	if not slm_veh_wait.pax_called then  -- with cargo, already called when deboarding started (manage_disembark)
+		slm_veh_wait.pax_called = true
+		slm_vehicles_phase("deboarding", true, "pax")
+		slm_place_chocks()
+	end
 	if selected_location_group == "remote" then
-		if not aircraft_has_own_stairs then
-			show_StairsXPJ  = true; StairsXPJ_chg  = true
-			show_StairsXPJ2 = true; StairsXPJ2_chg = true
-			option_StairsXPJ_override = true
-			DualBoard = true
-		else
-			-- Own stairs / "Don't call jetway / stairs": stay hands-off,
-			-- never retract stairs the user placed manually (e.g. via SGES)
-			option_StairsXPJ_override = false
-			DualBoard = false
-		end
-		show_Bus = true; Bus_chg = true
 	elseif selected_location_group == "jetway" then
 		if not slm_opensam_jetway_check() then
 			if not aircraft_has_own_stairs then
@@ -2445,27 +2403,15 @@ function slm_call_disembark_vehicles()
 			end
 		end
 	elseif selected_location_group == "terminal" then
-		if not aircraft_has_own_stairs then
-			show_StairsXPJ  = true; StairsXPJ_chg  = true
-			show_StairsXPJ2 = true; StairsXPJ2_chg = true
-			option_StairsXPJ_override = true
-			DualBoard = true
-		else
-			-- Own stairs / "Don't call jetway / stairs": stay hands-off,
-			-- never retract stairs the user placed manually (e.g. via SGES)
-			option_StairsXPJ_override = false
-			DualBoard = false
-		end
 	end
 end
 
 function start_disembarkation()
+    slm_veh_wait = {}
     disembark_started = true
     disembark_done = false
     embark_started = false
     embark_done = false
-	walking_direction = "deboarding"
-	walking_direction_changed_armed = false
     cargo_unloaded = 0
     passengers_unloaded = 0
 
@@ -2497,6 +2443,7 @@ function start_disembarkation()
     slm_event_arr_active    = nil
     slm_event_arr_triggered = false
     slm_event_delay_until   = nil
+    slm_boarding_call_at, slm_fuel_call_pending, slm_catering_call_pending = nil, nil, nil
     slm_event_slow_factor   = 1.0
     slm_event_slow_until    = nil
     slm_event_pause_until   = nil
@@ -2508,39 +2455,8 @@ function start_disembarkation()
     init_sounds()
 
     if cargo_total > 0 and passengers_total > 0 then
-        play_sound_by_key("start_unloading_cargo")
-        sound_played.start_unloading_cargo = true
-		show_BeltLoader = true
-		BeltLoader_chg = true
-		show_RearBeltLoader = true
-		RearBeltLoader_chg = true
-		show_Cart = true
-		Cart_chg = true
-		show_People4 = true
-		People4_chg = true
-		show_People3 = true
-		People3_chg = true
-		show_People2 = true
-		People2_chg = true
-		show_People1 = true
-		People1_chg = true
-		slm_place_chocks()
+        slm_start_cargo("deboarding", "start_unloading_cargo")
 		if selected_location_group == "remote" then
-			if not aircraft_has_own_stairs then
-				show_StairsXPJ  = true
-				StairsXPJ_chg   = true
-				show_StairsXPJ2 = true
-				StairsXPJ2_chg  = true
-				option_StairsXPJ_override = true
-				DualBoard = true
-			else
-				-- Own stairs / "Don't call jetway / stairs": stay hands-off,
-				-- never retract stairs the user placed manually (e.g. via SGES)
-				option_StairsXPJ_override = false
-				DualBoard = false
-			end
-			show_Bus = true
-			Bus_chg = true
 			start_disembarkation_pax_delay = os.clock() + 15
 		elseif selected_location_group == "jetway" then
 			if not slm_opensam_jetway_check() then
@@ -2550,72 +2466,15 @@ function start_disembarkation()
 			end
 			start_disembarkation_pax_delay = os.clock() + 25
         elseif selected_location_group == "terminal" then
-			if not aircraft_has_own_stairs then
-				show_StairsXPJ  = true
-				StairsXPJ_chg   = true
-				show_StairsXPJ2 = true
-				StairsXPJ2_chg  = true
-				option_StairsXPJ_override = true
-				DualBoard = true
-			else
-				-- Own stairs / "Don't call jetway / stairs": stay hands-off,
-				-- never retract stairs the user placed manually (e.g. via SGES)
-				option_StairsXPJ_override = false
-				DualBoard = false
-			end
 			start_disembarkation_pax_delay = os.clock() + 8
         end
     elseif cargo_total > 0 then
-        play_sound_by_key("start_unloading_cargo")
-        sound_played.start_unloading_cargo = true
-		show_BeltLoader = true
-		BeltLoader_chg = true
-		show_RearBeltLoader = true
-		RearBeltLoader_chg = true
-		show_Cart = true
-		Cart_chg = true
-		show_People4 = true
-		People4_chg = true
-		show_People3 = true
-		People3_chg = true
-		show_People2 = true
-		People2_chg = true
-		show_People1 = true
-		People1_chg = true
-		slm_place_chocks()
-		if selected_location_group == "remote" then
-			if not aircraft_has_own_stairs then
-				show_StairsXPJ  = true
-				StairsXPJ_chg   = true
-				show_StairsXPJ2 = true
-				StairsXPJ2_chg  = true
-				option_StairsXPJ_override = true
-				DualBoard = true
-			else
-				-- Own stairs / "Don't call jetway / stairs": stay hands-off,
-				-- never retract stairs the user placed manually (e.g. via SGES)
-				option_StairsXPJ_override = false
-				DualBoard = false
-			end
-        elseif selected_location_group == "jetway" then
+        slm_start_cargo("deboarding", "start_unloading_cargo")
+		if selected_location_group == "jetway" then
 			if not slm_opensam_jetway_check() then
 				if not aircraft_has_own_stairs then
 					command_once("sim/ground_ops/jetway")
 				end
-			end
-        elseif selected_location_group == "terminal" then
-			if not aircraft_has_own_stairs then
-				show_StairsXPJ  = true
-				StairsXPJ_chg   = true
-				show_StairsXPJ2 = true
-				StairsXPJ2_chg  = true
-				option_StairsXPJ_override = true
-				DualBoard = true
-			else
-				-- Own stairs / "Don't call jetway / stairs": stay hands-off,
-				-- never retract stairs the user placed manually (e.g. via SGES)
-				option_StairsXPJ_override = false
-				DualBoard = false
 			end
         end
     elseif passengers_total > 0 then
@@ -2637,12 +2496,12 @@ function manage_disembark()
         slm_event_pause_until = nil
         slm_event_arr_active  = nil
     end
-    -- Event: delay_start or active pause â†’ freeze timers and wait
+    -- Event: delay_start or active pause â†’ freeze timers and wait. A passenger event (customs,
+    -- jetway) only holds the passengers: cargo unloading goes on (as on departure).
+    local pax_hold = false
     if slm_event_delay_until then
         if os.clock() < slm_event_delay_until then
-            disembark_last_update_time = os.clock()
-            if pax_unload_started then pax_unload_start_time = os.clock() end
-            return
+            pax_hold = true
         else
             slm_event_delay_until = nil
             if slm_event_arr_active and slm_event_arr_active.effect == "delay_start" then
@@ -2650,16 +2509,23 @@ function manage_disembark()
             end
         end
     end
-    if slm_event_pause_until and os.clock() < slm_event_pause_until then
-        disembark_last_update_time = os.clock()
+    if slm_event_pause_until and os.clock() < slm_event_pause_until then pax_hold = true end
+    if pax_hold then
         if pax_unload_started then pax_unload_start_time = os.clock() end
-        return
+        if not (slm_event_arr_active and slm_event_arr_active.category == "pax" and arr_cargo_total > 0) then
+            disembark_last_update_time = os.clock()
+            return
+        end
     end
 
     local now = os.clock()
     local elapsed = now - disembark_last_update_time
 
-    if arr_cargo_total > 0 then
+    if slm_veh_wait.cargo and slm_start_cargo("deboarding", "start_unloading_cargo") == false then
+        disembark_last_update_time = now  -- vehicles not in place yet: nothing counted
+        elapsed = 0
+    end
+    if arr_cargo_total > 0 and not slm_veh_wait.cargo then
         local cargo_arr_frac = (arr_cargo_total > 0) and (cargo_unloaded / arr_cargo_total) or 0
         slm_try_apply_event("cargo", "arrival", cargo_arr_frac)
         if cargo_unloaded < arr_cargo_total then
@@ -2686,12 +2552,8 @@ function manage_disembark()
             if not sound_played.finished_unloading_cargo then
                 play_sound_by_key("finished_unloading_cargo")
                 sound_played.finished_unloading_cargo = true
-				show_BeltLoader = false
-				BeltLoader_chg = true
-				show_RearBeltLoader = false
-				RearBeltLoader_chg = true
-				show_Cart = false
-				Cart_chg = true
+                slm_vehicles_phase("deboarding", false, "cargo")
+				-- belt loaders and cart leave: no phase key (#SL45, lot 5a)
             end
         end
     else
@@ -2699,13 +2561,32 @@ function manage_disembark()
     end
 
     if arr_passengers_total > 0 then
-        if not start_disembarkation_pax_delay then
-            -- No cargo: call the bus / stairs / jetway now, passengers leave after the delay (#SL33)
-            slm_call_disembark_vehicles()
-            start_disembarkation_pax_delay = now + ((selected_location_group == "remote" and 15)
-                or (selected_location_group == "jetway" and 25) or 8)
+        if not slm_veh_wait.pax_called then
+            -- A passenger delay_start event (customs, jetway) is applied first and the bus only comes once
+            -- it is over, as on departure (slm_call_boarding_vehicles).
+            local ev = slm_event_arr_pending
+            if ev and ev.category == "pax" and ev.effect == "delay_start" and (ev.trigger_after_pct or 0) <= 0 then
+                slm_try_apply_event("pax", "arrival", 0.0)
+                pax_hold = slm_event_delay_until ~= nil
+            end
+            if not pax_hold then
+                if start_disembarkation_pax_delay then
+                    -- With cargo: the bus comes now, not when passengers start (2026-10-27); the jetway
+                    -- part stays in slm_call_disembark_vehicles below
+                    slm_veh_wait.pax_called = true
+                    slm_vehicles_phase("deboarding", true, "pax")
+                    slm_place_chocks()
+                else
+                    -- No cargo: call the bus / stairs / jetway now, passengers leave after the delay (#SL33)
+                    slm_call_disembark_vehicles()
+                    start_disembarkation_pax_delay = now + ((selected_location_group == "remote" and 15)
+                        or (selected_location_group == "jetway" and 25) or 8)
+                end
+            end
         end
-        if now < start_disembarkation_pax_delay then
+        -- Passengers wait for the stairs set against the door and the bus (SLM 6.0)
+        if pax_hold or not start_disembarkation_pax_delay or now < start_disembarkation_pax_delay
+           or slm_vehicles_waiting("pax") then
         else
             if not pax_unload_started then
                 pax_unload_started = true
@@ -2715,10 +2596,9 @@ function manage_disembark()
 
 			if not sound_played.start_unboarding_passengers
 			   and not (slm_event_delay_until and os.clock() < slm_event_delay_until) then
-				-- Without cargo the vehicles were called when the delay started
+				-- Bus already called above; with cargo, jetway part only
 				if cargo_total > 0 then slm_call_disembark_vehicles() end
-				if selected_location_group == "terminal" then boarding_from_the_terminal = true end
-				if selected_location_group ~= "jetway" then show_Pax = true; Pax_chg = true end
+				-- passenger walk starts (not at a jetway): no phase key (#SL45, lot 5a)
 				play_sound_by_key("start_unboarding_passengers")
 				sound_played.start_unboarding_passengers = true
 				slm_start_boarding_music()
@@ -2754,11 +2634,7 @@ function manage_disembark()
                     slm_stop_boarding_music()
                     play_sound_by_key("finished_unboarding_passengers")
                     sound_played.finished_unboarding_passengers = true
-					show_Bus = false
-					Bus_chg = true
-					boarding_from_the_terminal = false
-					show_Pax = false
-					Pax_chg = true
+					slm_vehicles_phase("deboarding", false, "pax")
                 end
             end
         end
@@ -2784,31 +2660,10 @@ function manage_disembark()
         end
         disembark_started = false
         disembark_done = true
-		show_BeltLoader = false
-		BeltLoader_chg = true
-		show_RearBeltLoader = false
-		RearBeltLoader_chg = true
-		show_Cart = false
-		Cart_chg = true
-		show_People4 = false
-		People4_chg = true
-		show_People3 = false
-		People3_chg = true
-		show_People2 = false
-		People2_chg = true
-		show_People1 = false
-		People1_chg = true
+		slm_vehicles_phase("deboarding", false)
 		if slm_sequence_mode ~= "turnaround" and slm_sequence_mode ~= "night_stop"
 		   and not slm_manual_chocks then
-			show_Chocks = false
-			Chocks_chg  = true
-		end
-
-		if slm_sequence_mode ~= "turnaround" and not aircraft_has_own_stairs then
-			show_StairsXPJ  = false
-			StairsXPJ_chg   = true
-			show_StairsXPJ2 = false
-			StairsXPJ2_chg  = true
+			slm_set_chocks(false)
 		end
     end
 end
@@ -2820,35 +2675,14 @@ end
 function start_fuel_loading()
     fuel_loading = true
     fuel_done = false
-    show_FUEL = true
-    FUEL_chg = true
     slm_try_apply_event("fuel", "departure", 0.0)
+    -- Fuel Truck Delay (2026-10-26): the truck is only called once the delay is over (manage_fuel_loading).
+    if slm_event_fuel_delay_until then slm_fuel_call_pending = true else slm_vehicles_phase("refuelling", true) end
     fuel_ready_time = os.clock() + 30
 
     if fuel_first then
-        show_People1 = true
-        People1_chg = true
-        show_People2 = true
-        People2_chg = true
-        show_People3 = true
-        People3_chg = true
-        show_People4 = true
-        People4_chg = true
         slm_place_chocks()
 
-        if selected_location_group == "remote" or selected_location_group == "terminal" then
-			if not aircraft_has_own_stairs then
-				show_StairsXPJ  = true
-				StairsXPJ_chg   = true
-				show_StairsXPJ2 = true
-				StairsXPJ2_chg  = true
-				option_StairsXPJ_override = true
-			else
-				-- Own stairs / "Don't call jetway / stairs": stay hands-off,
-				-- never retract stairs the user placed manually (e.g. via SGES)
-				option_StairsXPJ_override = false
-			end
-        end
     end
 end
 
@@ -2873,8 +2707,7 @@ function manage_fuel_loading()
                        .. tostring(current_disp) .. " / " .. tostring(fuel_total)
                        .. " " .. unit_system .. ") â€” skipping")
                 fuel_loaded  = fuel_total
-                show_FUEL    = false
-                FUEL_chg     = true
+                slm_vehicles_phase("refuelling", false)
                 fuel_loading = false
                 fuel_done    = true
                 slm_rf_skipped           = true
@@ -2884,6 +2717,16 @@ function manage_fuel_loading()
         end
 
         if fuel_ready_time and os.clock() < fuel_ready_time then
+            fuel_loaded = math.floor(from_kg(sim_fuel_total_kg or 0))
+            return
+        end
+        -- Fuel Truck Delay over (or cleared): the truck comes, nothing counted until it is in place.
+        if slm_fuel_call_pending and not (slm_event_fuel_delay_until and os.clock() < slm_event_fuel_delay_until) then
+            slm_fuel_call_pending = nil
+            slm_vehicles_phase("refuelling", true)
+        end
+        if slm_vehicles_waiting("fuel") then  -- fuel truck not in place yet (#SL38): nothing counted
+            if fuel_last_update_time then fuel_last_update_time = os.clock() end
             fuel_loaded = math.floor(from_kg(sim_fuel_total_kg or 0))
             return
         end
@@ -2905,8 +2748,7 @@ function manage_fuel_loading()
 
         local diff = (fuel_total or 0) - (fuel_loaded or 0)
         if diff == 0 then
-            show_FUEL = false
-            FUEL_chg = true
+            slm_vehicles_phase("refuelling", false)
             fuel_loading = false
             fuel_done = true
             -- Target reached outside this function (dev Force loading): end like a
@@ -2956,8 +2798,7 @@ function manage_fuel_loading()
         end
 
         if fuel_loaded == fuel_total then
-            show_FUEL = false
-            FUEL_chg = true
+            slm_vehicles_phase("refuelling", false)
 
             if fuel_loop_playing then
                 fuel_loop_playing = false
@@ -4185,16 +4026,8 @@ function check_if_all_done()
                     slm_send_hoppie_acars()
                 end
 
-                show_Cones     = false; Cones_chg     = true
-                show_People4   = false; People4_chg   = true
-                show_People3   = false; People3_chg   = true
-                show_People2   = false; People2_chg   = true
-                show_People1   = false; People1_chg   = true
-                if not slm_manual_chocks then show_Chocks = false; Chocks_chg = true end
-                if not aircraft_has_own_stairs then
-                    show_StairsXPJ  = false; StairsXPJ_chg  = true
-                    show_StairsXPJ2 = false; StairsXPJ2_chg = true
-                end
+                slm_vehicles_phase("departure", true)
+                if not slm_manual_chocks then slm_set_chocks(false) end
 
                 if selected_location_group == "jetway" then
                     if not aircraft_has_own_stairs then
@@ -4213,7 +4046,8 @@ end
 --------------------------------------------------------------------------------
 -- Finishes the running boarding or deboarding at once (dev mode button).
 -- Crew briefing and catering finish too: their start time is moved back so their
--- own manager ends them on the next frame (sounds and SGES vehicles as usual).
+-- own manager ends them on the next frame (sounds and vehicle phases as usual),
+-- even when the catering truck is not in place yet.
 -- Passengers and cargo jump to their totals: the payload fill (slm_rp_*) follows
 -- the counters, so its baselines are set first. Fuel is poured in steps of
 -- SLM_DEV_FUEL_STEP_KG per frame so the tank-by-tank fill (slm_rf_update) sees
@@ -4224,6 +4058,7 @@ slm_dev_forcing = false
 
 function slm_dev_clear_events()
     slm_event_delay_until      = nil
+    if slm_boarding_call_at then slm_boarding_call_at = 0 end  -- deferred bus called at once
     slm_event_pause_until      = nil
     slm_event_fuel_delay_until = nil
     slm_event_slow_factor      = 1.0
@@ -4242,6 +4077,7 @@ function slm_dev_force_preboard()
     if catering_started and not catering_done then
         slm_dev_clear_events()
         slm_catering_elapsed_at_pause = nil
+        slm_veh_wait.catering = nil  -- else manage_catering keeps resetting the start while the truck drives in
         catering_start_time = os.clock() - (catering_duration or 0)
         forced = true
     end
@@ -4326,14 +4162,8 @@ end
 
 
 function slm_deploy_access()
-    if selected_location_group == "remote" or selected_location_group == "terminal" then
-        if not aircraft_has_own_stairs then
-            show_StairsXPJ            = true; StairsXPJ_chg         = true
-            show_StairsXPJ2           = true; StairsXPJ2_chg        = true
-            option_StairsXPJ_override = true
-            DualBoard = true
-        end
-    elseif selected_location_group == "jetway" then
+    slm_vehicles_phase("boarding", true, "access")
+    if selected_location_group == "jetway" then
         if not aircraft_has_own_stairs then
             command_once("sim/ground_ops/jetway")
         end
@@ -4346,10 +4176,6 @@ function start_crew_briefing()
     crew_briefing_start_time = os.clock()
     crew_briefing_duration   = random_range(crew_briefing_time_min, crew_briefing_time_max)
     if slm_lowcost_mode then crew_briefing_duration = math.min(crew_briefing_duration, 300) end
-    show_People1 = true;  People1_chg = true
-    show_People2 = true;  People2_chg = true
-    show_People3 = true;  People3_chg = true
-    show_People4 = true;  People4_chg = true
     slm_deploy_access()
     if sounds.briefing.id and sounds.briefing.id ~= 0 then
         briefing_playing = true
@@ -4385,8 +4211,13 @@ function start_catering()
     catering_duration   = passengers_total * catering_time_per_pax + random_range(2, 4)
     if slm_lowcost_mode then catering_duration = math.min(catering_duration, 300) end
     slm_try_apply_event("catering", "departure", 0.0)
-    show_Catering = true
-    Catering_chg  = true
+    -- Catering Delivery Delay (2026-10-26): catering_start_time pushed back, the truck only comes then.
+    if catering_start_time > os.clock() then slm_catering_call_pending = true; return end
+    slm_vehicles_phase("catering", true)
+    if not slm_vehicles_waiting("catering") then slm_catering_loop_on() end
+end
+
+function slm_catering_loop_on()
     if sounds.catering_loop.id and sounds.catering_loop.id ~= 0 then
         catering_loop_playing = true
         let_sound_loop(sounds.catering_loop.id, true)
@@ -4397,6 +4228,20 @@ end
 
 function manage_catering()
     if not catering_started or catering_done then return end
+    if slm_catering_call_pending then
+        if os.clock() < catering_start_time then estimated_time_catering = catering_duration; return end
+        slm_catering_call_pending = nil
+        slm_vehicles_phase("catering", true)
+        slm_veh_wait.catering = os.clock()  -- through the wait below: loop and timer once the truck is in place
+    end
+    if slm_veh_wait.catering then  -- truck not in place yet: catering not started
+        if slm_vehicles_waiting("catering") then
+            catering_start_time = os.clock()
+            estimated_time_catering = catering_duration
+            return
+        end
+        slm_catering_loop_on()
+    end
     -- Clear catering delay_start event when its delay has expired
     if slm_event_dep_active and slm_event_dep_active.category == "catering"
        and slm_event_dep_active.effect == "delay_start"
@@ -4427,8 +4272,7 @@ function manage_catering()
         catering_started        = false
         catering_done           = true
         estimated_time_catering = nil
-        show_Catering = false
-        Catering_chg  = true
+        slm_vehicles_phase("catering", false)
         if catering_loop_playing then
             catering_loop_playing = false
             let_sound_loop(sounds.catering_loop.id, false)
@@ -4448,8 +4292,11 @@ function start_cleaning()
     cleaning_done       = false
     cleaning_start_time = os.clock()
     cleaning_duration   = arr_passengers_total * cleaning_time_per_pax + random_range(2, 4)
-    show_Cleaning = true
-    Cleaning_chg  = true
+    slm_vehicles_phase("cleaning", true)
+    if not slm_vehicles_waiting("cleaning") then slm_cleaning_loop_on() end
+end
+
+function slm_cleaning_loop_on()
     if sounds.cleaning_loop.id and sounds.cleaning_loop.id ~= 0 then
         cleaning_loop_playing = true
         let_sound_loop(sounds.cleaning_loop.id, true)
@@ -4460,13 +4307,20 @@ end
 
 function manage_cleaning()
     if not cleaning_started or cleaning_done then return end
+    if slm_veh_wait.cleaning then  -- vehicle not in place yet: cleaning not started
+        if slm_vehicles_waiting("cleaning") then
+            cleaning_start_time = os.clock()
+            estimated_time_cleaning = cleaning_duration
+            return
+        end
+        slm_cleaning_loop_on()
+    end
     local elapsed = os.clock() - cleaning_start_time
     if elapsed >= cleaning_duration then
         cleaning_started        = false
         cleaning_done           = true
         estimated_time_cleaning = nil
-        show_Cleaning = false
-        Cleaning_chg  = true
+        slm_vehicles_phase("cleaning", false)
         if cleaning_loop_playing then
             cleaning_loop_playing = false
             let_sound_loop(sounds.cleaning_loop.id, false)
@@ -4678,9 +4532,12 @@ end
 
 function start_departure_sequence(is_after_flight)
     slm_detect_aircraft()
+    -- Start loading on a ToLiss: no external power until SLM brings its GPU (turnaround: the stop's GPU stays).
+    if not is_after_flight and slm_aircraft_type == "toliss" and XPLMFindDataRef("AirbusFBW/EnableExternalPower") then
+        dataref_table("AirbusFBW/EnableExternalPower")[0] = 0
+    end
     slm_gpu_start()
     slm_place_chocks()
-    slm_sync_toliss_chocks()
     slm_initial_fuel_kg       = sim_fuel_total_kg
     slm_initial_fuel_captured = true
     slm_sequence_mode      = "departure"
@@ -4716,7 +4573,6 @@ function start_turnaround()
         slm_lc_forced_fast = true
     end
     slm_place_chocks()
-    slm_sync_toliss_chocks()
 	slm_sequence_mode       = "turnaround"
     slm_last_sequence_mode  = "turnaround"
     slm_steps_visible       = true
@@ -4740,7 +4596,6 @@ function start_night_stop()
     slm_detect_aircraft()
     slm_gpu_start(true)
     slm_place_chocks()
-    slm_sync_toliss_chocks()
     slm_sequence_mode      = "night_stop"
     slm_last_sequence_mode = "night_stop"
     slm_steps_visible      = true
@@ -4818,15 +4673,8 @@ function manage_sequence()
             start_crew_deplane()
         elseif slm_sequence_phase == "crew_deplane" and crew_deplane_done then
             slm_place_chocks()
-            show_Cones  = true
-            Cones_chg   = true
+            slm_vehicles_phase("arrival", true)
 
-            if not aircraft_has_own_stairs then
-                show_StairsXPJ  = false
-                StairsXPJ_chg   = true
-                show_StairsXPJ2 = false
-                StairsXPJ2_chg  = true
-            end
             slm_sequence_phase = "done"
             slm_clear_last_flight()   -- RON complete: wipe saved flight
         end
@@ -4840,6 +4688,7 @@ function reset_loads()
     slm_stop_boarding_music()
     SLM_GPU.state = nil
     SLM_GPU.done = false
+    SLM_GPU.generic_placed = false  -- vehicles removed by the reset
     slm_rf_stop()
     slm_rp_stop()
     slm_rp_last_pax_unloaded     = nil
@@ -4862,36 +4711,11 @@ function reset_loads()
 	fuel_time_per_unit = nil
 	fuel_last_update_time = nil
 	fuel_total = 0
-	show_People4 = false
-	People4_chg = true
-	show_People3 = false
-	People3_chg = true
-	show_People2 = false
-	People2_chg = true
-	show_People1 = false
-	People1_chg = true
-	show_Chocks = false
-	Chocks_chg = true
-	show_BeltLoader = false
-	BeltLoader_chg = true
-	show_RearBeltLoader = false
-	RearBeltLoader_chg = true
-	show_Cart = false
-	Cart_chg = true
-	boarding_from_the_terminal = false
-	show_Pax = false
-	Pax_chg = true
-	show_Bus = false
-	Bus_chg = true
-	show_StairsXPJ  = false
-	StairsXPJ_chg   = true
-	show_StairsXPJ2 = false
-	StairsXPJ2_chg  = true
-	option_StairsXPJ_override = false
-	DualBoard = false
+	for _, k in ipairs({ "arrival", "deboarding", "refuelling", "catering", "cleaning", "boarding", "departure" }) do
+		slm_vehicles_phase(k, false)
+	end
+	slm_set_chocks(false)
 	bus_triggered = false
-	show_FUEL = false
-	FUEL_chg = true
 	simbrief_data_loaded = false
 	loadsheet_ready = false
 	slm_defuel_performed = false
@@ -4983,16 +4807,12 @@ function reset_loads()
 	catering_start_time     = nil
 	catering_duration       = nil
 	estimated_time_catering = nil
-	show_Catering = false
-	Catering_chg  = true
 
 	cleaning_started        = false
 	cleaning_done           = false
 	cleaning_start_time     = nil
 	cleaning_duration       = nil
 	estimated_time_cleaning = nil
-	show_Cleaning = false
-	Cleaning_chg  = true
 
 	crew_deplane_started        = false
 	crew_deplane_done           = false
@@ -5009,6 +4829,7 @@ function reset_loads()
 	slm_event_dep_triggered   = false
 	slm_event_arr_triggered   = false
 	slm_event_delay_until     = nil
+	slm_boarding_call_at, slm_fuel_call_pending, slm_catering_call_pending = nil, nil, nil
 	slm_event_fuel_delay_until = nil
 	slm_event_pause_until     = nil
 	slm_event_slow_until      = nil
@@ -5052,6 +4873,7 @@ function reset_loads()
         end
     end
 
+    slm_veh_wait = {}
     sound_played = {
         start_loading_cargo         = false,
         start_boarding_passengers   = false,
@@ -5098,8 +4920,12 @@ function update_remaining_time()
                 avg_cargo_time_local = avg_cargo_time_local / 2.20462
             end
 
-			local avg_pax_time_local = pax_time_per_passenger -- variation is +/- (#SL13)
+			local avg_pax_time_local = pax_time_per_passenger / slm_door_factor() -- variation is +/- (#SL13)
 			local time_cargo = (cargo_total - cargo_loaded) * avg_cargo_time_local
+			-- Cargo vehicles still on their way (profile delays, routes, lift): counted too (SLM 6.0).
+			if slm_vehicles_eta and cargo_loaded < cargo_total then
+				time_cargo = time_cargo + slm_vehicles_eta("cargo")
+			end
 			local time_pax = 0
 			if pax_load_started then
 				time_pax = (passengers_total - passengers_loaded) * avg_pax_time_local
@@ -5119,7 +4945,7 @@ function update_remaining_time()
 
         if disembark_started then
             local avg_dis_cargo = (disembark_cargo_time_per_kg_min + disembark_cargo_time_per_kg_max) / 2
-            local avg_dis_pax   = disembark_pax_time_per_passenger
+            local avg_dis_pax   = disembark_pax_time_per_passenger / slm_door_factor()
             if unit_system == "lbs" then
                 avg_dis_cargo = avg_dis_cargo / 2.20462
             end
@@ -5819,11 +5645,14 @@ function slm_update_rules()
     S.can_force_load       = (embark_started or disembark_started or slm_dev_preboard_running()) and not slm_dev_forcing
     S.location             = selected_location_group
     S.own_stairs           = aircraft_has_own_stairs
+    S.manual_chocks        = slm_manual_chocks  -- chocks button under Fuel Top-Up
+    S.chocks_on            = slm_chocks_on or false
     S.dev_mode             = slm_dev_mode
     S.fsd_available        = slm_fsd_available
     S.real_fill_excluded   = slm_rf_excluded or slm_rp_excluded
     S.bpb_option_available = slm_manual_chocks and slm_bpb_detect()
     S.preset_values        = preset_values
+    S.donors               = load_controllers
 end
 
 function slm_update_state()
@@ -5832,6 +5661,8 @@ function slm_update_state()
     slm_update_steps()
     slm_update_display_state()
     slm_update_loadsheet_state()
+    -- Ground vehicles card (SLM 6.0, #SL38): provided by the plugin's vehicle module, nil elsewhere
+    SLM_State.vehicles = slm_vehicles_card and slm_vehicles_card() or nil
     if not SLM_State.can_topup and slm_topup_active then slm_topup_active = false end
 end
 
@@ -5894,6 +5725,11 @@ end
 
 function A.toggle_own_stairs() A.set_own_stairs(not aircraft_has_own_stairs) end
 
+-- Placement profile chosen on the Ground vehicles card; refused by the plugin while a vehicle is out
+function A.select_vehicle_profile(file)
+    if type(file) == "string" and slm_vehicles_select then slm_vehicles_select(file) end
+end
+
 -- Sequences
 function A.start_loading()
     if not passed_500ft and SLM_State.has_data and not SLM_State.busy then
@@ -5946,6 +5782,11 @@ end
 
 function A.cancel_topup() slm_topup_active = false end
 
+-- "SLM never removes the chocks": the user places / removes them from the window.
+function A.toggle_chocks()
+    if slm_manual_chocks then slm_set_chocks(not slm_chocks_on) end
+end
+
 -- Windows, links, tools
 -- Opens the window on the Loadsheet tab: the page switches tab when seq changes.
 function A.view_loadsheet()
@@ -5954,7 +5795,6 @@ function A.view_loadsheet()
 end
 function A.open_simchecklist() open_simchecklist() end
 function A.open_kofi()         Ko_fi() end
-function A.toggle_sges()       simload_toggle_SGES() end
 function A.dev_cycle()         slm_dev_cycle() end
 function A.dev_force_event(idx) slm_dev_force_event(slm_events_db[idx + 1]) end
 function A.dev_force_load()    slm_dev_force_load() end
@@ -6092,6 +5932,15 @@ do
     slm_setting_def("gpu_enabled",
         function() return slm_gpu_enabled end,
         function(v) slm_gpu_enabled = v; save_user_settings() end)
+    slm_setting_def("gpu_xcrafts",
+        function() return slm_gpu_xcrafts end,
+        function(v) slm_gpu_xcrafts = v; save_user_settings() end)
+    slm_setting_def("people_detail",
+        function() return slm_people_detail end,
+        function(v)
+            if v == "reduced" or v == "minimal" then slm_people_detail = v else slm_people_detail = "full" end
+            save_user_settings()
+        end)
 
     -- Simulation
     slm_setting_def("timing_preset",
@@ -7300,7 +7149,9 @@ function H.gpu_step(items)
     if g.done then H.step(items, "Ground Power", "done"); return end
     if not g.state then return end
     local msg
-    if g.state == "connect" then
+    if g.state == "connect" and g.vehicle then  -- SLM 6.0: arrives on its route, no countdown
+        msg = H.tx("gpu.arriving_vehicle", nil, "GPU on its way")
+    elseif g.state == "connect" then
         local rem = H.remaining_text(math.max(0, g.t - os.clock()))
         msg = H.tx("gpu.arriving", { rem = rem }, "GPU on its way: " .. rem)
     elseif g.state == "wait_apu" or g.state == "announce" then
@@ -7511,8 +7362,7 @@ end
 -- Removal is governed separately by slm_manual_chocks.
 function slm_place_chocks()
     if slm_no_chocks then return end
-    show_Chocks = true
-    Chocks_chg  = true
+    slm_set_chocks(true)
 end
 
 -- BetterPushback detection via its "bp/started" dataref (#SL05). Cached once
@@ -7539,20 +7389,21 @@ function slm_bpb_watch()
     slm_bpb_was_started = started
     if was == nil or was or not started then return end
     if not (slm_manual_chocks and slm_bpb_remove_chocks) then return end
-    show_Chocks = false
-    Chocks_chg  = true
+    slm_set_chocks(false)
     logMsg("[SLM] BetterPushback started: chocks removed")
 end
 
-function slm_sync_toliss_chocks()
-    if slm_aircraft_type ~= "toliss" then return end
-    if not Chocks_chg then return end  -- only write on explicit change, not every frame
-    Chocks_chg = false
-    if slm_toliss_chocks_dr == nil then
-        slm_toliss_chocks_dr = XPLMFindDataRef("AirbusFBW/Chocks") or false
-    end
-    if slm_toliss_chocks_dr then
-        XPLMSetDatai(slm_toliss_chocks_dr, show_Chocks and 1 or 0)
+-- Chocks state. The aircraft's own chocks when SLM knows them (ToLiss, Zibo/LevelUp), X-Plane's
+-- otherwise; written only here so the user can still change them (EFB, X-Plane menu).
+SLM_CHOCKS_DR = { toliss = "AirbusFBW/Chocks", zibo = "laminar/B738/fms/chock_status" }
+function slm_set_chocks(on)
+    local was = slm_chocks_on
+    slm_chocks_on = on
+    local path = SLM_CHOCKS_DR[slm_aircraft_type]
+    if path and XPLMFindDataRef(path) then
+        dataref_table(path)[0] = on and 1 or 0
+    elseif (was or false) ~= on then
+        command_once(on and "sim/flight_controls/install_chocks" or "sim/flight_controls/remove_chocks")
     end
 end
 
@@ -7563,8 +7414,8 @@ end
 -- brings a GPU if none is there, waits for the APU, the ground crew asks to
 -- disconnect, the captain (the user) answers by switching external power off,
 -- the ground crew acknowledges, then removes it (Zibo:
--- its own gpu_toggle, never SGES; ToLiss/E-Jets: the aircraft's GPU and the
--- SGES one). Cockpit switches are never touched. Delays follow the preset.
+-- its own gpu_toggle; ToLiss: the aircraft's GPU, plus the "gpu" vehicle phase;
+-- Zibo and E-Jets: their own GPU only, no SLM GPU vehicle). Cockpit switches are never touched. Delays follow the preset.
 
 -- Duration factor of the timing preset (events, GPU delays).
 function slm_preset_mult()
@@ -7592,21 +7443,36 @@ function slm_gpu_profile()
     end
     local p
     if slm_aircraft_type == "zibo" then
+        -- own = true: the aircraft's GPU only, it cannot be hidden under the SLM one (2026-10-27)
         p = { placed = dr("laminar/B738/fmod/gpu_deployed"), used = dr("sim/cockpit/electrical/gpu_on"),
-              apu = dr("sim/cockpit/engine/APU_N1"), zibo = true }
+              apu = dr("sim/cockpit/engine/APU_N1"), zibo = true, own = true }
     elseif slm_aircraft_type == "toliss" then
         p = { placed = dr("AirbusFBW/EnableExternalPower"), used = dr("sim/cockpit2/electrical/GPU_generator_on"),
               apu = dr("AirbusFBW/APUN") }
     elseif XPLMFindDataRef("XCrafts/other/GPU") then
+        if not slm_gpu_xcrafts then return nil end  -- left to the user, no generic GPU either
         -- XCrafts/other/GPU: 0 = in place, 1 = removed
-        p = { placed = dr("XCrafts/other/GPU"), placed_inv = true, used = dr("XCrafts/electric/GPU_sw"),
+        -- own = true: the aircraft's GPU only, no SLM GPU vehicle (2026-10-26)
+        p = { placed = dr("XCrafts/other/GPU"), placed_inv = true, own = true, used = dr("XCrafts/electric/GPU_sw"),
               apu = dr("sim/cockpit2/electrical/APU_N1_percent") }
     end
     if p and p.placed and p.used and p.apu then return p end
+    -- Any other aircraft, with the SLM 6.0 vehicles only (2026-10-26): standard X-Plane datarefs. No
+    -- "GPU in place" dataref in X-Plane: SLM keeps it (SLM_GPU.generic_placed), so it cannot hold ground
+    -- power back. Ready to disconnect once the APU runs or, without an APU, an engine runs.
+    if not p and slm_vehicles_ready then
+        p = { generic = true, used = dr("sim/cockpit/electrical/gpu_on"),
+              apu = dr("sim/cockpit2/electrical/APU_N1_percent"), eng = dr("sim/flightmodel/engine/ENGN_running"),
+              show = dr("FJS/Q4XP/Ext/show_gpu"),  -- FlyJSim Q4XP: its own GPU model, shown / hidden by SLM
+              -- Laminar aircraft: external power only once X-Plane's GPU is requested (28 V while it is).
+              volts = tostring(slm_acf_author_dr or ""):find("Laminar") and dr("sim/cockpit2/electrical/GPU_generator_volts") }
+        if p.used and p.apu then return p end
+    end
     return nil
 end
 
 function slm_gpu_placed(p)
+    if p.generic then return SLM_GPU.generic_placed == true or (p.show ~= nil and p.show[0] ~= 0) end
     local v = p.placed[0] ~= 0
     if p.placed_inv then return not v end
     return v
@@ -7614,15 +7480,18 @@ end
 
 -- Puts the GPU in place (on) or removes it.
 function slm_gpu_set(p, on)
-    if p.zibo then
+    if p.generic then
+        SLM_GPU.generic_placed = on
+        if p.show then p.show[0] = on and 1 or 0 end
+        if p.volts and (p.volts[0] > 0) ~= on then command_once("sim/ground_ops/toggle_gpu_request") end
+    elseif p.zibo then
         if slm_gpu_placed(p) ~= on then command_once("laminar/B738/gpu_toggle") end
     else
         local v = on and 1 or 0
         if p.placed_inv then v = 1 - v end
         p.placed[0] = v
-        show_GPU = on
-        GPU_chg  = true
     end
+    if not p.own then slm_vehicles_phase("gpu", on) end
     logMsg("[SLM-GPU] GPU " .. (on and "connected" or "removed"))
 end
 
@@ -7636,6 +7505,7 @@ end
 function slm_gpu_start(arrival)
     SLM_GPU.state = nil
     SLM_GPU.done = false
+    SLM_GPU.vehicle = false
     SLM_GPU.arrival = arrival and true or false
     if not slm_gpu_enabled then return end
     SLM_GPU.p = slm_gpu_profile()
@@ -7647,6 +7517,13 @@ function slm_gpu_start(arrival)
             return
         end
         SLM_GPU.state = "wait_apu"
+    elseif slm_vehicles_ready and not SLM_GPU.p.own then
+        -- SLM 6.0 vehicles (2026-10-26): the GPU is called at once, external power and the ground call
+        -- only once it is at its stand (slm_gpu_update), not after a timer.
+        SLM_GPU.state, SLM_GPU.t, SLM_GPU.vehicle = "connect", os.clock(), true
+        slm_vehicles_phase("gpu", true)
+        -- No GPU in the placement profile: ready at once, so the former delay instead.
+        if slm_vehicles_ready("gpu") then SLM_GPU.vehicle = false; slm_gpu_wait("connect", "connect") end
     else
         slm_gpu_wait("connect", "connect")
     end
@@ -7659,7 +7536,7 @@ function slm_gpu_update()
     if not slm_gpu_enabled or onground ~= 1 then g.state = nil; return end
     local p, now = g.p, os.clock()
     if g.state == "connect" then
-        if now < g.t then return end
+        if now < g.t or (g.vehicle and slm_vehicles_waiting("gpu")) then return end
         slm_gpu_set(p, true)
         play_sound_by_key("gpu_gnd_connected")
         if g.arrival then
@@ -7668,7 +7545,9 @@ function slm_gpu_update()
         end
         g.state = "wait_apu"
     elseif g.state == "wait_apu" then
-        if p.apu[0] >= 95 then slm_gpu_wait("announce", "announce") end
+        local engine = false
+        if p.eng then for i = 0, 7 do engine = engine or (p.eng[i] or 0) ~= 0 end end
+        if p.apu[0] >= 95 or engine then slm_gpu_wait("announce", "announce") end
     elseif g.state == "announce" then
         if now < g.t then return end
         play_sound_by_key("gpu_gnd_ready_to_disconnect")
@@ -7744,20 +7623,6 @@ end
 do_every_frame("check_simbrief_trigger()")
 
 
-toggle_SGES_flag = false
-
-function simload_toggle_SGES()
-    toggle_SGES_flag = true
-end
-
-function flightloop_check_SGES_toggle()
-    if toggle_SGES_flag then
-        toggle_SGES_flag = false
-        command_once("Simple_Ground_Equipment_and_Services/Window/Toggle")
-    end
-end
-
-do_every_frame("flightloop_check_SGES_toggle()")
 do_every_frame("update_loop_volumes()")
 do_every_frame("detect_block_times()")
 do_every_frame("detect_takeoff_and_landing()")
@@ -7775,7 +7640,6 @@ do_every_frame("slm_rp_unload_update()")
 do_every_frame("slm_update_beacon_state()")
 do_every_frame("slm_bpb_watch()")
 do_every_frame("slm_gpu_update()")
-do_every_frame("slm_sync_toliss_chocks()")
 do_every_frame("slm_update_state()")
 
 

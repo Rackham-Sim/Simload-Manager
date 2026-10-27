@@ -471,8 +471,20 @@ select{font:inherit;font-size:12.5px;padding:5px;border-radius:6px;border:1px so
               <button class="btn small" data-act="cancel_topup" data-i18n="topup.cancel"></button>
             </div>
           </div>
-          <button class="btn wide" data-act="toggle_sges" data-i18n="tools.sges"></button>
+          <button class="btn wide" data-act="toggle_chocks" id="btn-chocks" hidden></button>
           <div class="status" id="acars" hidden></div>
+        </div>
+
+        <!-- Placement profile of the aircraft (SLM 6.0): chosen and followed here, edited in the Placement Editor -->
+        <div class="card" id="veh" hidden>
+          <span class="label" data-i18n="vehicles.title"></span>
+          <select id="veh-profile" hidden></select>
+          <span id="veh-name" hidden></span>
+          <span class="status t-muted" id="veh-hint" hidden data-i18n="vehicles.editor_hint"></span>
+          <span class="status t-muted" id="veh-locked" hidden data-i18n="vehicles.locked"></span>
+          <span class="status" id="veh-config"></span>
+          <span class="status t-muted" id="veh-state" hidden></span>
+          <div class="status t-warn" id="veh-alert" style="white-space:pre-line" hidden></div>
         </div>
 
         <div class="card dev" id="dev" hidden>
@@ -508,6 +520,7 @@ select{font:inherit;font-size:12.5px;padding:5px;border-radius:6px;border:1px so
         <button role="tab" data-pane="p-acars" aria-selected="false" data-i18n="set.cat.acars"></button>
         <button role="tab" data-pane="p-web" aria-selected="false" data-i18n="set.cat.web"></button>
         <button role="tab" data-pane="p-dev" aria-selected="false" data-i18n="set.cat.dev"></button>
+        <button role="tab" data-pane="p-credits" aria-selected="false" data-i18n="set.cat.credits"></button>
       </nav>
       <div class="set-panes">
         <div class="set-pane" id="p-ui">
@@ -557,6 +570,13 @@ select{font:inherit;font-size:12.5px;padding:5px;border-radius:6px;border:1px so
           <div class="set-head label" data-i18n="set.gpu_head"></div>
           <div class="set-row"><div><div class="h" data-i18n="set.gpu"></div><div class="d" data-i18n="set.gpu.d"></div></div>
             <button class="sw" role="switch" data-key="gpu_enabled"></button></div>
+          <div class="set-row"><div><div class="h" data-i18n="set.gpu_xcrafts"></div><div class="d" data-i18n="set.gpu_xcrafts.d"></div></div>
+            <button class="sw" role="switch" data-key="gpu_xcrafts"></button></div>
+          <div class="set-head label" data-i18n="set.people_head"></div>
+          <div class="set-row"><div><div class="h" data-i18n="set.people"></div><div class="d" data-i18n="set.people.d"></div></div>
+            <div class="seg" data-key="people_detail">
+              <button data-val="full" data-i18n="set.people.full"></button><button data-val="reduced" data-i18n="set.people.reduced"></button><button data-val="minimal" data-i18n="set.people.minimal"></button>
+            </div></div>
         </div>
 
         <div class="set-pane" id="p-time" hidden>
@@ -620,6 +640,12 @@ select{font:inherit;font-size:12.5px;padding:5px;border-radius:6px;border:1px so
         <div class="set-pane" id="p-dev" hidden>
           <div class="set-row"><div><div class="h" data-i18n="set.dev_mode"></div><div class="d" data-i18n="set.dev_mode.d"></div></div>
             <button class="sw" role="switch" data-key="dev_mode"></button></div>
+        </div>
+
+        <div class="set-pane" id="p-credits" hidden>
+          <div class="set-row"><div><div class="h" data-i18n="credits.copyright"></div><div class="d" data-i18n="credits.copyright.d"></div></div></div>
+          <div class="set-row"><div><div class="h" data-i18n="credits.isar"></div><div class="d" data-i18n="credits.isar.d"></div></div></div>
+          <div class="set-row"><div><div class="h" data-i18n="credits.kofi"></div><div class="d" data-i18n="credits.kofi.d"></div><div class="d" id="credits-donors"></div></div></div>
         </div>
       </div>
     </div>
@@ -703,6 +729,39 @@ select{font:inherit;font-size:12.5px;padding:5px;border-radius:6px;border:1px so
   // English text for lines. Shown translated when the language file has the key.
   function tr(x, fallback) {
     return x && x.key && Object.prototype.hasOwnProperty.call(L, x.key) ? t(x.key, x.vars) : fallback;
+  }
+  // Ground vehicles card: SLM_State.vehicles, filled by the plugin's vehicle module.
+  function renderVehicles(V) {
+    show("veh", !!V);
+    if (!V) return;
+    var list = V.profiles || [], many = list.length > 1, has = !!V.file;
+    var sel = $("veh-profile");
+    show("veh-profile", many);
+    if (many) {
+      var opts = list.map(function (p) { return "<option value=\"" + esc(p.file) + "\">" + esc(p.name) + "</option>"; }).join("");
+      if (sel.dataset.opts !== opts) { sel.innerHTML = opts; sel.dataset.opts = opts; }
+      if (document.activeElement !== sel) sel.value = V.file || "";
+      sel.disabled = !!V.locked;
+    }
+    show("veh-locked", many && !!V.locked);
+    show("veh-name", !many);
+    if (!many) text("veh-name", has ? V.name : t("placement.no_profile"));
+    show("veh-hint", !has);
+    var cfg = t("placement.config." + V.config);
+    text("veh-config", cfg);
+    show("veh-state", has);
+    if (has) {
+      text("veh-state", V.at_stand || V.moving ? t("vehicles.status", { at: V.at_stand, moving: V.moving }) : t("vehicles.none"));
+    }
+    var msg = function (m) { return t(m.key, m.vars); };
+    var alerts = (V.warnings || []).map(msg);
+    if (has && V.missing && V.missing.length) {
+      // Checklist (2026-10-26): one line per missing item.
+      alerts.push(t("placement.incomplete_list", { config: cfg }) + "\n" + V.missing.map(function (m) { return "○ " + msg(m); }).join("\n"));
+    }
+    if (V.boxes) alerts.push(t("vehicles.boxes", { n: V.boxes }));
+    show("veh-alert", alerts.length > 0);
+    text("veh-alert", alerts.join("\n"));
   }
   function trimLines(s) {
     return String(s == null ? "" : s).split("\n").map(function (l) { return l.trim(); }).join("\n");
@@ -995,6 +1054,8 @@ select{font:inherit;font-size:12.5px;padding:5px;border-radius:6px;border:1px so
     var sw = $("own-stairs");
     sw.setAttribute("aria-checked", String(!!S.own_stairs));
     sw.disabled = locked;
+    // SLM 6.0 : hors Jetway, c'est le profil de placement qui dit si l'avion a ses escaliers (Etienne, 2026-10-25).
+    sw.closest("label").hidden = S.location !== "jetway";
 
     show("btn-start", S.mode === "departure");
     show("btn-turn", S.mode === "arrival");
@@ -1133,9 +1194,13 @@ select{font:inherit;font-size:12.5px;padding:5px;border-radius:6px;border:1px so
       text("tu-label", t("topup.target", { unit: S.unit }));
       setInput($("tu-target"), Math.round(tu.target || 0));
     }
+    show("btn-chocks", !!S.manual_chocks);
+    text("btn-chocks", t(S.chocks_on ? "tools.chocks_remove" : "tools.chocks_place"));
     var ac = S.acars_status;
     show("acars", !!ac);
     if (ac) { $("acars").className = "status" + (ac.tone ? " t-" + ac.tone : ""); text("acars", tr(ac.tr, ac.text)); }
+    renderVehicles(S.vehicles);
+    text("credits-donors", (S.donors || []).join(" · "));
 
     show("dev", !!S.dev_mode);
     if (S.dev_mode) {
@@ -1709,6 +1774,8 @@ select{font:inherit;font-size:12.5px;padding:5px;border-radius:6px;border:1px so
       if (numeric && (inp.value === "" || !isFinite(v))) return;
       if (inp.dataset.pct) v = v / 100;
       action("set", { key: inp.dataset.set, value: v });
+    } else if (inp.id === "veh-profile") {
+      action("select_vehicle_profile", inp.value);
     } else if (inp.id === "tu-target") {
       var n = Number(inp.value);
       if (isFinite(n)) action("set_topup_target", n);

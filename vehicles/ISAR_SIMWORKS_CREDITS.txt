@@ -1,0 +1,10 @@
+ULD containers, container loader, potable water and lavatory trucks, passenger stairs: "Isar Simworks ULD Library" for X-Plane 12, by Isar Simworks.
+Used in SimLoad Manager with permission.
+
+Files from the library: ULD_AKE_fabric_door.obj, ULD_AKE_metal_door.obj, ULD_AKH_fabric_door.obj,
+isw_uld_containers.png, isw_uld_containers_NML.png, isw_uld_loader.png, isw_uld_loader_NML.png,
+isw_gse_potablewater.png, isw_gse_potablewater_NML.png, isw_gse_lavatory.png, isw_gse_lavatory_NML.png,
+isw_gse_stairs_<ps42|ps58|pt56|pt56o>.png and _NML.png, isw_uld_pallets.png, isw_uld_pallets_NML.png.
+uld_loader_slm.obj, uld_loader_md_slm.obj, uld_pmc_slm.obj, gse_water_slm.obj, gse_lav_slm.obj and gse_stairs_<ps42|ps58|pt56|pt56o>_slm.obj are generated from the library's own Python generator (slm5/tools/uld_loader/ in the
+SimLoad Manager sources), with animated platforms (and scissor lifts), turning wheels and lights added for SimLoad Manager.
+isw_gse_potablewater.png and isw_gse_lavatory.png: German lettering replaced by English (slm5/tools/uld_loader/english_decals.py).

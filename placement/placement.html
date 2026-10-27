@@ -1,0 +1,1357 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SimLoad Manager - Placement Editor</title>
+<!--
+  SimLoad Manager 6.0 - vehicle placement editor (CEF window, X-Plane only).
+  Opened from Plugins > SimLoad Manager > Placement Editor; never served on the
+  local network (this folder is outside ui/).
+  Contract (docs/slm6/PLACEMENT_EDITOR.md section 12.3): the page asks for the
+  editor state with xplane.slmPlacementState({ v }) about 4 times a second (gets
+  the full state when it changed, else { v }) and sends actions with
+  xplane.slmPlacementAction({ name, arg }). Everything is decided by the plugin
+  (slm5/src/vehicles/editor.cpp). During a drag the page draws with its own copy
+  of the path engine (port of slm5/src/vehicles/path.cpp) and sends one action
+  at the end of the gesture.
+  Texts: lang/<code>.json of the main window (keys placement.*), sent by
+  slm.onLang(dict). No text in this file.
+  No continuous animation (CLAUDE.md), except Play path while it plays
+  (spec section 12.4, to be measured).
+  Self-contained on purpose (the plugin may inject it if file:// is refused).
+-->
+<style>
+:root{
+  color-scheme:dark;
+  --bg:#0E1217; --bg2:#0A0E12; --panel:#121820; --line:#222C37; --line2:#2E3A48;
+  --text:#E6EBF1; --text2:#C3CDD8; --muted:#8A97A6; --faint:#5D6B7A;
+  --accent:#FFD166; --accent-ink:#1A1400; --ok:#43D19E; --warn:#FF9B54; --crit:#FF5C5C; --info:#6CB6FF;
+  --pax:#6CB6FF; --cab:#C39BFF; --cgo:#FF9B54; --svc:#43D19E; --rev:#FF6BD5; --flow:#5FE0D2; --staff:#F5A3C7; --link:#F5C26B;
+  --f-body:"Segoe UI",system-ui,sans-serif;
+  --f-mono:"Cascadia Mono","Consolas",ui-monospace,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font-family:var(--f-body);font-size:12px;overflow:hidden;-webkit-user-select:none;user-select:none}
+button,select,input{font-family:inherit;font-size:12px;color:var(--text)}
+button{cursor:pointer}
+button:disabled{opacity:.45;cursor:default}
+.mono{font-family:var(--f-mono);font-variant-numeric:tabular-nums}
+.app{display:flex;flex-direction:column;height:100%;border:1px solid #2B3644}
+.top{height:32px;flex-shrink:0;display:flex;align-items:center;justify-content:space-between;padding:0 6px 0 12px;background:#0A0D11;border-bottom:1px solid var(--line);cursor:move}
+.top .brand{font-family:var(--f-mono);font-weight:600;color:var(--accent);letter-spacing:.08em;margin-right:10px}
+.top .ttl{color:var(--text2)} .top .ttl b{color:var(--text);font-weight:500}
+.iconbtn{width:28px;height:24px;border:0;border-radius:4px;background:transparent;color:var(--muted);display:flex;align-items:center;justify-content:center}
+.iconbtn:hover{background:#1A222C;color:var(--text)}
+.bar{height:52px;flex-shrink:0;display:flex;align-items:center;gap:10px;white-space:nowrap;padding:0 12px;background:var(--panel);border-bottom:1px solid var(--line)}
+.lab{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+.col{display:flex;flex-direction:column;gap:2px}
+.btn{height:30px;padding:0 12px;border-radius:6px;border:1px solid var(--line2);background:var(--bg);display:inline-flex;align-items:center;gap:6px;font-weight:600}
+.btn:hover:not(:disabled){border-color:#3D4C5E}
+.btn.small{height:26px;padding:0 8px;font-weight:500}
+.btn.primary{background:var(--accent);color:var(--accent-ink);border:0;font-weight:700}
+.btn.on{border-color:var(--accent);color:var(--accent)}
+.btn.danger{color:var(--crit)}
+.sel,.inp{height:26px;padding:0 6px;border-radius:5px;border:1px solid var(--line2);background:var(--bg)}
+.inp{width:64px;-webkit-user-select:text;user-select:text}
+.inp.wide{width:100%}
+.badge{height:20px;padding:0 8px;display:inline-flex;align-items:center;gap:6px;border-radius:10px;font-size:11px}
+.badge.mod{background:#2A2310;color:var(--accent)} .badge.ok{background:#10261E;color:var(--ok)}
+.badge.warn{background:#2B1A0E;color:var(--warn)} .badge.err{background:#2B1010;color:var(--crit)}
+.body{flex:1;min-height:0;display:flex}
+.left{width:250px;flex-shrink:0;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
+.seg{display:grid;border:1px solid var(--line2);border-radius:6px;overflow:hidden}
+.seg button{border:0;background:var(--bg);color:var(--text2);min-height:30px;padding:3px 2px;font-weight:600}
+.seg button+button{border-left:1px solid var(--line2)}
+.seg button.on{background:#2A2310;color:var(--accent)}
+.seg .sub{display:block;font-size:9px;font-weight:500;opacity:.85}
+.list{flex:1;overflow-y:auto;padding:0 8px 12px;display:flex;flex-direction:column;gap:10px}
+.grp-h{display:flex;align-items:center;justify-content:space-between;padding:4px 4px 2px;font-size:11px;font-weight:600;color:var(--text2)}
+.grp-h .dot{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:6px}
+.row{display:flex;align-items:center;gap:8px;min-height:34px;padding:3px 6px;border-radius:6px;border:1px solid transparent;background:transparent;width:100%;text-align:left;color:var(--text)}
+.row:hover{background:#18202A}
+.row.on{border-color:var(--accent);background:#1E1A0E}
+.row .nm{flex:1;min-width:0;display:flex;flex-direction:column}
+.row .nm b{font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .st{font-size:10px;font-family:var(--f-mono);color:var(--muted)}
+.row.hid{opacity:.45}
+.plus{width:22px;height:22px;border-radius:4px;border:1px solid var(--line2);background:transparent;color:var(--muted);font-size:14px;line-height:1}
+.center{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--bg)}
+.canvas-wrap{flex:1;min-height:0;position:relative;margin:8px;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--bg2)}
+svg#map{width:100%;height:100%;display:block;touch-action:none;cursor:default}
+svg#map.panning{cursor:grabbing}
+svg#map *{pointer-events:none} svg#map [data-hdl],svg#map [data-veh],svg#map [data-veh] *{pointer-events:auto}
+.map-tools{position:absolute;right:8px;top:8px;display:flex;gap:4px}
+.map-tools .btn{height:26px;background:rgba(14,18,23,.9)}
+.zoom{position:absolute;left:8px;bottom:8px;font-family:var(--f-mono);font-size:10px;color:var(--muted);background:rgba(10,14,18,.85);padding:2px 6px;border-radius:4px}
+.insp{width:300px;flex-shrink:0;background:var(--panel);border-left:1px solid var(--line);overflow-y:auto;padding:10px 12px;display:flex;flex-direction:column;gap:10px}
+.insp h3{margin:0;font-size:13px}
+.insp .sec{display:flex;flex-direction:column;gap:6px;padding-top:8px;border-top:1px solid var(--line)}
+.grid2{display:grid;grid-template-columns:auto 1fr;gap:6px 8px;align-items:center}
+.flex{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.chip{height:22px;padding:0 8px;border-radius:11px;border:1px solid var(--line2);background:var(--bg);color:var(--text2);font-size:11px}
+.chip.on{border-color:var(--accent);color:var(--accent);background:#2A2310}
+.msg{font-size:11px;line-height:1.4;padding:6px 8px;border-radius:6px}
+.msg.crit{background:#2B1010;color:#FF9A9A} .msg.warn{background:#2B1A0E;color:#FFC28F}
+.msg.info{background:#10202B;color:#9CCBFF} .msg.ok{background:#10261E;color:#8FE6C2}
+.check{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:3px;font-size:11px;line-height:1.35}
+.check li{display:grid;grid-template-columns:14px 1fr;gap:4px} .check .ok{color:#8FE6C2} .check .todo{color:#FFC28F} .check .adv{color:#8A96A3}
+.nodes{display:flex;flex-direction:column;gap:4px}
+.node{display:grid;grid-template-columns:44px auto 1fr;gap:4px;align-items:center}
+.node .k{font-family:var(--f-mono);font-size:10px;color:var(--muted)}
+.segrow{display:flex;gap:6px;align-items:center;padding-left:44px;font-size:11px;color:var(--muted)}
+.node.hdr span{font-size:10px;color:var(--muted)} .node.hdr span:nth-child(2){min-width:108px}
+.route{display:flex;flex-direction:column;padding:4px 0}
+.rrow{display:flex;align-items:center;gap:5px;min-height:30px}
+.insp{overflow-x:hidden}
+.rrow .mk{width:20px;height:20px;flex-shrink:0;border-radius:50%;border:2px solid var(--accent);background:var(--bg);color:var(--accent);display:flex;align-items:center;justify-content:center;font-family:var(--f-mono);font-size:9px;font-weight:700;box-sizing:border-box}
+.rrow .mk.end{background:var(--accent);color:#1A1400}
+.rname{font-size:12px;font-weight:500;white-space:nowrap}
+.rxz{flex:1 1 0;min-width:0;display:flex;flex-wrap:wrap;justify-content:flex-end;align-items:center;gap:1px;font-family:var(--f-mono);font-size:10px;color:var(--muted);white-space:nowrap}
+.inp.bare{width:36px;height:20px;padding:0 2px;border-color:transparent;background:transparent;color:var(--muted);font-size:10px;text-align:right}
+.inp.bare:hover,.inp.bare:focus{border-color:var(--line2);background:var(--bg);color:var(--text)}
+.pill{height:22px;padding:0 6px;border-radius:11px;border:1px solid var(--line2);background:transparent;color:var(--muted);font-size:10px;font-weight:600;white-space:nowrap;display:flex;align-items:center;gap:4px}
+.pill.on{border-color:#5C4A1C;background:#2A2310;color:var(--accent)}
+.pill select{border:0;background:transparent;color:inherit;font-size:10px;font-weight:600;padding:0;outline:none;cursor:pointer}
+.pill option{background:var(--bg);color:var(--text)}
+.rrow .x{width:20px;height:20px;border:0;background:transparent;color:var(--muted);font-size:13px;padding:0}
+.rseg{display:flex;align-items:center;gap:6px;height:36px}
+.rline{width:2px;align-self:stretch;margin:0 9px;flex-shrink:0}
+.fr{display:flex;height:26px;border:1px solid var(--line2);border-radius:5px;overflow:hidden}
+.fr button{padding:0 8px;border:0;background:var(--bg);color:var(--muted);font-size:11px;font-weight:600}
+.fr button+button{border-left:1px solid var(--line2)}
+.fr button.on{background:var(--accent);color:#1A1400} .fr button.on.rev{background:#F08CFF;color:#24072A}
+.fr button:disabled{color:#3E4A58}
+.sq{width:24px;height:24px;border-radius:4px;border:1px solid var(--line2);background:var(--bg);color:var(--text2);padding:0}
+.rissue{margin:0 0 6px 26px;padding:6px 8px;border-radius:5px;background:#2A1416;border:1px solid #5C2328;color:#FFB3B3;font-size:11px;line-height:1.4}
+.slowbox{display:flex;flex-direction:column;gap:4px;padding:10px 12px;border-radius:6px;background:var(--bg);border:1px solid var(--line)}
+.lab2{font-size:11px;color:var(--text2);font-weight:600}
+.btn.play{border-color:#5C4A1C;background:#2A2310;color:var(--accent)}
+.status{height:26px;flex-shrink:0;display:flex;align-items:center;gap:14px;padding:0 12px;background:#0A0D11;border-top:1px solid var(--line);color:var(--muted);font-size:11px}
+.status .sp{flex:1}
+.ovl{position:fixed;inset:0;background:rgba(5,8,11,.6);display:flex;align-items:center;justify-content:center;z-index:10}
+.dlg{width:420px;max-height:80%;overflow-y:auto;background:var(--panel);border:1px solid var(--line2);border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:10px}
+.dlg h2{margin:0;font-size:15px}
+.dlg .acts{display:flex;justify-content:flex-end;gap:8px;margin-top:6px}
+.tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:4px}
+.tile{display:flex;align-items:center;gap:7px;min-height:38px;padding:4px 7px;border:1px solid var(--line2);border-radius:6px;background:var(--bg);text-align:left;font-weight:600;font-size:12px;line-height:1.2}
+.tile:hover{border-color:#3D4C5E}
+.tile.on{border-color:var(--accent);background:#2A2310}
+.tile i{flex:none;width:9px;height:9px;border-radius:2px}
+.tile .sub{display:block;font-size:10px;font-weight:400;color:var(--muted)}
+.empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none}
+.empty .card{pointer-events:auto;width:440px;background:var(--panel);border:1px solid var(--line2);border-radius:10px;padding:18px;display:flex;flex-direction:column;gap:10px}
+.empty h2{margin:0;font-size:15px}
+.hint{font-size:11px;color:var(--muted);line-height:1.45}
+label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--text2)}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="top" id="top">
+    <div><span class="brand">SLM</span><span class="ttl" data-i18n="placement.ui.title"></span></div>
+    <button class="iconbtn" id="b-close" data-i18n-title="placement.ui.close">
+      <svg width="12" height="12" viewBox="0 0 12 12"><path d="M2 2 L10 10 M10 2 L2 10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+    </button>
+  </div>
+  <div class="bar">
+    <div class="col"><span class="lab" data-i18n="placement.ui.loaded_aircraft"></span><b id="acf-name"></b></div>
+    <div class="col"><span class="lab" data-i18n="placement.ui.editing"></span>
+      <div class="flex"><select class="sel" id="prof" style="min-width:200px"></select><span id="dirty"></span></div></div>
+    <div style="flex:1"></div>
+    <button class="btn small" id="b-check"></button>
+    <button class="btn small" id="b-undo" data-i18n="placement.ui.undo"></button>
+    <button class="btn small" id="b-redo" data-i18n="placement.ui.redo"></button>
+    <div class="flex" style="flex-wrap:nowrap"><select class="sel" id="prev-phase"></select><button class="btn small" id="b-prev-stop" data-i18n="placement.ui.preview_stop"></button></div>
+    <button class="btn" id="b-rename" data-i18n="placement.ui.rename"></button>
+    <button class="btn" id="b-new" data-i18n="placement.ui.new_profile"></button>
+    <button class="btn primary" id="b-save" data-i18n="placement.ui.save"></button>
+  </div>
+  <div class="body">
+    <div class="left">
+      <div style="padding:10px 8px 0;display:flex;flex-direction:column;gap:6px">
+        <span class="lab" data-i18n="placement.ui.stand_config"></span>
+        <div class="seg" id="cfgs" style="grid-template-columns:repeat(3,1fr)"></div>
+        <div class="flex"><span class="hint" data-i18n="placement.ui.reuse_from"></span><select class="sel" id="reuse" style="flex:1"></select></div>
+      </div>
+      <div style="padding:8px">
+        <div class="seg" id="tabs" style="grid-template-columns:repeat(3,1fr)">
+          <button data-tab="veh" data-i18n="placement.ui.tab_vehicles"></button>
+          <button data-tab="pts" data-i18n="placement.ui.tab_points"></button>
+          <button data-tab="ppl" data-i18n="placement.ui.tab_people"></button>
+        </div>
+      </div>
+      <div class="list" id="list"></div>
+    </div>
+    <div class="center">
+      <div class="canvas-wrap">
+        <svg id="map"></svg>
+        <div class="map-tools">
+          <button class="btn small" id="b-paths" data-i18n="placement.ui.show_paths"></button>
+          <button class="btn small" id="b-snap" data-i18n="placement.ui.snap"></button>
+          <button class="btn small" id="b-recenter" data-i18n="placement.ui.recenter"></button>
+        </div>
+        <div class="zoom" id="zoom"></div>
+        <div class="empty" id="empty" hidden>
+          <div class="card">
+            <h2 data-i18n="placement.no_profile"></h2>
+            <span class="hint" id="empty-sub"></span>
+            <button class="btn primary" id="b-empty-new" data-i18n="placement.ui.create_profile"></button>
+            <button class="btn" id="b-empty-copy" data-i18n="placement.ui.start_from_other"></button>
+            <span class="hint" data-i18n="placement.ui.drop_hint"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="insp" id="insp"></div>
+  </div>
+  <div class="status">
+    <span data-i18n="placement.ui.datum"></span>
+    <span id="st-geo"></span>
+    <span class="sp"></span>
+    <span id="st-msg"></span>
+    <span id="st-alerts"></span>
+  </div>
+</div>
+<div class="ovl" id="ovl" hidden><div class="dlg" id="dlg"></div></div>
+
+<script>
+(function () {
+  "use strict";
+  var L = {};                 // language dictionary (slm.onLang)
+  var S = null;               // editor state from the plugin
+  var slm = window.slm = {};
+  var $ = function (id) { return document.getElementById(id); };
+  function t(key, vars) {
+    var s = Object.prototype.hasOwnProperty.call(L, key) ? L[key] : key;
+    if (vars) Object.keys(vars).forEach(function (k) { s = s.split("{" + k + "}").join(String(vars[k])); });
+    return s;
+  }
+  function tm(m) {  // { key, vars } message; configs, config, route, vehicle uid and flow id shown as names
+    if (!m || !m.key) return "";
+    var v = m.vars;
+    if (v) {
+      v = Object.assign({}, v);
+      var p = profile(), cfg = p && p.configs && p.configs[v.config], pc = p && p.people && p.people[v.config];
+      if (v.configs) v.configs = v.configs.split(",").map(function (c) { return t("placement.config." + c); }).join(", ");
+      if (v.route) v.route = t("placement.ui." + v.route);
+      if (v.uid && m.key !== "placement.issue.uid") {
+        var veh = ((cfg && cfg.vehicles) || []).filter(function (x) { return x.uid === v.uid; })[0];
+        if (veh) v.uid = typeName(veh.type) + " (" + ((point(veh.point) || {}).tag || veh.point) + ")";
+      }
+      if (v.flow) {
+        var fl = ((pc && pc.flows) || []).filter(function (x) { return x.id === v.flow; })[0];
+        if (fl && fl.door) v.flow = (point(fl.door) || {}).tag || fl.door;
+      }
+      if (v.config) v.config = t("placement.config." + v.config);
+    }
+    return t(m.key, v);
+  }
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); }
+  function f1(n) { return (Math.round(n * 10) / 10).toFixed(1); }
+  var CAT_COLOR = { pax: "var(--pax)", cab: "var(--cab)", cgo: "var(--cgo)", svc: "var(--svc)" };
+  var CAT_HEX = { pax: "#6CB6FF", cab: "#C39BFF", cgo: "#FF9B54", svc: "#43D19E" };
+  var CATS = ["pax", "cab", "cgo", "svc"];
+  var STOPS = [0, 5, 10, 20, 30, 60];
+  var ENTRY_DELAYS = [0, 5, 10, 20, 30, 60, 90, 120, 180, 300];  // wait at the entry point before driving off
+  var CLOCK = '<svg width="9" height="9" viewBox="0 0 10 10" aria-hidden="true"><circle cx="5" cy="5" r="4" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M5 2.8 V5 L6.6 6" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>';
+
+  // ---- Plugin calls --------------------------------------------------------------
+  function action(name, arg) {
+    if (window.xplane && typeof xplane.slmPlacementAction === "function") xplane.slmPlacementAction({ name: name, arg: arg || {} });
+  }
+  function win(op, v) {
+    if (window.xplane && typeof xplane.slmWindow === "function") xplane.slmWindow(v === undefined ? { op: op } : { op: op, v: v });
+  }
+  var version = -1, polling = false;
+  function poll() {
+    if (polling || !window.xplane || typeof xplane.slmPlacementState !== "function") return;
+    polling = true;
+    Promise.resolve(xplane.slmPlacementState({ v: version })).then(function (r) {
+      polling = false;
+      if (typeof r === "string") r = JSON.parse(r);
+      if (!r || r.v === undefined || r.v === version || !r.aircraft) { if (r && r.v !== undefined) version = r.v; return; }
+      version = r.v;
+      slm.onState(r);
+    }, function () { polling = false; });
+  }
+  setInterval(poll, 250);
+
+  // ---- Path engine (port of slm5/src/vehicles/path.cpp) -----------------------------
+  var TAU = Math.PI * 2;
+  function modt(a) { return ((a % TAU) + TAU) % TAU; }
+  function wrap180(d) { d = ((d + 180) % 360 + 360) % 360; return d - 180; }
+  function cat(type) { var c = catalog(type); return c ? c.category : "svc"; }
+  function catalog(type) { return S && S.catalog ? S.catalog.filter(function (c) { return c.type === type; })[0] : null; }
+  // Profile vehicle (JSON) -> engine vehicle.
+  function eng(v) {
+    var c = catalog(v.type) || { L: 6, W: 2.4, R: 6, no_rev: false };
+    var R = c.R;  // turn_radius_m of older profiles ignored (field removed 2026-10-26)
+    function route(r) {
+      r = r || { nodes: [], segments: [] };
+      return { nodes: (r.nodes || []).map(function (n) { return { x: n.x, z: n.z, hdg: typeof n.hdg === "number" ? n.hdg : null, stop: n.stop_s || 0 }; }),
+               rev: (r.segments || []).map(function (s) { return !!s.reverse; }) };
+    }
+    var slow = v.slow || {};
+    // Train: from the tractor front to the last cart rear (max_carts), drawn behind the tractor (off: rect centre).
+    var L = c.L, off = 0;
+    if (c.train) {
+      var fr = c.train.first - c.train.pitch / 2, rr = c.train.first + ((typeof v.max_carts === "number" ? v.max_carts : 3) - 0.5) * c.train.pitch;
+      L = fr + rr; off = (fr - rr) / 2;
+    }
+    // nose: engine heading; an inverted vehicle (manual belt) stands reversed: its front is its towbar.
+    return { type: v.type, x: v.pos.x, z: v.pos.z, h: v.pos.h, nose: (v.pos.h + (c.inverted ? 180 : 0)) % 360, R: R, L: L, off: off, W: c.W, noRev: !!c.no_rev,
+             slowR: slow.radius_m === undefined ? 6 : slow.radius_m, slowPct: slow.speed_pct === undefined ? 30 : slow.speed_pct,
+             arrival: route(v.arrival), departure: route(v.departure), c: c };
+  }
+  function turnR(v) { return v.R > 0 ? v.R : Math.max(4, v.L * 0.9); }
+  function poses(v, leg) {
+    var r = v[leg], f = { x: v.x, z: v.z };
+    var pts = leg === "arrival" ? r.nodes.concat([f]) : [f].concat(r.nodes);
+    var n = r.rev.length, fi = leg === "arrival" ? n : 0;
+    return pts.map(function (p, k) {
+      if (k === fi) return { x: p.x, z: p.z, h: v.nose, fixed: true };
+      if (p.hdg != null) return { x: p.x, z: p.z, h: p.hdg, manual: true };
+      var sx = 0, sz = 0;
+      function add(dx, dz, rev) { var l = Math.hypot(dx, dz); if (l <= 1e-6) return; var sg = rev ? -1 : 1; sx += dx / l * sg; sz += dz / l * sg; }
+      if (k > 0) add(p.x - pts[k - 1].x, p.z - pts[k - 1].z, r.rev[k - 1]);
+      if (k < n) add(pts[k + 1].x - p.x, pts[k + 1].z - p.z, r.rev[k]);
+      return { x: p.x, z: p.z, h: (Math.atan2(sx, -sz) * 180 / Math.PI + 360) % 360 };
+    });
+  }
+  function step(q, type, t) {
+    if (type === "L") return [q[0] + Math.sin(q[2] + t) - Math.sin(q[2]), q[1] - Math.cos(q[2] + t) + Math.cos(q[2]), q[2] + t];
+    if (type === "R") return [q[0] - Math.sin(q[2] - t) + Math.sin(q[2]), q[1] + Math.cos(q[2] - t) - Math.cos(q[2]), q[2] - t];
+    return [q[0] + Math.cos(q[2]) * t, q[1] + Math.sin(q[2]) * t, q[2]];
+  }
+  function dubins(q0, q1, rho) {
+    var dx = q1[0] - q0[0], dy = q1[1] - q0[1], D = Math.hypot(dx, dy), d = D / rho;
+    var th = D > 1e-9 ? modt(Math.atan2(dy, dx)) : 0, a = modt(q0[2] - th), b = modt(q1[2] - th);
+    var sa = Math.sin(a), sb = Math.sin(b), ca = Math.cos(a), cb = Math.cos(b), cab = Math.cos(a - b), d2 = d * d, cand = [], ps, tmp;
+    ps = 2 + d2 - 2 * cab + 2 * d * (sa - sb);
+    if (ps >= 0) { var t1 = Math.atan2(cb - ca, d + sa - sb); cand.push({ w: "LSL", p: [modt(t1 - a), Math.sqrt(ps), modt(b - t1)] }); }
+    ps = 2 + d2 - 2 * cab + 2 * d * (sb - sa);
+    if (ps >= 0) { var t2 = Math.atan2(ca - cb, d - sa + sb); cand.push({ w: "RSR", p: [modt(a - t2), Math.sqrt(ps), modt(t2 - b)] }); }
+    ps = -2 + d2 + 2 * cab + 2 * d * (sa + sb);
+    if (ps >= 0) { var p3 = Math.sqrt(ps), t3 = Math.atan2(-ca - cb, d + sa + sb) - Math.atan2(-2, p3); cand.push({ w: "LSR", p: [modt(t3 - a), p3, modt(t3 - modt(b))] }); }
+    ps = -2 + d2 + 2 * cab - 2 * d * (sa + sb);
+    if (ps >= 0) { var p4 = Math.sqrt(ps), t4 = Math.atan2(ca + cb, d - sa - sb) - Math.atan2(2, p4); cand.push({ w: "RSL", p: [modt(a - t4), p4, modt(b - t4)] }); }
+    tmp = (6 - d2 + 2 * cab + 2 * d * (sa - sb)) / 8;
+    if (Math.abs(tmp) <= 1) { var ph = Math.atan2(ca - cb, d - sa + sb), pp = modt(TAU - Math.acos(tmp)), tt = modt(a - ph + modt(pp / 2)); cand.push({ w: "RLR", p: [tt, pp, modt(a - b - tt + modt(pp))] }); }
+    tmp = (6 - d2 + 2 * cab + 2 * d * (sb - sa)) / 8;
+    if (Math.abs(tmp) <= 1) { var ph2 = Math.atan2(ca - cb, d + sa - sb), pp2 = modt(TAU - Math.acos(tmp)), tt2 = modt(-a - ph2 + pp2 / 2); cand.push({ w: "LRL", p: [tt2, pp2, modt(modt(b) - a - tt2 + modt(pp2))] }); }
+    var best = null;
+    cand.forEach(function (c) {
+      var q = [0, 0, q0[2]];
+      for (var k = 0; k < 3; k++) q = step(q, c.w[k], c.p[k]);
+      if (Math.hypot(q0[0] + q[0] * rho - q1[0], q0[1] + q[1] * rho - q1[1]) > 0.05 * Math.max(1, rho)) return;
+      var len = (c.p[0] + c.p[1] + c.p[2]) * rho;
+      if (!best || len < best.len) best = { w: c.w, p: c.p, len: len };
+    });
+    if (!best) return null;
+    best.turn = best.w[1] === "S" ? best.p[0] + best.p[2] : best.p[0] + best.p[1] + best.p[2];
+    best.sample = function (ds) {
+      var out = [], q = [0, 0, q0[2]];
+      function push(qq, type) { out.push({ x: q0[0] + qq[0] * rho, y: q0[1] + qq[1] * rho, th: qq[2], arc: type !== "S" }); }
+      push(q, best.w[0]);
+      for (var k = 0; k < 3; k++) {
+        var n = Math.max(1, Math.ceil(best.p[k] * rho / ds)), start = q;
+        for (var i = 1; i <= n; i++) push(step(start, best.w[k], best.p[k] * i / n), best.w[k]);
+        q = step(start, best.w[k], best.p[k]);
+      }
+      return out;
+    };
+    return best;
+  }
+  function segPath(v, leg, i, P) {
+    var A = P[i], B = P[i + 1], rev = v[leg].rev[i], rho = turnR(v);
+    function toTh(h) { return (90 - (h + (rev ? 180 : 0))) * Math.PI / 180; }
+    var db = dubins([A.x, -A.z, toTh(A.h)], [B.x, -B.z, toTh(B.h)], rho);
+    if (!db) return { pts: [{ x: A.x, z: A.z, a: A.h }, { x: B.x, z: B.z, a: B.h }], len: Math.hypot(B.x - A.x, B.z - A.z), ok: false, rev: rev };
+    var pts = db.sample(0.4).map(function (q) {
+      var hm = 90 - q.th * 180 / Math.PI;
+      return { x: q.x, z: -q.y, a: (((rev ? hm + 180 : hm) % 360) + 360) % 360, arc: q.arc };
+    });
+    var chord = Math.hypot(B.x - A.x, B.z - A.z);
+    return { pts: pts, len: db.len, ok: true, rev: rev, loop: db.turn > 4.4 || db.len > chord + 2.6 * Math.PI * rho };
+  }
+  function legPaths(v, leg) {
+    var r = v[leg];
+    if (!r.nodes.length || r.rev.length !== r.nodes.length) return [];
+    var P = poses(v, leg);
+    return r.rev.map(function (_, i) { return segPath(v, leg, i, P); });
+  }
+  // Speed profile (spec 8.3) with the per-type values of the catalogue.
+  function kin(v) {
+    var c = v.c || {}, cap = 25 / 3.6;
+    return { vF: Math.min((c.v_fwd_kmh || 25) / 3.6, cap), vR: Math.min((c.v_rev_kmh || 5) / 3.6, cap), acc: c.acc || 0.8, dec: c.dec || 1.0, lat: 1.0 };
+  }
+  function run(v, leg) {
+    var K = kin(v), segs = legPaths(v, leg), out = [], junction = [], cum = 0, rho = turnR(v), r = v[leg];
+    segs.forEach(function (sp, i) {
+      sp.pts.forEach(function (q, k) {
+        if (i > 0 && k === 0) return;
+        if (out.length) cum += Math.hypot(q.x - out[out.length - 1].x, q.z - out[out.length - 1].z);
+        out.push({ x: q.x, z: q.z, a: q.a, cum: cum, rev: sp.rev, rad: q.arc ? rho : Infinity });
+      });
+      junction.push(out.length - 1);
+    });
+    var n = out.length, stopAt = {}, must = {};
+    if (!n) return { pts: [], len: 0, time: 0 };
+    r.nodes.forEach(function (nd, j) {
+      var isEnd = leg === "arrival" ? j === 0 : j === r.nodes.length - 1;
+      if (!isEnd && nd.stop) stopAt[leg === "arrival" ? junction[j - 1] : junction[j]] = nd.stop;
+    });
+    Object.keys(stopAt).forEach(function (k) { must[k] = true; });
+    for (var k = 1; k < r.rev.length; k++) if (r.rev[k] !== r.rev[k - 1]) must[junction[k - 1]] = true;
+    must[0] = true;
+    if (leg === "arrival") must[n - 1] = true;
+    var D = v.slowR || 0, ratio = Math.max(0.05, (v.slowPct || 100) / 100);
+    function ss(x) { var c = Math.max(0, Math.min(1, x)); return c * c * (3 - 2 * c); }
+    var sp = out.map(function (p) {
+      var dz = leg === "arrival" ? cum - p.cum : p.cum, zone = D > 0 ? ratio + (1 - ratio) * ss((dz - D) / 4 + 0.5) : 1;
+      return Math.min((p.rev ? K.vR : K.vF) * zone, Math.sqrt(K.lat * p.rad));
+    });
+    for (var i = 0; i < n; i++) { if (must[i]) { sp[i] = 0; continue; } if (i > 0) sp[i] = Math.min(sp[i], Math.sqrt(sp[i - 1] * sp[i - 1] + 2 * K.acc * (out[i].cum - out[i - 1].cum))); }
+    for (i = n - 2; i >= 0; i--) sp[i] = Math.min(sp[i], Math.sqrt(sp[i + 1] * sp[i + 1] + 2 * K.dec * (out[i + 1].cum - out[i].cum)));
+    var time = 0, res = [];
+    out.forEach(function (p, i) {
+      if (i > 0) { var ds = p.cum - out[i - 1].cum; time += ds > 0 ? ds / Math.max((sp[i] + sp[i - 1]) / 2, 0.15) : 0; }
+      p.v = sp[i]; p.time = time; res.push(p);
+      if (stopAt[i]) { time += stopAt[i]; res.push(Object.assign({}, p, { time: time, pause: stopAt[i] })); }
+    });
+    return { pts: res, len: cum, time: time };
+  }
+
+  // ---- Local UI state --------------------------------------------------------------
+  var ui = { tab: "veh", sel: null, leg: "arrival", paths: true, snap: true,
+             scale: 0, cx: 0, cz: 15, drag: null, play: null, dialog: null, pplSel: null };
+  try { var saved = JSON.parse(localStorage.getItem("slm.placement") || "{}"); ["paths", "snap", "tab"].forEach(function (k) { if (k in saved) ui[k] = saved[k]; }); } catch (e) { /* defaults */ }
+  function keep() { try { localStorage.setItem("slm.placement", JSON.stringify({ paths: ui.paths, snap: ui.snap, tab: ui.tab })); } catch (e) { /* none */ } }
+
+  function profile() { return S && S.profile; }
+  function vehicles() { var p = profile(); return p && p.configs && p.configs[S.config] ? p.configs[S.config].vehicles || [] : []; }
+  function vehicle(uid) { return vehicles().filter(function (v) { return v.uid === uid; })[0]; }
+  function people() { var p = profile(); var pc = p && p.people ? p.people[S.config] : null; return { flows: (pc && pc.flows) || [], staff: (pc && pc.staff) || [], links: (pc && pc.links) || [] }; }
+  function point(id) { return (S && S.points || []).filter(function (p) { return p.id === id; })[0]; }
+  function typeName(type) { return t("placement.type." + type); }
+  function clone(o) { return JSON.parse(JSON.stringify(o)); }
+
+  // ---- Diagnostics shown for a vehicle ---------------------------------------------
+  function vehIssues(v) {
+    var d = (S.diag || {})[v.uid] || {}, out = [];
+    if (d.unknown_type) out.push({ lvl: "crit", text: t("placement.diag.unknown_type", { type: v.type }) });
+    if (d.fuselage) out.push({ lvl: "crit", text: t("placement.diag.fuselage") });
+    ["arrival", "departure"].forEach(function (leg) {
+      (d[leg] || []).forEach(function (is, i) { if (is) out.push({ lvl: "warn", text: t("placement.ui." + leg) + " " + (i + 1) + " : " + tm(is) }); });
+    });
+    if (d.point_missing) out.push({ lvl: "warn", text: t("placement.diag.point_missing", { point: v.point }) });
+    if (v.flag) out.push({ lvl: "warn", text: t("placement.flag." + v.flag) });
+    return out;
+  }
+  function vehStatus(v) {
+    var d = (S.diag || {})[v.uid] || {}, iss = vehIssues(v);
+    if (iss.some(function (i) { return i.lvl === "crit"; })) return { text: t("placement.ui.st_alert"), col: "var(--crit)" };
+    if (v.flag || d.point_missing) return { text: t("placement.ui.st_check"), col: "var(--warn)" };
+    if (iss.length) return { text: t("placement.ui.st_loop"), col: "var(--warn)" };
+    if (d.contact) return { text: t("placement.contact." + d.contact), col: d.contact === "ok" ? "var(--ok)" : d.contact === "close" ? "var(--accent)" : "var(--muted)" };
+    return { text: (point(v.point) || {}).tag || v.point, col: "var(--muted)" };
+  }
+
+  // ---- Rendering: toolbar, left column, status ----------------------------------------
+  function applyLang() {
+    document.querySelectorAll("[data-i18n]").forEach(function (el) { el.textContent = t(el.getAttribute("data-i18n")); });
+    document.querySelectorAll("[data-i18n-title]").forEach(function (el) { el.title = t(el.getAttribute("data-i18n-title")); });
+  }
+  function renderBar() {
+    var a = S.aircraft;
+    $("acf-name").innerHTML = a.ok ? esc(a.name || a.acf_file) + ' <span class="mono" style="color:var(--muted)">' + esc(a.icao) + "</span>" : esc(t("placement.ui.no_acf"));
+    var sel = $("prof"), opts = S.profiles.map(function (p) { return '<option value="' + esc(p.file) + '">' + esc((p.file === S.file && profile() && profile().meta && profile().meta.name) || p.name || p.file) + "</option>"; });
+    if (profile() && !S.file) opts.unshift('<option value="">' + esc(profile().meta && profile().meta.name || "") + " (" + esc(t("placement.ui.unsaved")) + ")</option>");
+    if (!profile()) opts.unshift('<option value="">' + esc(t("placement.ui.no_profile_short")) + "</option>");
+    sel.innerHTML = opts.join("");
+    sel.value = S.file || "";
+    sel.disabled = S.profiles.length === 0;
+    $("dirty").innerHTML = S.dirty ? '<span class="badge mod">' + esc(t("placement.ui.modified")) + "</span>" : "";
+    // Checklist de la configuration en un clic (Etienne, 2026-10-26) : elements requis manquants.
+    var miss = (((S.incomplete || {})[S.config] || {}).missing || []).filter(function (m) { return m.required; }).length;
+    $("b-check").textContent = t("placement.ui.checklist_btn") + (profile() ? (miss ? " ⚠ " + miss : " ✓") : "");
+    $("b-check").disabled = !profile();
+    $("b-rename").disabled = !profile();
+    $("b-undo").disabled = !S.can_undo;
+    $("b-redo").disabled = !S.can_redo;
+    $("b-save").disabled = !profile();
+    var pv = S.preview, ph = $("prev-phase");
+    ph.innerHTML = '<option value="">' + esc(t("placement.ui.sim_preview")) + "</option>" + S.phases.map(function (p) {
+      return '<option value="' + p + '">' + esc(t("placement.phase." + p)) + (pv.phase === p ? (pv.departing ? " — " + t("placement.ui.leaving") : " — " + t("placement.ui.arriving")) : "") + "</option>";
+    }).join("");
+    ph.value = "";
+    ph.disabled = !profile() || !pv.on_ground;
+    ph.title = pv.on_ground ? "" : t("placement.msg.preview_ground");
+    $("b-prev-stop").disabled = !pv.active;
+    $("empty").hidden = !!profile();
+    $("empty-sub").textContent = a.ok ? t("placement.ui.no_profile_for", { aircraft: (a.name || a.acf_file) + " (" + a.icao + ")" }) : t("placement.ui.no_acf");
+  }
+  function renderConfigs() {
+    var counts = S.counts || {}, inc = S.incomplete || {};
+    $("cfgs").innerHTML = ["remote", "gate", "jetway"].map(function (c) {
+      var i = inc[c] || {}, mark = !profile() ? "" : (i.missing || []).some(function (m) { return m.required; }) ? "⚠ " + (counts[c] || 0) : String(counts[c] || 0);
+      return '<button data-cfg="' + c + '" class="' + (S.config === c ? "on" : "") + '">' + esc(t("placement.config." + c)) + '<span class="sub">' + esc(mark) + "</span></button>";
+    }).join("");
+    $("reuse").innerHTML = '<option value="">—</option>' + ["remote", "gate", "jetway"].filter(function (c) { return c !== S.config; }).map(function (c) {
+      return '<option value="' + c + '">' + esc(t("placement.config." + c)) + " (" + (counts[c] || 0) + ")</option>";
+    }).join("");
+    $("reuse").disabled = !profile();
+    document.querySelectorAll("#tabs button").forEach(function (b) { b.className = b.dataset.tab === ui.tab ? "on" : ""; });
+  }
+  function renderList() {
+    var el = $("list");
+    if (!profile()) { el.innerHTML = ""; return; }
+    if (ui.tab === "veh") {
+      var vs = vehicles(), allHidden = vs.length && vs.every(function (v) { return v.hidden; });
+      var h = '<button class="btn small" data-act="all-hidden" data-v="' + (allHidden ? "0" : "1") + '">' + esc(t(allHidden ? "placement.ui.show_all" : "placement.ui.hide_all")) + "</button>";
+      CATS.forEach(function (c) {
+        h += '<div><div class="grp-h"><span><span class="dot" style="background:' + CAT_COLOR[c] + '"></span>' + esc(t("placement.cat." + c)) + '</span><button class="plus" data-act="add" data-cat="' + c + '" title="' + esc(t("placement.ui.add_vehicle")) + '">+</button></div>';
+        vs.filter(function (v) { return cat(v.type) === c; }).forEach(function (v) {
+          var st = vehStatus(v), on = ui.sel && ui.sel.kind === "veh" && ui.sel.id === v.uid;
+          h += '<button class="row' + (on ? " on" : "") + (v.hidden ? " hid" : "") + '" data-sel="veh" data-id="' + esc(v.uid) + '">' +
+            '<span style="width:22px;height:12px;border-radius:2px;border:1.5px solid ' + CAT_COLOR[c] + '"></span>' +
+            '<span class="nm"><b>' + esc(typeName(v.type)) + " · " + esc((point(v.point) || {}).tag || v.point) + '</b><span class="st" style="color:' + st.col + '">' + esc(st.text) + "</span></span>" +
+            '<span class="iconbtn" data-act="eye" data-id="' + esc(v.uid) + '" title="' + esc(t(v.hidden ? "placement.ui.show" : "placement.ui.hide")) + '">' + (v.hidden ? "◌" : "●") + "</span></button>";
+        });
+        h += "</div>";
+      });
+      el.innerHTML = h;
+    } else if (ui.tab === "pts") {
+      var groups = [["acf", "placement.ui.points_acf", "placement.ui.points_acf_sub"], ["profile", "placement.ui.points_profile", "placement.ui.points_profile_sub"]];
+      el.innerHTML = groups.map(function (g) {
+        var items = (S.points || []).filter(function (p) { return p.src === g[0]; });
+        return '<div><div class="grp-h"><span>' + esc(t(g[1])) + '<br><span class="hint">' + esc(t(g[2])) + "</span></span>" +
+          (g[0] === "profile" ? '<button class="plus" data-act="add-point" title="' + esc(t("placement.ui.add_point")) + '">+</button>' : "") + "</div>" +
+          items.map(function (p) {
+            var on = ui.sel && ui.sel.kind === "pt" && ui.sel.id === p.id;
+            return '<button class="row' + (on ? " on" : "") + (p.exists ? "" : " hid") + '" data-sel="pt" data-id="' + esc(p.id) + '"><span class="nm"><b>' + esc(p.label) + " · " + esc(p.tag) +
+              '</b><span class="st">' + (p.exists ? f1(p.x) + " / " + f1(p.z) + (p.override ? " · " + esc(t("placement.ui.corrected")) : "") : esc(t("placement.ui.not_on_aircraft"))) + "</span></span></button>";
+          }).join("") + "</div>";
+      }).join("");
+    } else {
+      var P = people();
+      var h2 = '<div><div class="grp-h"><span><span class="dot" style="background:var(--flow)"></span>' + esc(t("placement.ui.flows")) + '</span><button class="plus" data-act="add-flow">+</button></div>';
+      if (S.config === "jetway") h2 += '<span class="hint">' + esc(t("placement.ui.flows_jetway")) + "</span>";
+      P.flows.forEach(function (f) {
+        h2 += pplRow("flow", f.id, t("placement.ui.flow_title", { door: f.door }), t("placement.dir." + (f.dir || "both")) + " · " + (f.lanes || 1) + " · " + (f.src && f.src.kind === "bus" ? t("placement.type.bus") : t("placement.ui.ground_point")));
+      });
+      // Work links: automatic since 2026-10-26 (editor.cpp, auto_links); only trains without a belt / loader are flagged.
+      h2 += "</div><div>";
+      unlinked().forEach(function (v) { h2 += '<span class="hint" style="color:var(--warn)">' + esc(t("placement.ui.no_partner", { vehicle: typeName(v.type) + " · " + ((point(v.point) || {}).tag || v.point) })) + "</span>"; });
+      h2 += '</div><div><div class="grp-h"><span><span class="dot" style="background:var(--staff)"></span>' + esc(t("placement.ui.staff")) + '</span><button class="plus" data-act="add-staff">+</button></div>';
+      P.staff.forEach(function (s) { h2 += pplRow("staff", s.id, t("placement.staff." + s.type), f1(s.x) + " / " + f1(s.z)); });
+      h2 += '</div><span class="hint">' + esc(t("placement.ui.people_hint")) + "</span>";
+      el.innerHTML = h2;
+    }
+  }
+  function pplRow(kind, id, title, sub) {
+    var on = ui.sel && ui.sel.kind === kind && ui.sel.id === id;
+    return '<button class="row' + (on ? " on" : "") + '" data-sel="' + kind + '" data-id="' + esc(id) + '"><span class="nm"><b>' + esc(title) + '</b><span class="st">' + esc(sub) + "</span></span></button>";
+  }
+  // Work links (spec 9.3): compatible pairs, distance between anchors.
+  function anchors(v, which) {
+    var e = eng(v), r = e.h * Math.PI / 180, f = [Math.sin(r), -Math.cos(r)], a = [Math.cos(r), Math.sin(r)];
+    function at(fo, ao) { return { x: e.x + f[0] * fo + a[0] * ao, z: e.z + f[1] * fo + a[1] * ao }; }
+    if (which === "foot") return [at(-e.L / 2 - 0.3, 0)];
+    // Trains: handlers work at the first cart / dolly, behind the tractor (train_geometry in fleet.cpp).
+    var back = v.type === "bagcart" ? 2.88 : v.type === "uld" ? 3.35 : 0;
+    return [at(-back, -(e.W / 2 + 0.6)), at(-back, e.W / 2 + 0.6)];
+  }
+  // Passenger flows end at the foot of their stairs / ambulift (Etienne, 2026-10-22): f.stairs = vehicle uid,
+  // f.door kept as that vehicle's point (older profiles: stairs found from the door).
+  function isStairs(v) { return v && (v.type === "stairs" || v.type === "pmr" || v.type === "own_stairs"); }
+  function flowStairs(f) {
+    var s = f.stairs ? vehicle(f.stairs) : null;
+    if (isStairs(s)) return s;
+    return vehicles().filter(function (v) { return isStairs(v) && v.point === f.door; })[0] || null;
+  }
+  function stairsFoot(v) {
+    var e = eng(v), r = e.h * Math.PI / 180, d = e.L / 2 + 0.8;
+    return { x: e.x - Math.sin(r) * d, z: e.z + Math.cos(r) * d };
+  }
+  function flowSrc(f) {
+    var bus = f.src && f.src.kind === "bus" ? vehicle(f.src.uid) : null;
+    if (bus) return { x: bus.pos.x, z: bus.pos.z };
+    if (f.src && f.src.x != null) return { x: f.src.x, z: f.src.z };
+    var e = flowEnd(f) || { x: 0, z: 0 }, d = point(f.door);  // same fallback as the plugin: 15 m out, door side
+    return { x: e.x + (d && d.x > 0 ? 15 : -15), z: e.z };
+  }
+  function flowEnd(f) {
+    var s = flowStairs(f), d = point(f.door);
+    return s ? stairsFoot(s) : d ? { x: d.x, z: d.z } : null;
+  }
+  function flowPts(f) { var end = flowEnd(f); return end ? [flowSrc(f)].concat(f.nodes || []).concat([end]) : []; }
+  function stairsLabel(v) { return typeName(v.type) + " · " + ((point(v.point) || {}).tag || v.point); }
+  function unlinked() {
+    var P = people(), linked = {};
+    P.links.forEach(function (l) { linked[l.from] = 1; });
+    return vehicles().filter(function (v) { return (v.type === "bagcart" || v.type === "uld") && !linked[v.uid]; });
+  }
+  function renderStatus() {
+    var a = S.aircraft, alerts = 0;
+    vehicles().forEach(function (v) { if (vehIssues(v).some(function (i) { return i.lvl === "crit"; })) alerts++; });
+    $("st-geo").textContent = a.ok ? t("placement.ui.geo_source", { file: a.acf_file, length: f1(a.length), span: f1(a.span) }) : t("placement.ui.no_acf");
+    $("st-alerts").textContent = profile() ? t("placement.ui.alerts", { count: alerts }) : "";
+    var m = S.message;
+    $("st-msg").innerHTML = m && m.key ? '<span class="badge ' + (m.level === "error" ? "err" : m.level === "warn" ? "warn" : "ok") + '">' + esc(tm(m)) + "</span>" : "";
+  }
+
+  // ---- Inspector -------------------------------------------------------------------
+  function renderInsp() {
+    var el = $("insp"), h = "";
+    if (!profile()) { el.innerHTML = ""; return; }
+    var sel = ui.sel;
+    if (sel && sel.kind === "veh" && vehicle(sel.id)) h = inspVehicle(vehicle(sel.id));
+    else if (sel && sel.kind === "pt" && point(sel.id)) h = inspPoint(point(sel.id));
+    else if (sel && (sel.kind === "flow" || sel.kind === "staff")) h = inspPeople(sel);
+    else h = inspConfig();
+    el.innerHTML = h;
+  }
+  function inspConfig() {
+    var i = (S.incomplete || {})[S.config] || {}, h = "<h3>" + esc(t("placement.config." + S.config)) + "</h3>";
+    // Checklist (Etienne, 2026-10-26): every requirement, ticked or not; advised items in grey when missing.
+    var req = (i.missing || []).filter(function (m) { return m.required; });
+    h += '<div class="msg ' + (req.length ? "warn" : "ok") + '">' + esc(t(req.length ? "placement.ui.checklist" : "placement.ui.complete")) + "</div>";
+    h += '<ul class="check">' + (i.checklist || []).map(function (m) {
+      return '<li class="' + (m.ok ? "ok" : m.required ? "todo" : "adv") + '"><span>' + (m.ok ? "✓" : "○") + "</span>" + esc(tm(m)) + "</li>";
+    }).join("") + "</ul>";
+    (S.validation || []).forEach(function (m) { h += '<div class="msg warn">' + esc(tm(m)) + "</div>"; });
+    (S.warnings || []).forEach(function (m) { h += '<div class="msg warn">' + esc(tm(m)) + "</div>"; });
+    h += '<span class="hint">' + esc(t("placement.ui.select_hint")) + "</span>";
+    return h;
+  }
+  // Chariots lies a un tapis / loader : places par le plugin (Etienne, 2026-10-25), seuls les trajets s'editent.
+  function autoLink(v) {
+    return people().links.filter(function (l) { return l.from === v.uid && vehicle(l.to); })[0] || null;
+  }
+  function inspVehicle(v) {
+    var e = eng(v), d = (S.diag || {})[v.uid] || {}, c = e.c, h = "";
+    h += '<h3 style="color:' + CAT_COLOR[cat(v.type)] + '">' + esc(typeName(v.type)) + "</h3>";
+    h += '<div class="grid2"><span>' + esc(t("placement.ui.served_point")) + '</span><select class="sel" data-f="point">' +
+      (S.points || []).filter(function (p) { return p.exists; }).map(function (p) { return '<option value="' + esc(p.id) + '"' + (p.id === v.point ? " selected" : "") + ">" + esc(p.tag + " · " + p.label) + "</option>"; }).join("") + "</select></div>";
+    if (d.contact) h += '<div class="msg ' + (d.contact === "ok" ? "ok" : d.contact === "close" ? "warn" : "info") + '">' + esc(t("placement.contact." + d.contact)) + " (" + f1(d.contact_m) + " m)</div>";
+    var al = autoLink(v), partner = al ? vehicle(al.to) : null, fixed = v.type === "own_stairs";
+    if (al) h += '<div class="sec"><span class="lab">' + esc(t("placement.ui.final_position")) + '</span><div class="msg info">' +
+      esc(t("placement.ui.auto_placed", { vehicle: typeName(partner.type) + " · " + partner.point })) + "</div></div>";
+    else h += '<div class="sec"><span class="lab">' + esc(t("placement.ui.final_position")) + '</span><div class="flex">X <input class="inp" data-f="x" value="' + f1(v.pos.x) + '"> Z <input class="inp" data-f="z" value="' + f1(v.pos.z) + '"> ' +
+      esc(t("placement.ui.heading")) + ' <input class="inp" data-f="h" value="' + Math.round(v.pos.h) + '"></div>' +
+      "</div>";  // turning radius: catalogue value only (Etienne, 2026-10-26)
+    // Routes (escalier de l'avion : fixe, sans trajet)
+    if (!fixed) {
+    h += '<div class="sec"><span class="lab">' + esc(t("placement.ui.show_paths")) + '</span><div class="seg" style="grid-template-columns:1fr 1fr">' + ["arrival", "departure"].map(function (l) {
+      var r = run(e, l);
+      return '<button data-leg="' + l + '" class="' + (ui.leg === l ? "on" : "") + '">' + esc(t("placement.ui." + l)) + '<span class="sub">' + f1(r.len) + " m · " + Math.round(r.time) + " s</span></button>";
+    }).join("") + "</div>";
+    var r = e[ui.leg], issues = d[ui.leg] || [], arr = ui.leg === "arrival", nN = r.nodes.length, segs = legPaths(e, ui.leg);
+    // Frise de la maquette (captures d'Etienne, 2026-10-25) : point, segment, point...
+    var pointRow = function (ni) {  // ni = -1 : position finale
+      if (ni < 0) return '<div class="rrow"><span class="mk fin" style="border-color:' + CAT_HEX[cat(v.type)] + ";background:" + CAT_HEX[cat(v.type)] + '40"></span><span class="rname">' + esc(t("placement.ui.final_position")) +
+        '</span><span class="rxz">' + f1(v.pos.x) + " · " + f1(v.pos.z) + "</span></div>";
+      var n = r.nodes[ni], isEnd = arr ? ni === 0 : ni === nN - 1, num = arr ? ni : ni + 1;
+      var stops = isEnd ? (arr ? ENTRY_DELAYS : null) : STOPS, st = n.stop || 0;
+      return '<div class="rrow"><span class="mk' + (isEnd ? " end" : "") + '">' + (isEnd ? (arr ? "E" : "S") : num) + '</span><span class="rname">' +
+        esc(isEnd ? t(arr ? "placement.ui.entry" : "placement.ui.exit") : t("placement.ui.waypoint", { n: num })) + "</span>" +
+        '<span class="rxz"><input class="inp bare" data-node="' + ni + '" data-nf="x" value="' + f1(n.x) + '">·<input class="inp bare" data-node="' + ni + '" data-nf="z" value="' + f1(n.z) + '"></span>' +
+        '<button class="pill' + (n.hdg != null ? " on" : "") + '" data-act="node-hdg" data-node="' + ni + '" title="' + esc(t("placement.ui.heading_title")) + '">' +
+          esc(n.hdg != null ? t("placement.ui.heading_deg", { h: Math.round(n.hdg) }) : t("placement.ui.auto_heading")) + "</button>" +
+        (stops ? '<label class="pill' + (st ? " on" : "") + '" title="' + esc(t(isEnd ? "placement.ui.entry_delay" : "placement.ui.stop_title")) + '">' + CLOCK +
+          '<select data-ns="1" data-node="' + ni + '">' + (stops.indexOf(st) < 0 ? stops.concat(st).sort(function (p, q) { return p - q; }) : stops).map(function (s) {
+            return '<option value="' + s + '"' + (s === st ? " selected" : "") + ">" + esc(s ? s + " s" : t(isEnd ? "placement.ui.delay" : "placement.ui.stop")) + "</option>";
+          }).join("") + "</select></label>" : "") +
+        (isEnd ? "" : '<button class="x" data-act="node-del" data-node="' + ni + '" title="' + esc(t("placement.ui.delete_point")) + '">×</button>') + "</div>";
+    };
+    var segRow = function (si) {
+      var rev = r.rev[si], is = issues[si], sp = segs[si], col = is ? "#FF9B54" : rev ? "#F08CFF" : "#FFD166";
+      return '<div class="rseg"><span class="rline" style="background:' + col + '"></span><span class="fr" title="' + esc(t("placement.ui.seg_toggle")) + '">' +
+        '<button class="' + (rev ? "" : "on") + '" data-act="seg-dir" data-seg="' + si + '" data-rev="0">' + esc(t("placement.ui.forward")) + "</button>" +
+        '<button class="' + (rev ? "on rev" : "") + '" data-act="seg-dir" data-seg="' + si + '" data-rev="1"' + (e.noRev && !rev ? " disabled" : "") + ">" + esc(t("placement.ui.reverse")) + "</button></span>" +
+        '<span class="rxz">' + (sp ? f1(sp.len) + " m" : "") + '</span><button class="sq" data-act="seg-insert" data-seg="' + si + '" title="' + esc(t("placement.ui.insert_point")) + '">+</button></div>' +
+        (is ? '<div class="rissue">' + esc(tm(is)) + "</div>" : "");
+    };
+    // Manual belt loader: placed reversed, its tractor backs it in (Etienne, 2026-10-27).
+    if (c.inverted) h += '<div class="msg info">' + esc(t("placement.ui.reversed_hint")) + "</div>";
+    h += '<div class="route">';
+    if (arr) { for (var k = 0; k < nN; k++) h += pointRow(k) + segRow(k); h += pointRow(-1); }
+    else { h += pointRow(-1); for (var k2 = 0; k2 < nN; k2++) h += segRow(k2) + pointRow(k2); }
+    h += "</div>";
+    h += '<div class="slowbox"><span class="lab2">' + esc(t("placement.ui.slow_zone")) + '</span><span class="hint">' + esc(t("placement.ui.slow_hint")) + "</span>" +
+      '<div class="grid2"><span>' + esc(t("placement.ui.radius")) + '</span><span class="flex"><input class="inp" data-f="slowR" value="' + f1(e.slowR) + '"> m</span>' +
+      "<span>" + esc(t("placement.ui.speed")) + '</span><span class="flex"><input class="inp" data-f="slowPct" value="' + Math.round(e.slowPct) + '"> %</span></div></div>';
+    h += '<div class="flex"><button class="btn small play" data-act="play">' + esc(t(ui.play ? "placement.ui.stop_play" : "placement.ui.play_path")) + '</button><button class="btn small" data-act="replace-ends">' + esc(t("placement.ui.replace_ends")) + "</button></div>";
+    h += '<span class="hint">' + esc(t("placement.ui.route_hint")) + "</span></div>";
+    }
+    if (typeof c.lift_m === "number" && c.lift_m > 0) {
+      var lift = typeof v.lift_m === "number" ? v.lift_m : c.lift_m;
+      h += '<div class="sec"><span class="lab">' + esc(t("placement.ui.work_height")) + '</span><div class="flex"><input class="inp" data-f="lift" value="' + f1(lift) + '"> m <span class="hint">' +
+        esc(t(v.type === "stairs" ? "placement.ui.stairs_height_hint" : v.type === "own_stairs" ? "placement.ui.own_stairs_hint" : "placement.ui.work_height_hint")) + "</span></div></div>";
+    }
+    if (v.type === "bagcart" || v.type === "uld") {  // max_carts: 1-6 (kMaxCarts in vehicles.h), 3 by default
+      var mc = typeof v.max_carts === "number" ? v.max_carts : 3;
+      h += '<div class="sec"><span class="lab">' + esc(t("placement.ui.max_carts")) + '</span><div class="flex"><select class="sel" data-f="carts">' +
+        [1, 2, 3, 4, 5, 6].map(function (n) { return '<option value="' + n + '"' + (n === mc ? " selected" : "") + ">" + n + "</option>"; }).join("") +
+        '</select><span class="hint">' + esc(t("placement.ui.max_carts_hint")) + "</span></div></div>";
+    }
+    var iss = vehIssues(v);
+    if (iss.length) h += '<div class="sec">' + iss.map(function (i) { return '<div class="msg ' + i.lvl + '">' + esc(i.text) + "</div>"; }).join("") + "</div>";
+    if (v.flag) h += '<button class="btn small" data-act="confirm">' + esc(t("placement.ui.confirm_position")) + "</button>";
+    var testing = S.preview && S.preview.phase === "vehicle:" + v.uid;
+    if (!fixed) h += '<div class="sec"><button class="btn small" data-act="test-veh"' + (S.preview && S.preview.on_ground ? "" : ' disabled title="' + esc(t("placement.msg.preview_ground")) + '"') + ">" +
+      esc(t(testing ? (S.preview.departing ? "placement.ui.test_vehicle" : "placement.ui.test_vehicle_leave") : "placement.ui.test_vehicle")) + '</button><span class="hint">' + esc(t("placement.ui.test_vehicle_hint")) + "</span></div>";
+    h += '<div class="sec"><div class="flex"><button class="btn small" data-act="mirror">' + esc(t("placement.ui.mirror")) + '</button><button class="btn small" data-act="reset">' + esc(t("placement.ui.reset")) +
+      '</button><button class="btn small" data-act="replace">' + esc(t("placement.ui.replace_model")) + '</button><button class="btn small danger" data-act="delete">' + esc(t("placement.ui.delete")) + "</button></div></div>";
+    return h;
+  }
+  function inspPoint(p) {
+    var h = "<h3>" + esc(p.label) + ' <span class="mono" style="color:var(--muted)">' + esc(p.tag) + "</span></h3>";
+    h += '<div class="grid2"><span>' + esc(t("placement.ui.label")) + '</span><input class="inp wide" data-pf="label" value="' + esc(p.label) + '">' +
+      "<span>" + esc(t("placement.ui.tag")) + '</span><input class="inp" maxlength="4" data-pf="tag" value="' + esc(p.tag) + '">';
+    if (p.src === "profile") h += "<span>" + esc(t("placement.ui.kind")) + '</span><select class="sel" data-pf="kind">' + ["door", "cargo", "svc"].map(function (k) { return '<option value="' + k + '"' + (p.kind === k ? " selected" : "") + ">" + esc(t("placement.kind." + k)) + "</option>"; }).join("") + "</select>";
+    h += "<span>X / Z</span><span class=\"flex\"><input class=\"inp\" data-pf=\"x\" value=\"" + f1(p.x) + '"><input class="inp" data-pf="z" value="' + f1(p.z) + '"></span></div>';
+    if (p.src === "acf") {
+      h += '<div class="msg info">' + esc(t("placement.ui.acf_point", { key: p.acf ? p.acf.key : "?" })) + (p.acf ? " " + f1(p.acf.x) + " / " + f1(p.acf.z) : "") + "</div>";
+      if (p.override) h += '<button class="btn small" data-act="pt-revert">' + esc(t("placement.ui.revert")) + "</button>";
+    } else h += '<button class="btn small danger" data-act="pt-delete">' + esc(t("placement.ui.delete")) + "</button>";
+    var twin = p.mirror_of || p.mirrored_by;
+    if (twin) h += '<div class="msg info">' + esc(t("placement.ui.mirror_linked", { id: twin })) + "</div>";
+    else if (p.kind === "door" && p.exists) h += '<button class="btn small" data-act="pt-mirror">' + esc(t("placement.ui.mirror_door")) + "</button>";
+    h += '<span class="hint">' + esc(t("placement.ui.point_hint")) + "</span>";
+    return h;
+  }
+  function inspPeople(sel) {
+    var P = people(), h = "";
+    if (sel.kind === "flow") {
+      var f = P.flows.filter(function (x) { return x.id === sel.id; })[0];
+      if (!f) return inspConfig();
+      var buses = vehicles().filter(function (v) { return v.type === "bus"; }), st = flowStairs(f);
+      h += "<h3>" + esc(t("placement.ui.flow_title", { door: st ? ((point(st.point) || {}).tag || st.point) : f.door })) + "</h3><div class=\"grid2\">";
+      h += "<span>" + esc(t("placement.ui.source")) + '</span><select class="sel" data-ff="src"><option value="ground"' + (f.src.kind === "ground" ? " selected" : "") + ">" + esc(t("placement.ui.ground_point")) + "</option>" +
+        buses.map(function (b) { return '<option value="' + esc(b.uid) + '"' + (f.src.uid === b.uid ? " selected" : "") + ">" + esc(t("placement.type.bus") + " · " + ((point(b.point) || {}).tag || b.point)) + "</option>"; }).join("") + "</select>";
+      h += "<span>" + esc(t("placement.ui.stairs")) + '</span><select class="sel" data-ff="stairs">' + (st ? "" : '<option value="" selected>—</option>') +
+        vehicles().filter(isStairs).map(function (v) { return '<option value="' + esc(v.uid) + '"' + (st && st.uid === v.uid ? " selected" : "") + ">" + esc(stairsLabel(v)) + "</option>"; }).join("") + "</select>";
+      h += "<span>" + esc(t("placement.ui.direction")) + '</span><select class="sel" data-ff="dir">' + ["boarding", "deboarding", "both"].map(function (d) { return '<option value="' + d + '"' + (f.dir === d ? " selected" : "") + ">" + esc(t("placement.dir." + d)) + "</option>"; }).join("") + "</select>";
+      h += "<span>" + esc(t("placement.ui.lanes")) + '</span><select class="sel" data-ff="lanes"><option value="1"' + (f.lanes === 1 ? " selected" : "") + '>1</option><option value="2"' + (f.lanes === 2 ? " selected" : "") + ">2</option></select></div>";
+      if (!st) h += '<div class="msg warn">' + esc(t(S.config === "jetway" ? "placement.ui.flows_jetway" : "placement.ui.no_stairs_flow")) + "</div>";
+      // Path: start, editable waypoints, stairs foot
+      var fp = flowPts(f), nn = (f.nodes || []).length;
+      h += '<div class="sec"><span class="lab">' + esc(t("placement.ui.flow_path")) + '</span><div class="nodes"><div class="node hdr"><span></span><span>' + esc(t("placement.ui.col_xz")) + "</span><span></span></div>";
+      fp.forEach(function (q, k) {
+        var nm = k === 0 ? t("placement.ui.flow_start") : k === fp.length - 1 ? t("placement.ui.flow_end") : "P" + k;
+        if (k === 0 && f.src.kind === "ground") h += '<div class="node"><span class="k">' + esc(nm) + '</span><span class="flex"><input class="inp" style="width:52px" data-ff="sx" value="' + f1(q.x) + '"><input class="inp" style="width:52px" data-ff="sz" value="' + f1(q.z) + '"></span><span></span></div>';
+        else if (k === 0 || k === fp.length - 1) h += '<div class="node"><span class="k">' + esc(nm) + '</span><span class="hint">' + f1(q.x) + " / " + f1(q.z) + "</span><span></span></div>";
+        else h += '<div class="node"><span class="k">' + esc(nm) + '</span><span class="flex"><input class="inp" style="width:52px" data-fn="' + (k - 1) + '" data-fnf="x" value="' + f1(q.x) + '"><input class="inp" style="width:52px" data-fn="' + (k - 1) + '" data-fnf="z" value="' + f1(q.z) + '"></span>' +
+          '<span class="flex"><button class="plus" data-act="fnode-del" data-fnode="' + (k - 1) + '" title="' + esc(t("placement.ui.delete_point")) + '">×</button></span></div>';
+        if (k < fp.length - 1) h += '<div class="segrow">↓ <button class="chip" data-act="fnode-ins" data-fseg="' + k + '" title="' + esc(t("placement.ui.insert_point")) + '">' + esc(t("placement.ui.plus_point")) + "</button></div>";
+      });
+      h += "</div></div>";
+      if (!nn) h += '<span class="hint">' + esc(t("placement.ui.flow_no_points")) + "</span>";
+      if (f.src.kind === "bus" && !vehicle(f.src.uid)) h += '<div class="msg crit">' + esc(t("placement.ui.missing_bus")) + "</div>";
+      h += '<span class="hint">' + esc(t("placement.ui.flow_hint")) + '</span><button class="btn small danger" data-act="ppl-del">' + esc(t("placement.ui.delete")) + "</button>";
+    } else if (sel.kind === "staff") {
+      var s = P.staff.filter(function (x) { return x.id === sel.id; })[0];
+      if (!s) return inspConfig();
+      h += "<h3>" + esc(t("placement.staff." + s.type)) + '</h3><div class="grid2"><span>' + esc(t("placement.ui.role")) + '</span><select class="sel" data-sf="type">' +
+        // Baggage handlers and the fueler are automatic since 2026-10-26 (people.cpp); older profiles keep their role.
+        ["ramp", "supervisor"].concat(s.type === "ramp" || s.type === "supervisor" ? [] : [s.type]).map(function (r) { return '<option value="' + r + '"' + (s.type === r ? " selected" : "") + ">" + esc(t("placement.staff." + r)) + "</option>"; }).join("") + "</select>" +
+        '<span>X / Z</span><span class="flex"><input class="inp" data-sf="x" value="' + f1(s.x) + '"><input class="inp" data-sf="z" value="' + f1(s.z) + '"></span><span>' + esc(t("placement.ui.heading")) + '</span><input class="inp" data-sf="h" value="' + Math.round(s.h || 0) + '"></div>';
+      h += '<button class="btn small danger" data-act="ppl-del">' + esc(t("placement.ui.delete")) + "</button>";
+    }
+    return h;
+  }
+
+  // ---- Map (SVG) --------------------------------------------------------------------
+  var svg = $("map");
+  function vb() { var r = svg.getBoundingClientRect(); return { w: r.width || 680, h: r.height || 600 }; }
+  function fitScale() {
+    var a = S && S.aircraft, s = vb();
+    var span = a && a.ok ? Math.max(a.span, 30) + 40 : 80, len = a && a.ok ? Math.max(a.length, 30) + 40 : 80;
+    return Math.min(s.w / span, s.h / len);
+  }
+  function recenter() { ui.scale = fitScale(); ui.cx = 0; ui.cz = S && S.aircraft && S.aircraft.ok ? S.aircraft.length / 2 : 15; }
+  function X(x) { return vb().w / 2 + (x - ui.cx) * ui.scale; }
+  function Y(z) { return vb().h / 2 + (z - ui.cz) * ui.scale; }
+  function toM(ev) { var r = svg.getBoundingClientRect(); return { x: (ev.clientX - r.left - r.width / 2) / ui.scale + ui.cx, z: (ev.clientY - r.top - r.height / 2) / ui.scale + ui.cz }; }
+  function snap(n, s) { return ui.snap ? Math.round(n / s) * s : Math.round(n * 10) / 10; }
+  function poly(pts, attrs) { return '<polygon points="' + pts.map(function (p) { return X(p[0]).toFixed(1) + "," + Y(p[1]).toFixed(1); }).join(" ") + '" ' + attrs + "/>"; }
+  function pathD(pts) { return pts.map(function (p, i) { return (i ? "L" : "M") + X(p.x).toFixed(1) + " " + Y(p.z).toFixed(1); }).join(" "); }
+  function vehRect(e, extra) {
+    var r = e.h * Math.PI / 180, f = [Math.sin(r), -Math.cos(r)], a = [Math.cos(r), Math.sin(r)], L2 = e.L / 2, W2 = e.W / 2;
+    var c = function (fo, ao) { fo += e.off || 0; return [e.x + f[0] * fo + a[0] * ao, e.z + f[1] * fo + a[1] * ao]; };
+    return { body: [c(L2, -W2), c(L2, W2), c(-L2, W2), c(-L2, -W2)], cab: [c(L2, -W2), c(L2, W2), c(L2 - Math.min(1.2, e.L * 0.2), W2), c(L2 - Math.min(1.2, e.L * 0.2), -W2)],
+             handle: c(L2 + 1.6, 0), front: c(L2, 0) };
+  }
+  // Jetway configuration: a schematic jetway docked at the first left door (the airport's own jetway
+  // is not known to the editor; shape for reference only).
+  function jetwayShape() {
+    var doors = (S.points || []).filter(function (p) { return p.kind === "door" && p.exists && p.x < 0; }).sort(function (p, q) { return p.z - q.z; });
+    if (!doors.length) return "";
+    var d = doors[0], dir = [-0.82, -0.57], n = [0.57, -0.82], L = 18, W = 1.2;
+    var p0 = [d.x - 1.6, d.z], p1 = [p0[0] + dir[0] * L, p0[1] + dir[1] * L];
+    var h = poly([[d.x, d.z - 1.5], [d.x, d.z + 1.5], [p0[0], d.z + 1.5], [p0[0], d.z - 1.5]], 'fill="#3A4656" stroke="#8A97A6" stroke-width="1.2"');
+    h += poly([[p0[0] + n[0] * W, p0[1] + n[1] * W], [p1[0] + n[0] * W, p1[1] + n[1] * W], [p1[0] - n[0] * W, p1[1] - n[1] * W], [p0[0] - n[0] * W, p0[1] - n[1] * W]],
+      'fill="#2E3A48" stroke="#8A97A6" stroke-width="1.2"');
+    h += '<circle cx="' + X(p1[0]) + '" cy="' + Y(p1[1]) + '" r="' + 2.2 * ui.scale + '" fill="#2E3A48" stroke="#8A97A6" stroke-width="1.2"/>';
+    h += '<text x="' + X(p1[0]) + '" y="' + (Y(p1[1]) + 3) + '" fill="#8A97A6" font-size="9" text-anchor="middle" font-family="Consolas">' + esc(t("placement.config.jetway")) + "</text>";
+    return h;
+  }
+  // Etiquette du plan (ENTRY, EXIT, SLOW, arret) : fond arrondi, texte mono.
+  function tag(x, y, text, bg, fg, border) {
+    var w = text.length * 5.6 + 10;
+    return '<g pointer-events="none"><rect x="' + x + '" y="' + y + '" width="' + w + '" height="14" rx="3" fill="' + bg + '"' + (border ? ' stroke="' + border + '"' : "") + '/>' +
+      '<text x="' + (x + 5) + '" y="' + (y + 10.5) + '" font-family="Consolas,monospace" font-size="9" font-weight="700" fill="' + fg + '">' + esc(text) + "</text></g>";
+  }
+  // Zone de clic invisible de 12 px autour d'une poignee (Etienne, 2026-10-27 : poignees de 4-5 px trop dures a attraper).
+  function grab(attrs, x, y) { return "<circle " + attrs + ' cx="' + x + '" cy="' + y + '" r="12" fill="transparent"/>'; }
+  function renderMap() {
+    if (!S) return;
+    if (!ui.scale) recenter();
+    var s = vb(), h = "", a = S.aircraft;
+    svg.setAttribute("viewBox", "0 0 " + s.w + " " + s.h);
+    // grid every 5 m
+    var step = 5 * ui.scale, ox = X(0) % step, oy = Y(0) % step;
+    h += '<defs><pattern id="g" width="' + step + '" height="' + step + '" patternUnits="userSpaceOnUse" x="' + ox + '" y="' + oy + '"><path d="M ' + step + " 0 L 0 0 0 " + step + '" fill="none" stroke="rgba(255,255,255,0.045)"/></pattern></defs>';
+    h += '<rect width="100%" height="100%" fill="url(#g)"/>';
+    h += '<line x1="' + X(0) + '" y1="0" x2="' + X(0) + '" y2="' + s.h + '" stroke="rgba(255,209,102,0.16)"/><line x1="0" y1="' + Y(0) + '" x2="' + s.w + '" y2="' + Y(0) + '" stroke="rgba(255,209,102,0.16)"/>';
+    // rulers
+    for (var m = Math.ceil((ui.cx - s.w / 2 / ui.scale) / 10) * 10; X(m) < s.w; m += 10) h += '<text x="' + (X(m) + 2) + '" y="11" fill="#5D6B7A" font-size="9" font-family="Consolas">' + m + "</text>";
+    for (m = Math.ceil((ui.cz - s.h / 2 / ui.scale) / 10) * 10; Y(m) < s.h; m += 10) h += '<text x="3" y="' + (Y(m) - 2) + '" fill="#5D6B7A" font-size="9" font-family="Consolas">' + m + "</text>";
+    if (a.ok) {
+      (a.wings || []).forEach(function (w) { h += poly(w, 'fill="#222B36" stroke="#45525F" stroke-width="1"'); });
+      if (a.fuselage && a.fuselage.length) h += poly(a.fuselage, 'fill="#1C242E" stroke="#5A6878" stroke-width="1.2"');
+      (a.engines || []).forEach(function (e) { h += '<circle cx="' + X(e.x) + '" cy="' + Y(e.z) + '" r="' + Math.max(2, 0.9 * ui.scale) + '" fill="#2E3A48" stroke="#6B7A8A"/>'; });
+      if (S.config === "jetway") h += jetwayShape();
+    }
+    var ppl = ui.tab === "ppl";
+    // other vehicles' paths (grey), selected vehicle's paths (yellow / magenta)
+    var vs = vehicles().filter(function (v) { return !v.hidden; });
+    var selV = ui.sel && ui.sel.kind === "veh" ? (ui.drag && ui.drag.veh ? ui.drag.veh : vehicle(ui.sel.id)) : null;
+    var dim = ui.drag && ui.drag.veh ? ui.drag.veh.uid : null;  // vehicle or handle dragged: the others fade out
+    if (ui.paths && !ppl) vs.forEach(function (v) {
+      if (selV && v.uid === selV.uid) return;
+      var e = eng(v);
+      ["arrival", "departure"].forEach(function (l) { legPaths(e, l).forEach(function (sp) { h += '<path d="' + pathD(sp.pts) + '" fill="none" stroke="#56636F" stroke-width="1.2" stroke-dasharray="4 5" stroke-linecap="round"' + (dim ? ' opacity="0.25"' : "") + '/>'; }); });
+    });
+    if (selV && !ppl) {
+      // Maquette (captures d'Etienne, 2026-10-25) : trajet actif en tirets jaunes (marche arriere en pointilles
+      // magenta), l'autre en gris ; points numerotes, E / S aux bouts, etiquettes ENTRY / EXIT, arrets, SLOW.
+      var e = eng(selV), marks = "";
+      ["arrival", "departure"].forEach(function (l) {
+        var act = l === ui.leg, r = e[l], issues = ((S.diag || {})[selV.uid] || {})[l] || [];
+        legPaths(e, l).forEach(function (sp, i) {
+          var col = act ? (issues[i] ? "#FF9B54" : sp.rev ? "#F08CFF" : "#FFD166") : "#7D8A98";
+          h += '<path d="' + pathD(sp.pts) + '" fill="none" stroke="' + col + '" stroke-width="' + (sp.rev ? (act ? 3 : 1.8) : (act ? 2.2 : 1.4)) +
+            '" stroke-dasharray="' + (sp.rev ? "1 5" : act ? "7 5" : "5 5") + '" stroke-linecap="round"/>';
+          if (!act || !sp.pts.length) return;
+          var mid = sp.pts[Math.floor(sp.pts.length / 2)], ang = sp.rev ? mid.a + 180 : mid.a;
+          h += '<path d="M -4.5 2.5 L 0 -3 L 4.5 2.5" transform="translate(' + X(mid.x) + " " + Y(mid.z) + ") rotate(" + ang + ')" fill="none" stroke="' + col + '" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>';
+          if (sp.rev) marks += tag(X(mid.x) + 10, Y(mid.z) + 6, "REVERSE", "#F08CFF", "#24072A");
+        });
+        var P = poses(e, l), hd = "";  // poignees de cap dessinees apres les points : elles gagnent le clic
+        if (act) P.forEach(function (q, k) {  // poignees de cap (sauf position finale)
+          if (q.fixed) return;
+          var ni = l === "arrival" ? k : k - 1, r2 = q.h * Math.PI / 180, hx = q.x + Math.sin(r2) * 4.5, hz = q.z - Math.cos(r2) * 4.5;
+          hd += '<line x1="' + X(q.x) + '" y1="' + Y(q.z) + '" x2="' + X(hx) + '" y2="' + Y(hz) + '" stroke="rgba(255,209,102,0.55)" stroke-width="1.3"/>';
+          hd += '<circle class="hdl" data-hdl="hdg" data-node="' + ni + '" cx="' + X(hx) + '" cy="' + Y(hz) + '" r="5" fill="' + (q.manual ? "#FFD166" : "#0A0E12") + '" stroke="' + (q.manual ? "#FFD166" : "#7D8A98") + '" stroke-width="2"/>' +
+            grab('data-hdl="hdg" data-node="' + ni + '"', X(hx), Y(hz));
+        });
+        r.nodes.forEach(function (n, j) {
+          var isEnd = l === "arrival" ? j === 0 : j === r.nodes.length - 1, num = l === "arrival" ? j : j + 1, rad = act ? (isEnd ? 9 : 8) : 5;
+          h += '<g class="hdl" data-hdl="node" data-leg="' + l + '" data-node="' + j + '" style="cursor:move"><circle data-hdl="node" data-leg="' + l + '" data-node="' + j + '" cx="' + X(n.x) + '" cy="' + Y(n.z) + '" r="' + rad +
+            '" fill="' + (act && isEnd ? "#FFD166" : "#0A0E12") + '" stroke="' + (act ? "#FFD166" : "#7D8A98") + '" stroke-width="2"/>' +
+            (act ? '<text data-hdl="node" data-leg="' + l + '" data-node="' + j + '" x="' + X(n.x) + '" y="' + (Y(n.z) + 3) + '" text-anchor="middle" font-family="Consolas,monospace" font-size="9" font-weight="700" fill="' + (isEnd ? "#1A1400" : "#FFD166") + '">' + (isEnd ? (l === "arrival" ? "E" : "S") : num) + "</text>" : "") +
+            grab('data-hdl="node" data-leg="' + l + '" data-node="' + j + '"', X(n.x), Y(n.z)) + "</g>";
+          if (act && n.stop && !isEnd) marks += tag(X(n.x) + 10, Y(n.z) - 18, "\u23F1 " + n.stop + " s", "#0A0E12", "#FFD166", "#FFD166");
+        });
+        h += hd;
+        var en = l === "arrival" ? r.nodes[0] : r.nodes[r.nodes.length - 1];
+        if (en) marks += tag(X(en.x) + 12, Y(en.z) + (l === "arrival" ? -9 : 4), l === "arrival" ? "ENTRY" + (act && en.stop ? " \u23F1 " + en.stop + " s" : "") : "EXIT", act ? "#FFD166" : "#2B3644", act ? "#1A1400" : "#C3CDD8");
+      });
+      if (e.slowR > 0) {
+        h += '<circle cx="' + X(e.x) + '" cy="' + Y(e.z) + '" r="' + e.slowR * ui.scale + '" fill="rgba(255,209,102,0.05)" stroke="rgba(255,209,102,0.45)" stroke-width="1.5" stroke-dasharray="4 3"/>';
+        marks += tag(X(e.x) - 14, Y(e.z) - e.slowR * ui.scale - 14, "SLOW", "rgba(10,14,18,0.85)", "#FFD166");
+      }
+      ui.marks = marks;  // dessinees apres les vehicules
+    } else ui.marks = "";
+    // people (flows, staff, links)
+    var P2 = people();
+    P2.links.forEach(function (l) {
+      var va = vehicle(l.from), vb2 = vehicle(l.to);
+      if (!va || !vb2) return;
+      var foot = anchors(vb2, "foot")[0], side = anchors(va, "side").sort(function (p, q) { return Math.hypot(p.x - foot.x, p.z - foot.z) - Math.hypot(q.x - foot.x, q.z - foot.z); })[0];
+      h += '<line x1="' + X(side.x) + '" y1="' + Y(side.z) + '" x2="' + X(foot.x) + '" y2="' + Y(foot.z) + '" stroke="#F5C26B" stroke-width="' + (ppl ? 2 : 1) + '" stroke-dasharray="5 4" opacity="' + (ppl ? 1 : 0.5) + '"/>';
+    });
+    var fh = "", fhOn = "";  // flow handles: drawn above the vehicles, the selected flow's last (Etienne, 2026-10-27)
+    P2.flows.forEach(function (f) {
+      var pts = flowPts(f), hh = "";
+      if (!pts.length) return;
+      var src = pts[0], st = flowStairs(f), door = st ? point(st.point) : null, end = pts[pts.length - 1];
+      var on = ui.sel && ui.sel.kind === "flow" && ui.sel.id === f.id;
+      h += '<path d="' + pathD(pts) + '" fill="none" stroke="' + (st ? "#5FE0D2" : "#FF9B54") + '" stroke-width="' + (on ? 2.4 : ppl ? 1.6 : 1) + '" opacity="' + (ppl ? 1 : 0.5) + '" stroke-dasharray="' + (f.lanes === 2 ? "2 3" : "") + '"/>';
+      if (door) h += '<line x1="' + X(end.x) + '" y1="' + Y(end.z) + '" x2="' + X(door.x) + '" y2="' + Y(door.z) + '" stroke="#5FE0D2" stroke-width="1" stroke-dasharray="1 3" opacity="' + (ppl ? 0.8 : 0.4) + '"/>';
+      if (ppl && f.src && f.src.kind === "ground") hh += '<circle class="hdl" data-hdl="flow-src" data-id="' + esc(f.id) + '" cx="' + X(src.x) + '" cy="' + Y(src.z) + '" r="5" fill="#0E1217" stroke="#5FE0D2" stroke-width="1.6"/>' +
+        grab('data-hdl="flow-src" data-id="' + esc(f.id) + '"', X(src.x), Y(src.z));
+      if (ppl) (f.nodes || []).forEach(function (n, k) { hh += '<circle class="hdl" data-hdl="flow-node" data-id="' + esc(f.id) + '" data-node="' + k + '" cx="' + X(n.x) + '" cy="' + Y(n.z) + '" r="4" fill="#0E1217" stroke="#5FE0D2"/>' +
+        grab('data-hdl="flow-node" data-id="' + esc(f.id) + '" data-node="' + k + '"', X(n.x), Y(n.z)); });
+      if (on) fhOn = hh; else fh += hh;
+    });
+    // vehicles
+    vs.forEach(function (v) {
+      var draw = ui.drag && ui.drag.veh && ui.drag.veh.uid === v.uid ? ui.drag.veh : v, e = eng(draw), g = vehRect(e), c = CAT_HEX[cat(v.type)] || "#8A97A6";
+      var on = selV && selV.uid === v.uid, crit = vehIssues(v).some(function (i) { return i.lvl === "crit"; });
+      var op = ppl ? 0.16 : dim && v.uid !== dim ? 0.25 : 1;
+      h += '<g' + (ppl ? "" : ' data-veh="' + esc(v.uid) + '" style="cursor:move"') + ' opacity="' + op + '">' +  // People: clicks go through
+        poly(g.body, 'fill="' + c + '" fill-opacity="0.18" stroke="' + (crit ? "#FF5C5C" : c) + '" stroke-width="' + (on ? 2.4 : 1.4) + '"') + poly(g.cab, 'fill="' + c + '" fill-opacity="0.65" stroke="none"') + "</g>";
+      if (on && !ppl && !autoLink(v)) {
+        h += '<line x1="' + X(g.front[0]) + '" y1="' + Y(g.front[1]) + '" x2="' + X(g.handle[0]) + '" y2="' + Y(g.handle[1]) + '" stroke="#FFD166"/>';
+        h += '<circle class="hdl" data-hdl="rot" cx="' + X(g.handle[0]) + '" cy="' + Y(g.handle[1]) + '" r="5" fill="#FFD166"/>' + grab('data-hdl="rot"', X(g.handle[0]), Y(g.handle[1]));
+      }
+    });
+    h += fh + fhOn;
+    // staff on top of vehicles
+    P2.staff.forEach(function (st) {
+      var on = ui.sel && ui.sel.kind === "staff" && ui.sel.id === st.id;
+      // Heading tick (0 = towards the nose, clockwise), as for the vehicles.
+      var hr = (st.h || 0) * Math.PI / 180, tx = st.x + Math.sin(hr) * 1.2, tz = st.z - Math.cos(hr) * 1.2;
+      h += '<line x1="' + X(st.x) + '" y1="' + Y(st.z) + '" x2="' + X(tx) + '" y2="' + Y(tz) + '" stroke="#F5A3C7" stroke-width="2" opacity="' + (ppl ? 1 : 0.5) + '"/>';
+      h += '<circle class="' + (ppl ? "hdl" : "") + '" data-hdl="staff" data-id="' + esc(st.id) + '" cx="' + X(st.x) + '" cy="' + Y(st.z) + '" r="' + (on ? 7 : 5) + '" fill="rgba(245,163,199,0.25)" stroke="#F5A3C7" stroke-width="1.5" opacity="' + (ppl ? 1 : 0.5) + '"/>';
+      if (ppl) h += grab('data-hdl="staff" data-id="' + esc(st.id) + '"', X(st.x), Y(st.z));
+      // Selected: drag the end of the tick to turn him (5 degree steps), like the vehicle rotation handle.
+      if (on && ppl) h += '<circle class="hdl" data-hdl="staff-rot" data-id="' + esc(st.id) + '" cx="' + X(tx) + '" cy="' + Y(tz) + '" r="5" fill="#FFD166"/>' +
+        grab('data-hdl="staff-rot" data-id="' + esc(st.id) + '"', X(tx), Y(tz));
+    });
+    // points
+    (S.points || []).forEach(function (p) {
+      // NLG not drawn for now (Etienne, 2026-10-27); still the GPU anchor without a GPU point.
+      if (!p.exists || p.id === "NLG") return;
+      var ptab = ui.tab === "pts", on = ui.sel && ui.sel.kind === "pt" && ui.sel.id === p.id;
+      var col = p.kind === "door" ? "#6CB6FF" : p.kind === "cargo" ? "#FF9B54" : "#43D19E", x = X(p.x), y = Y(p.z), r = on ? 6 : 4.5;
+      var shape = p.kind === "door" ? '<circle cx="' + x + '" cy="' + y + '" r="' + r + '"' : p.kind === "cargo" ? '<rect x="' + (x - r) + '" y="' + (y - r) + '" width="' + 2 * r + '" height="' + 2 * r + '"' :
+        '<path d="M ' + x + " " + (y - r - 1) + " L " + (x + r + 1) + " " + y + " L " + x + " " + (y + r + 1) + " L " + (x - r - 1) + " " + y + ' Z"';
+      h += shape + ' class="' + (ptab ? "hdl" : "") + '" data-hdl="pt" data-id="' + esc(p.id) + '" fill="' + (p.src === "profile" ? "#0E1217" : col) + '" stroke="' + col + '" stroke-width="' + (on ? 2.2 : 1.4) + '"' + (p.override ? ' stroke-dasharray="2 2"' : "") + "/>";
+      if (ptab) h += grab('data-hdl="pt" data-id="' + esc(p.id) + '"', x, y);
+      h += '<text x="' + (x + 7) + '" y="' + (y - 6) + '" fill="' + col + '" font-size="10" font-family="Consolas" font-weight="600">' + esc(p.tag) + "</text>";
+    });
+    h += ui.marks || "";
+    // Play path marker
+    if (ui.play && ui.play.pos) {
+      var pp = ui.play.pos, ev = eng(ui.play.v);
+      ev.x = pp.x; ev.z = pp.z; ev.h = (pp.a + ev.nose - ev.h + 360) % 360;
+      h += poly(vehRect(ev).body, 'fill="#FFD166" fill-opacity="0.35" stroke="#FFD166" stroke-width="2"');
+    }
+    svg.innerHTML = h;
+    $("zoom").textContent = Math.round(ui.scale / fitScale() * 100) + " % · " + t("placement.ui.pan_hint");
+  }
+
+  // ---- Map interaction --------------------------------------------------------------
+  function routeOf(v, leg) { return v[leg] = v[leg] || { nodes: [], segments: [] }; }
+  svg.addEventListener("wheel", function (ev) {
+    ev.preventDefault();
+    var before = toM(ev), base = fitScale(), z = ui.scale / base;
+    z = Math.max(0.3, Math.min(2.0, z * (ev.deltaY < 0 ? 1.12 : 1 / 1.12)));
+    ui.scale = base * z;
+    var after = toM(ev);
+    ui.cx += before.x - after.x; ui.cz += before.z - after.z;  // anchored under the cursor
+    renderMap();
+  }, { passive: false });
+  // Carte deplacee au clic droit ou du milieu, ou Maj + glisser ; clic gauche dans le vide : deselection seule
+  // (Etienne, 2026-10-27 : la carte bougeait au lieu d'attraper une poignee).
+  svg.addEventListener("contextmenu", function (ev) { ev.preventDefault(); });
+  svg.addEventListener("pointerdown", function (ev) {
+    var pan = ev.button === 1 || ev.button === 2 || (ev.button === 0 && ev.shiftKey);
+    if (!S || (ev.button !== 0 && !pan)) return;
+    ev.preventDefault();  // pas de defilement automatique au clic du milieu
+    var m = toM(ev), tgt = ev.target, hdl = tgt.getAttribute("data-hdl"), vg = tgt.closest("[data-veh]");
+    svg.setPointerCapture(ev.pointerId);
+    if (pan) {
+      ui.drag = { kind: "pan", m0: { x: ev.clientX, y: ev.clientY }, cx: ui.cx, cz: ui.cz };
+      svg.classList.add("panning");
+    } else if (hdl === "rot" || hdl === "node" || hdl === "hdg") {
+      var leg = tgt.getAttribute("data-leg");
+      if (leg && leg !== ui.leg) { ui.leg = leg; renderInsp(); }  // point de l'autre trajet : il devient le trajet edite
+      ui.drag = { kind: hdl, node: +tgt.getAttribute("data-node"), veh: clone(vehicle(ui.sel.id)), m0: m };
+    } else if (hdl === "pt") {
+      selectItem("pt", tgt.getAttribute("data-id"));
+      var p = point(tgt.getAttribute("data-id"));
+      ui.drag = { kind: "pt", id: p.id, x: p.x, z: p.z, m0: m, x0: p.x, z0: p.z };
+    } else if (hdl === "staff" || hdl === "staff-rot" || hdl === "flow-src" || hdl === "flow-node") {
+      var id = tgt.getAttribute("data-id");
+      selectItem(hdl === "flow-src" || hdl === "flow-node" ? "flow" : "staff", id);
+      ui.drag = { kind: hdl, id: id, node: +tgt.getAttribute("data-node"), ppl: clone(people()), m0: m };
+    } else if (vg && ui.tab !== "ppl") {
+      var uid = vg.getAttribute("data-veh");
+      selectItem("veh", uid);
+      var v = clone(vehicle(uid));
+      if (!autoLink(v)) ui.drag = { kind: "veh", veh: v, m0: m, x0: v.pos.x, z0: v.pos.z };
+    } else if (ui.sel) {
+      ui.sel = null;
+      renderList(); renderInsp(); renderMap();
+    }
+  });
+  svg.addEventListener("pointermove", function (ev) {
+    var d = ui.drag;
+    if (!d) return;
+    var m = toM(ev);
+    if (d.kind === "pan") { ui.cx = d.cx - (ev.clientX - d.m0.x) / ui.scale; ui.cz = d.cz - (ev.clientY - d.m0.y) / ui.scale; renderMap(); return; }
+    d.moved = true;
+    if (d.kind === "veh") { d.veh.pos.x = snap(d.x0 + m.x - d.m0.x, 0.5); d.veh.pos.z = snap(d.z0 + m.z - d.m0.z, 0.5); }
+    else if (d.kind === "rot") { var hh = Math.atan2(m.x - d.veh.pos.x, -(m.z - d.veh.pos.z)) * 180 / Math.PI; d.veh.pos.h = (snap(hh, 5) + 360) % 360; }
+    else if (d.kind === "node") { var n = routeOf(d.veh, ui.leg).nodes[d.node]; n.x = snap(m.x, 0.5); n.z = snap(m.z, 0.5); }
+    else if (d.kind === "hdg") { var n2 = routeOf(d.veh, ui.leg).nodes[d.node]; n2.hdg = (snap(Math.atan2(m.x - n2.x, -(m.z - n2.z)) * 180 / Math.PI, 5) + 360) % 360; }
+    else if (d.kind === "pt") { d.x = snap(d.x0 + m.x - d.m0.x, 0.1); d.z = snap(d.z0 + m.z - d.m0.z, 0.1); var p = point(d.id); p.x = d.x; p.z = d.z; var tw = point(p.mirror_of || p.mirrored_by); if (tw) { tw.x = -d.x; tw.z = d.z; } }
+    else if (d.kind === "staff") { var st = d.ppl.staff.filter(function (s) { return s.id === d.id; })[0]; st.x = snap(m.x, 0.5); st.z = snap(m.z, 0.5); setPeopleLocal(d.ppl); }
+    else if (d.kind === "staff-rot") { var sr = d.ppl.staff.filter(function (s) { return s.id === d.id; })[0]; sr.h = (snap(Math.atan2(m.x - sr.x, -(m.z - sr.z)) * 180 / Math.PI, 5) + 360) % 360; setPeopleLocal(d.ppl); }
+    else if (d.kind === "flow-src") { var f = d.ppl.flows.filter(function (s) { return s.id === d.id; })[0]; f.src.x = snap(m.x, 0.5); f.src.z = snap(m.z, 0.5); setPeopleLocal(d.ppl); }
+    else if (d.kind === "flow-node") { var f2 = d.ppl.flows.filter(function (s) { return s.id === d.id; })[0]; f2.nodes[d.node] = { x: snap(m.x, 0.5), z: snap(m.z, 0.5) }; setPeopleLocal(d.ppl); }
+    renderMap();
+  });
+  function endDrag() {
+    var d = ui.drag;
+    ui.drag = null;
+    svg.classList.remove("panning");
+    if (!d || !d.moved) { renderMap(); return; }
+    if (d.kind === "veh" || d.kind === "rot" || d.kind === "node" || d.kind === "hdg") {
+      var arg = { uid: d.veh.uid, pos: d.veh.pos };
+      arg[ui.leg] = d.veh[ui.leg];
+      setVehicleLocal(d.veh);
+      action("vehicle_update", arg);
+    } else if (d.kind === "pt") {
+      var p = point(d.id);
+      action(p.src === "acf" ? "point_override" : "point_update", { id: d.id, x: d.x, z: d.z });
+    } else if (d.ppl) {
+      action("people_update", { people: d.ppl });
+    }
+    renderAll();
+  }
+  svg.addEventListener("pointerup", endDrag);
+  svg.addEventListener("pointercancel", endDrag);
+  // Local echo until the plugin answers (no flicker at the end of a gesture).
+  function setVehicleLocal(v) { var list = vehicles(); for (var i = 0; i < list.length; i++) if (list[i].uid === v.uid) list[i] = v; }
+  function setPeopleLocal(p) { var pr = profile(); pr.people = pr.people || {}; pr.people[S.config] = p; }
+
+  // ---- Play path (exception to the no-animation rule, spec 12.4, x4) ---------------
+  function play() {
+    if (ui.play) { ui.play = null; renderAll(); return; }
+    var v = vehicle(ui.sel.id), r = run(eng(v), ui.leg);
+    if (!r.pts.length) return;
+    ui.play = { v: v, r: r, t0: performance.now(), pos: r.pts[0] };
+    (function frame() {
+      if (!ui.play) return;
+      var tt = (performance.now() - ui.play.t0) / 1000 * 4, pts = ui.play.r.pts, i = 1;
+      while (i < pts.length && pts[i].time < tt) i++;
+      if (i >= pts.length) { ui.play = null; renderAll(); return; }
+      var a = pts[i - 1], b = pts[i], f = b.time > a.time ? (tt - a.time) / (b.time - a.time) : 1;
+      ui.play.pos = { x: a.x + (b.x - a.x) * f, z: a.z + (b.z - a.z) * f, a: a.a + wrap180(b.a - a.a) * f };
+      renderMap();
+      requestAnimationFrame(frame);
+    })();
+    renderInsp();
+  }
+
+  // ---- Selection, clicks, fields -----------------------------------------------------
+  function selectItem(kind, id) { ui.sel = { kind: kind, id: id }; renderList(); renderInsp(); }
+  document.addEventListener("click", function (ev) {
+    var b = ev.target.closest("button, [data-act], [data-sel]");
+    if (!b) return;
+    var act = b.getAttribute("data-act"), selk = b.getAttribute("data-sel");
+    if (act === "eye") { ev.stopPropagation(); var vv = vehicle(b.getAttribute("data-id")); action("vehicle_update", { uid: vv.uid, hidden: !vv.hidden }); return; }
+    if (selk) { selectItem(selk, b.getAttribute("data-id")); renderMap(); return; }
+    if (b.dataset.cfg) { ui.sel = null; action("set_config", { config: b.dataset.cfg }); return; }
+    if (b.dataset.tab) { ui.tab = b.dataset.tab; ui.sel = null; keep(); renderAll(); return; }
+    if (b.dataset.leg) { ui.leg = b.dataset.leg; renderInsp(); renderMap(); return; }
+    var v = ui.sel && ui.sel.kind === "veh" ? vehicle(ui.sel.id) : null;
+    switch (act) {
+      case "all-hidden": action("vehicles_hidden", { hidden: b.dataset.v === "1" }); break;
+      case "add": openAddVehicle(b.dataset.cat); break;
+      case "add-point": action("point_add", { label: t("placement.ui.new_point"), tag: "P", kind: "door", x: -2, z: 10 }); ui.tab = "pts"; break;
+      case "seg-dir": var rt = clone(routeOf(v, ui.leg)); rt.segments[+b.dataset.seg].reverse = b.dataset.rev === "1"; updRoute(v, rt); break;
+      case "node-hdg":
+        var rh = clone(routeOf(v, ui.leg)), ni = +b.dataset.node, nh = rh.nodes[ni];
+        if (typeof nh.hdg === "number") delete nh.hdg; else nh.hdg = Math.round(poses(eng(v), ui.leg)[ui.leg === "arrival" ? ni : ni + 1].h);
+        updRoute(v, rh); break;
+      case "seg-insert": insertNode(v, +b.dataset.seg); break;
+      case "node-del": var rd = clone(routeOf(v, ui.leg)); rd.nodes.splice(+b.dataset.node, 1); rd.segments.splice(Math.min(+b.dataset.node, rd.segments.length - 1), 1); updRoute(v, rd); break;
+      case "play": play(); break;
+      case "test-veh": action("preview_phase", { phase: "vehicle:" + v.uid }); break;
+      case "replace-ends": replaceEnds(v); break;
+      case "mirror": action("vehicle_mirror", { uid: v.uid }); break;
+      case "reset": action("vehicle_reset", { uid: v.uid }); break;
+      case "replace": openReplace(v); break;
+      case "delete": action("vehicle_delete", { uid: v.uid }); ui.sel = null; break;
+      case "confirm": action("vehicle_update", { uid: v.uid, flag: null }); break;
+      case "pt-revert": action("point_revert", { id: ui.sel.id }); break;
+      case "pt-mirror": action("point_mirror", { id: ui.sel.id }); break;
+      case "pt-delete": action("point_delete", { id: ui.sel.id }); ui.sel = null; break;
+      case "add-flow": addFlow(); break;
+      case "fnode-del": case "fnode-ins":
+        var P3 = clone(people()), f3 = P3.flows.filter(function (x) { return x.id === ui.sel.id; })[0];
+        f3.nodes = f3.nodes || [];
+        if (act === "fnode-del") f3.nodes.splice(+b.dataset.fnode, 1);
+        else { var q3 = flowPts(f3), k3 = +b.dataset.fseg; f3.nodes.splice(k3, 0, { x: Math.round(q3[k3].x + q3[k3 + 1].x) / 2, z: Math.round(q3[k3].z + q3[k3 + 1].z) / 2 }); }
+        action("people_update", { people: P3 });
+        break;
+      case "add-staff": addStaff(); break;
+      case "ppl-del": var P2 = clone(people()); ["flows", "staff", "links"].forEach(function (k) { P2[k] = P2[k].filter(function (x) { return x.id !== ui.sel.id; }); }); action("people_update", { people: P2 }); ui.sel = null; break;
+      case "type-tile": pickTile(b.dataset.type); break;
+      case "dlg-cancel": closeDialog(); break;
+      case "dlg-ok": dialogOk(); break;
+      default: break;
+    }
+  });
+  function updRoute(v, r) { var arg = { uid: v.uid }; arg[ui.leg] = r; action("vehicle_update", arg); }
+  function insertNode(v, seg) {
+    var e = eng(v), sp = legPaths(e, ui.leg)[seg], mid = sp ? sp.pts[Math.floor(sp.pts.length / 2)] : { x: v.pos.x, z: v.pos.z };
+    var r = clone(routeOf(v, ui.leg)), at = ui.leg === "arrival" ? seg + 1 : seg;
+    r.nodes.splice(at, 0, { x: Math.round(mid.x * 2) / 2, z: Math.round(mid.z * 2) / 2 });
+    r.segments.splice(seg, 0, { reverse: !!(r.segments[seg] && r.segments[seg].reverse) });
+    updRoute(v, r);
+  }
+  // Re-place entry / exit: defaults of spec 8.4 from the current position (plugin: vehicle_reset keeps the
+  // position? no - it re-places the vehicle; here only the routes are rebuilt).
+  function replaceEnds(v) {
+    var side = v.pos.x < 0 ? -1 : 1, arg = { uid: v.uid };
+    arg.arrival = { nodes: [{ x: Math.round(v.pos.x + side * 30), z: Math.round(v.pos.z - 20) }], segments: [{ reverse: false }] };
+    arg.departure = { nodes: [{ x: Math.round(v.pos.x + side * 30), z: Math.round(v.pos.z + 20) }], segments: [{ reverse: false }] };
+    action("vehicle_update", arg);
+  }
+  document.addEventListener("change", function (ev) {
+    var el = ev.target;
+    if (el.id === "prof") { if (el.value) action("open_profile", { file: el.value }); return; }
+    if (el.id === "reuse") { if (el.value) action("reuse_config", { from: el.value }); el.value = ""; return; }
+    if (el.id === "prev-phase") { if (el.value) action("preview_phase", { phase: el.value }); return; }
+    var v = ui.sel && ui.sel.kind === "veh" ? vehicle(ui.sel.id) : null;
+    var f = el.getAttribute("data-f"), nf = el.getAttribute("data-nf"), pf = el.getAttribute("data-pf");
+    var ff = el.getAttribute("data-ff"), sf = el.getAttribute("data-sf"), fn = el.getAttribute("data-fn");
+    var num = parseFloat(String(el.value).replace(",", "."));
+    if (v && f) {
+      if (f === "point") return action("vehicle_update", { uid: v.uid, point: el.value });
+      if (isNaN(num)) return renderInsp();
+      if (f === "x" || f === "z" || f === "h") { var pos = clone(v.pos); pos[f] = f === "h" ? ((num % 360) + 360) % 360 : num; return action("vehicle_update", { uid: v.uid, pos: pos }); }
+      if (f === "carts") return action("vehicle_update", { uid: v.uid, max_carts: num });
+      if (f === "lift") return action("vehicle_update", { uid: v.uid, lift_m: Math.max(0, Math.min((catalog(v.type) || {}).lift_max || 8, num)) });
+      var slow = clone(v.slow || { radius_m: 6, speed_pct: 30 });
+      if (f === "slowR") slow.radius_m = Math.max(0, num); else slow.speed_pct = Math.max(5, Math.min(100, num));
+      return action("vehicle_update", { uid: v.uid, slow: slow });
+    }
+    if (v && el.getAttribute("data-ns")) {
+      var rs = clone(routeOf(v, ui.leg)), ns = rs.nodes[+el.getAttribute("data-node")];
+      if (+el.value) ns.stop_s = +el.value; else delete ns.stop_s;
+      return updRoute(v, rs);
+    }
+    if (v && nf) {
+      var r = clone(routeOf(v, ui.leg)), n = r.nodes[+el.getAttribute("data-node")];
+      if (!isNaN(num)) n[nf] = num;
+      return updRoute(v, r);
+    }
+    if (pf && ui.sel && ui.sel.kind === "pt") {
+      var p = point(ui.sel.id), arg = { id: p.id };
+      if (pf === "x" || pf === "z") { if (isNaN(num)) return renderInsp(); arg.x = pf === "x" ? num : p.x; arg.z = pf === "z" ? num : p.z; return action(p.src === "acf" ? "point_override" : "point_update", arg); }
+      arg[pf] = el.value;
+      return action("point_update", arg);
+    }
+    if (ff || sf || fn !== null) {
+      var P = clone(people());
+      if (fn !== null) {
+        if (isNaN(num)) return renderInsp();
+        var fw = P.flows.filter(function (x) { return x.id === ui.sel.id; })[0];
+        fw.nodes[+fn][el.getAttribute("data-fnf")] = num;
+      } else if (ff) {
+        var fl = P.flows.filter(function (x) { return x.id === ui.sel.id; })[0];
+        var fe = flowEnd(fl) || { x: 0, z: 0 };
+        if (ff === "sx" || ff === "sz") {
+          if (isNaN(num)) return renderInsp();
+          var s0 = flowSrc(fl);
+          fl.src.x = ff === "sx" ? num : s0.x;
+          fl.src.z = ff === "sz" ? num : s0.z;
+        } else if (ff === "src") fl.src = el.value === "ground" ? { kind: "ground", x: fe.x - 15, z: fe.z } : { kind: "bus", uid: el.value };
+        else if (ff === "stairs") { var sv = vehicle(el.value); if (sv) { fl.stairs = sv.uid; fl.door = sv.point; } }
+        else if (ff === "lanes") fl.lanes = +el.value; else fl[ff] = el.value;
+      } else if (sf) {
+        var st = P.staff.filter(function (x) { return x.id === ui.sel.id; })[0];
+        if (sf === "type") st.type = el.value; else if (!isNaN(num)) st[sf] = num;
+      }
+      return action("people_update", { people: P });
+    }
+  });
+  function newId(prefix, list) { var i = 1; while (list.some(function (x) { return x.id === prefix + i; })) i++; return prefix + i; }
+  function addFlow() {
+    var P = clone(people()), doors = (S.points || []).filter(function (p) { return p.kind === "door" && p.exists; });
+    var used = P.flows.map(function (f) { var s = flowStairs(f); return s && s.uid; });
+    var stairs = vehicles().filter(isStairs), st = stairs.filter(function (v) { return used.indexOf(v.uid) < 0; })[0] || stairs[0];
+    if (!st && !doors.length) return;
+    var bus = vehicles().filter(function (v) { return v.type === "bus"; })[0], end = st ? stairsFoot(st) : { x: doors[0].x, z: doors[0].z };
+    var f = { id: newId("f", P.flows), src: bus ? { kind: "bus", uid: bus.uid } : { kind: "ground", x: end.x - 15, z: end.z }, door: st ? st.point : doors[0].id, dir: "both", lanes: 1, nodes: [] };
+    if (st) f.stairs = st.uid;
+    P.flows.push(f);
+    action("people_update", { people: P });
+    ui.sel = { kind: "flow", id: f.id };
+  }
+  function addStaff() {
+    var P = clone(people()), s = { id: newId("s", P.staff), type: "ramp", x: -8, z: 2, h: 90 };
+    P.staff.push(s);
+    action("people_update", { people: P });
+    ui.sel = { kind: "staff", id: s.id };
+  }
+
+  // ---- Dialogs -----------------------------------------------------------------------
+  function openDialog(kind, html) { ui.dialog = kind; $("dlg").innerHTML = html + '<div class="acts"><button class="btn" data-act="dlg-cancel">' + esc(t("placement.ui.cancel")) + '</button><button class="btn primary" data-act="dlg-ok">' + esc(t("placement.ui.ok")) + "</button></div>"; $("ovl").hidden = false; }
+  function closeDialog() { ui.dialog = null; $("ovl").hidden = true; }
+  // New profile (Etienne, 2026-10-22): blank (aircraft points only, nothing else) or from an existing profile.
+  // Name asked after the source and following it until the user edits it (Etienne, 2026-10-27).
+  function openNew(from) {
+    var all = S.all_profiles || [];
+    from = from && all.length;
+    var opts = all.map(function (p) {
+      return '<option value="' + esc(p.file) + '"' + (p.file === S.file ? " selected" : "") + ">" + esc((p.name || p.file) + " · " + p.icao + (p.same_aircraft ? " · " + t("placement.ui.this_aircraft") : "")) + "</option>";
+    }).join("");
+    openDialog("new", "<h2>" + esc(t("placement.ui.new_profile")) + "</h2>" +
+      '<label class="chk"><input type="radio" name="d-start" id="d-blank"' + (from ? "" : " checked") + "> " + esc(t("placement.ui.new_blank")) + "</label>" +
+      '<span class="hint">' + esc(t("placement.ui.new_blank_d")) + "</span>" +
+      '<label class="chk"><input type="radio" name="d-start" id="d-from"' + (all.length ? "" : " disabled") + (from ? " checked" : "") + "> " + esc(t("placement.ui.new_from")) + "</label>" +
+      (all.length ? '<select class="sel" id="d-src">' + opts + "</select>" +
+        '<label class="chk"><input type="checkbox" id="d-realign" checked> ' + esc(t("placement.ui.realign")) + '</label><label class="chk"><input type="checkbox" id="d-routes" checked> ' + esc(t("placement.ui.copy_routes")) + "</label>" : "") +
+      '<label class="col"><span class="lab">' + esc(t("placement.ui.profile_name")) + '</span><input class="inp wide" id="d-name"></label>' +
+      '<span class="hint">' + esc(t("placement.ui.new_hint")) + "</span>");
+    var edited = false;
+    function suggest() {
+      if (edited) return;
+      var src = $("d-from").checked && $("d-src") ? all.filter(function (p) { return p.file === $("d-src").value; })[0] : null;
+      $("d-name").value = src ? (src.name || src.file) + " — " + t("placement.ui.copy_suffix") : S.aircraft.icao + " — " + t("placement.ui.default_name");
+    }
+    $("d-name").addEventListener("input", function () { edited = true; });
+    $("d-blank").addEventListener("change", suggest);
+    $("d-from").addEventListener("change", suggest);
+    if ($("d-src")) $("d-src").addEventListener("change", function () { $("d-from").checked = true; suggest(); });
+    suggest();
+  }
+  function openRename() {
+    openDialog("rename", "<h2>" + esc(t("placement.ui.rename")) + '</h2><label class="col"><span class="lab">' + esc(t("placement.ui.profile_name")) + '</span><input class="inp wide" id="d-name" value="' + esc(profile().meta && profile().meta.name || "") + '"></label>');
+    $("d-name").select();
+  }
+  // Choix du type en tuiles par categorie (Etienne, 2026-10-26 : la liste deroulante n'etait pas lisible).
+  // Valeur dans le champ cache d-type ; first = categorie affichee en premier.
+  function typeTiles(types, first) {
+    var cats = CATS.filter(function (c) { return types.some(function (x) { return x.category === c; }); });
+    cats.sort(function (a, b) { return (a === first ? 0 : 1) - (b === first ? 0 : 1); });
+    return '<input type="hidden" id="d-type" value="' + esc(types.length ? types.filter(function (x) { return x.category === cats[0]; })[0].type : "") + '">' + cats.map(function (c) {
+      return (cats.length > 1 ? '<span class="lab" style="color:' + CAT_COLOR[c] + '">' + esc(t("placement.cat." + c)) + "</span>" : "") + '<div class="tiles">' +
+        types.filter(function (x) { return x.category === c; }).map(function (x) {
+          return '<button class="tile" data-act="type-tile" data-type="' + x.type + '"><i style="background:' + CAT_HEX[c] + '"></i><span>' + esc(typeName(x.type)) +
+            '<span class="sub">' + f1(x.L) + " m</span></span></button>";
+        }).join("") + "</div>";
+    }).join("");
+  }
+  function pickTile(ty) {
+    $("d-type").value = ty;
+    document.querySelectorAll("#dlg .tile").forEach(function (b) { b.classList.toggle("on", b.dataset.type === ty); });
+    if (ui.onType) ui.onType(ty);
+  }
+  function openAddVehicle(c) {
+    var types = (S.catalog || []).filter(function (x) { return x.category === c; });
+    var pts = (S.points || []).filter(function (p) { return p.exists; });
+    openDialog("add", "<h2>" + esc(t("placement.ui.add_vehicle")) + " · " + esc(t("placement.cat." + c)) + '</h2><div class="col"><span class="lab">' + esc(t("placement.ui.type")) + "</span>" +
+      typeTiles(types, c) + '</div><label class="col"><span class="lab">' + esc(t("placement.ui.served_point")) + '</span><select class="sel" id="d-point">' +
+      pts.map(function (p) { return '<option value="' + esc(p.id) + '">' + esc(p.tag + " · " + p.label) + "</option>"; }).join("") + '</select></label><span class="hint">' + esc(t("placement.ui.add_hint")) + "</span>");
+    // Points of the type only (Etienne, 2026-10-27): holds for cargo, service points for fuel and GPU, doors
+    // otherwise (water and lavatory: service points or doors, the .acf has no panel for them). Point proposed for
+    // the type (the fuel truck went to L1 by default, seen in sim on 2026-10-22).
+    ui.onType = function (ty) {
+      var want = ty === "fuel" || ty === "fuel_small" ? "FUEL" : ty === "gpu" ? "NLG" : null;
+      var kinds = ["belt", "belt_manual", "loader", "bagcart", "uld"].indexOf(ty) >= 0 ? ["cargo"] : want ? ["svc"] : ty === "water" || ty === "lav" ? ["svc", "door"] : ["door"];
+      var fuel = ty === "fuel" || ty === "fuel_small";
+      // fuel: FUEL / FUEL2 ; GPU: the other aircraft service points (GPU, NLG) ; water, lavatory: service points
+      // added to the profile (their panels).
+      var ok = pts.filter(function (q) {
+        if (kinds.indexOf(q.kind) < 0) return false;
+        if (q.kind !== "svc") return true;
+        return want ? /^FUEL/.test(q.id) === fuel : q.src === "profile";
+      });
+      $("d-point").innerHTML = ok.map(function (p) { return '<option value="' + esc(p.id) + '">' + esc(p.tag + " · " + p.label) + "</option>"; }).join("");
+      var p = ok.filter(function (q) { return q.id === want; })[0] || ok.filter(function (q) { return q.kind === kinds[kinds.length - 1]; })[0] || ok[0];
+      if (p) $("d-point").value = p.id;
+    };
+    pickTile($("d-type").value);
+  }
+  function openReplace(v) {
+    var others = (S.catalog || []).filter(function (x) { return x.type !== v.type; });
+    ui.onType = null;
+    openDialog("replace", "<h2>" + esc(t("placement.ui.replace_model")) + "</h2>" + typeTiles(others, cat(v.type)) +
+      '<span class="hint">' + esc(t("placement.ui.replace_hint")) + "</span>");
+    pickTile($("d-type").value);
+  }
+  function dialogOk() {
+    var k = ui.dialog;
+    if (k === "new" && $("d-from").checked && $("d-src")) action("copy_from", { file: $("d-src").value, name: $("d-name").value.trim() || "Profile", realign: $("d-realign").checked, copy_routes: $("d-routes").checked });
+    else if (k === "rename") { if ($("d-name").value.trim()) action("rename", { name: $("d-name").value.trim() }); }
+    else if (k === "new") action("new_profile", { name: $("d-name").value.trim() || "Profile" });
+    else if (k === "add") action("vehicle_add", { type: $("d-type").value, point: $("d-point").value });
+    else if (k === "replace") action("vehicle_replace", { uid: ui.sel.id, type: $("d-type").value });
+    closeDialog();
+  }
+
+  // ---- Buttons ---------------------------------------------------------------------
+  $("b-close").addEventListener("click", function () { win("close"); });
+  $("b-check").addEventListener("click", function () { ui.sel = null; renderList(); renderInsp(); });
+  $("b-undo").addEventListener("click", function () { action("undo"); });
+  $("b-redo").addEventListener("click", function () { action("redo"); });
+  $("b-save").addEventListener("click", function () { action("save"); });
+  $("b-new").addEventListener("click", function () { openNew(); });
+  $("b-rename").addEventListener("click", openRename);
+  $("b-empty-new").addEventListener("click", function () { openNew(); });
+  $("b-empty-copy").addEventListener("click", function () { openNew(true); });
+  $("b-prev-stop").addEventListener("click", function () { action("preview_stop"); });
+  $("b-paths").addEventListener("click", function () { ui.paths = !ui.paths; keep(); renderAll(); });
+  $("b-snap").addEventListener("click", function () { ui.snap = !ui.snap; keep(); renderAll(); });
+  $("b-recenter").addEventListener("click", function () { recenter(); renderMap(); });
+  window.addEventListener("resize", function () { renderMap(); });
+
+  // ---- Window: drag by the top bar, keyboard hand-back (as the main window) --------
+  var dragging = false;
+  $("top").addEventListener("mousedown", function (e) { if (e.button !== 0 || e.target.closest("button")) return; e.preventDefault(); dragging = true; win("drag"); });
+  function drop() { if (dragging) { dragging = false; win("drop"); } }
+  document.addEventListener("mouseup", drop);
+  document.addEventListener("mousemove", function (e) { if (dragging && !(e.buttons & 1)) drop(); });
+  window.addEventListener("blur", drop);
+  function typingField(el) { return el && el.matches && el.matches("input:not([type=checkbox]), textarea"); }
+  document.addEventListener("focusin", function (e) { if (typingField(e.target)) win("typing", 1); });
+  document.addEventListener("focusout", function (e) { if (typingField(e.target)) win("typing", 0); });
+  document.addEventListener("mouseup", function (e) { if (e.button === 0 && !typingField(e.target) && !e.target.closest("select")) win("release"); });
+  document.addEventListener("keydown", function (e) {
+    if (typingField(e.target)) { if (e.key === "Enter") e.target.blur(); return; }
+    if (e.ctrlKey && e.key === "z") action("undo");
+    if (e.ctrlKey && (e.key === "y" || (e.shiftKey && e.key === "Z"))) action("redo");
+  });
+
+  // ---- Entry points --------------------------------------------------------------------
+  function renderAll() {
+    if (!S) return;
+    renderBar(); renderConfigs(); renderList(); renderInsp(); renderStatus(); renderMap();
+    $("b-paths").className = "btn small" + (ui.paths ? " on" : "");
+    $("b-snap").className = "btn small" + (ui.snap ? " on" : "");
+  }
+  slm.onLang = function (dict) { L = dict || {}; applyLang(); renderAll(); };
+  slm.onLangs = function () {};
+  slm.onState = function (st) {
+    var firstAircraft = !S || S.aircraft.acf_file !== st.aircraft.acf_file;
+    if (ui.drag) { version = -1; return; }  // never replace the state under a gesture; asked again next poll
+    S = st;
+    var m = S.message;
+    if (m && m.key === "placement.msg.added" && m.vars && m.vars.uid && ui.placed !== m.vars.uid) {
+      ui.sel = { kind: "veh", id: m.vars.uid };
+      ui.placed = m.vars.uid;  // le message reste dans l'etat : selectionne une seule fois
+    }
+    if (ui.sel && ui.sel.kind === "veh" && !vehicle(ui.sel.id)) ui.sel = null;
+    if (firstAircraft) recenter();
+    if (document.activeElement && typingField(document.activeElement)) { renderBar(); renderConfigs(); renderList(); renderStatus(); renderMap(); return; }  // don't fight the user's typing
+    renderAll();
+  };
+  applyLang();
+})();
+</script>
+</body>
+</html>
