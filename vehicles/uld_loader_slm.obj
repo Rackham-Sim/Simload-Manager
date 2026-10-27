@@ -10362,8 +10362,10 @@ TRIS 8952 8160
 ANIM_end
 ANIM_begin
 ANIM_trans_begin SimLoadManager/anim/platform_height
+ANIM_trans_key 0 0 0 0
 ANIM_trans_key 1.305 0 0 0
 ANIM_trans_key 1.445 0 -0.170 0
+ANIM_trans_key 5.500 0 -0.170 0
 ANIM_trans_end
 TRIS 17112 288
 ANIM_end
@@ -10669,8 +10671,10 @@ TRIS 21258 600
 ANIM_end
 ANIM_begin
 ANIM_trans_begin SimLoadManager/anim/platform_height
+ANIM_trans_key 0 0 0 0
 ANIM_trans_key 1.305 0 0 0
 ANIM_trans_key 1.445 0 -0.170 0
+ANIM_trans_key 5.500 0 -0.170 0
 ANIM_trans_end
 TRIS 21858 288
 ANIM_end

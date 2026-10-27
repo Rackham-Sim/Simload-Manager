@@ -653,6 +653,7 @@ slm_no_chocks             = false   -- SLM never places chocks (independent of s
 slm_bpb_remove_chocks     = false   -- with slm_manual_chocks: remove chocks when BetterPushback starts (#SL05)
 slm_gpu_enabled           = true    -- ground power handling (#SL40)
 slm_gpu_xcrafts           = true    -- off: the X-Crafts E-Jets GPU is left to the user
+slm_default_location      = "remote"  -- stand preselected when the script loads: "remote", "terminal", "jetway" (#SL51)
 slm_people_detail         = "full"  -- characters on foot: "full", "reduced" (40 at once), "minimal" (15), read by the plugin (SLM 6.0)
 slm_lc_cleaning_required  = false
 slm_boarding_music_enabled = false
@@ -1205,6 +1206,9 @@ function load_user_settings()
                 slm_gpu_enabled = (value == "true")
             elseif key == "slm_gpu_xcrafts" then
                 slm_gpu_xcrafts = (value == "true")
+            elseif key == "slm_default_location" then
+                if value == "terminal" or value == "jetway" then slm_default_location = value else slm_default_location = "remote" end
+                selected_location_group = slm_default_location
             elseif key == "slm_people_detail" then
                 if value == "reduced" or value == "minimal" then slm_people_detail = value else slm_people_detail = "full" end
             elseif key == "slm_boarding_music_enabled" then
@@ -1297,6 +1301,7 @@ function save_user_settings()
         file:write("slm_bpb_remove_chocks=" .. tostring(slm_bpb_remove_chocks) .. "\n")
         file:write("slm_gpu_enabled=" .. tostring(slm_gpu_enabled) .. "\n")
         file:write("slm_gpu_xcrafts=" .. tostring(slm_gpu_xcrafts) .. "\n")
+        file:write("slm_default_location=" .. tostring(slm_default_location) .. "\n")
         file:write("slm_people_detail=" .. tostring(slm_people_detail) .. "\n")
         file:write("slm_boarding_music_enabled=" .. tostring(slm_boarding_music_enabled) .. "\n")
         file:write("slm_boarding_music_vol=" .. tostring(slm_boarding_music_vol or 0.5) .. "\n")
@@ -1609,6 +1614,9 @@ function slm_pax_interval(base, variation)
     return math.max(0.2, base + (math.random() * 2 - 1) * (variation or 0)) / slm_door_factor()
 end
 
+-- LuaJIT starts with a fixed seed and the script is reloaded with every aircraft: without this,
+-- every flight replays the same draws (events, no-shows, timings).
+math.randomseed(os.time())
 
 load_user_settings()
 slm_init_boarding_music()
@@ -2587,6 +2595,8 @@ function manage_disembark()
         -- Passengers wait for the stairs set against the door and the bus (SLM 6.0)
         if pax_hold or not start_disembarkation_pax_delay or now < start_disembarkation_pax_delay
            or slm_vehicles_waiting("pax") then
+            -- Next bus of the rotation awaited (#SL52): no catch-up burst once it is there
+            if pax_unload_started then pax_unload_start_time = now end
         else
             if not pax_unload_started then
                 pax_unload_started = true
@@ -4714,7 +4724,8 @@ function reset_loads()
 	for _, k in ipairs({ "arrival", "deboarding", "refuelling", "catering", "cleaning", "boarding", "departure" }) do
 		slm_vehicles_phase(k, false)
 	end
-	slm_set_chocks(false)
+	-- Chocks options: the user removes them (manual) or SLM never touches them (#SL50)
+	if not (slm_manual_chocks or slm_no_chocks) then slm_set_chocks(false) end
 	bus_triggered = false
 	simbrief_data_loaded = false
 	loadsheet_ready = false
@@ -5935,6 +5946,12 @@ do
     slm_setting_def("gpu_xcrafts",
         function() return slm_gpu_xcrafts end,
         function(v) slm_gpu_xcrafts = v; save_user_settings() end)
+    slm_setting_def("default_location",
+        function() return slm_default_location end,
+        function(v)
+            if v == "terminal" or v == "jetway" then slm_default_location = v else slm_default_location = "remote" end
+            save_user_settings()
+        end)
     slm_setting_def("people_detail",
         function() return slm_people_detail end,
         function(v)

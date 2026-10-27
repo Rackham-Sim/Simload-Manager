@@ -566,7 +566,7 @@ label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tex
   }
   // Passenger flows end at the foot of their stairs / ambulift (Etienne, 2026-10-22): f.stairs = vehicle uid,
   // f.door kept as that vehicle's point (older profiles: stairs found from the door).
-  function isStairs(v) { return v && (v.type === "stairs" || v.type === "pmr" || v.type === "own_stairs"); }
+  function isStairs(v) { return v && (v.type === "stairs" || v.type === "own_stairs"); }  // pas le PMR : reserve a son evenement
   function flowStairs(f) {
     var s = f.stairs ? vehicle(f.stairs) : null;
     if (isStairs(s)) return s;
