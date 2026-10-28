@@ -491,6 +491,7 @@ select{font:inherit;font-size:12.5px;padding:5px;border-radius:6px;border:1px so
           <span class="label" data-i18n="dev.title"></span>
           <button class="btn small" data-act="dev_cycle" id="dev-cycle"></button>
           <button class="btn small" data-act="dev_force_load" id="dev-force-load"></button>
+          <button class="btn small" data-act="dev_test_acars" id="dev-test-acars" data-i18n="dev.test_acars"></button>
           <select id="dev-ev"></select>
           <button class="btn small" id="dev-force" data-i18n="dev.force"></button>
         </div>
@@ -594,6 +595,7 @@ select{font:inherit;font-size:12.5px;padding:5px;border-radius:6px;border:1px so
                 <th data-i18n="set.preset.realistic"></th><th data-i18n="set.preset.fast"></th><th data-i18n="set.preset.veryfast"></th></tr></thead>
               <tbody id="tim-rows"></tbody>
             </table>
+            <div class="d" data-i18n="set.tim.doors"></div>
             <div class="set-row"><div><div class="h" data-i18n="set.event_factor"></div><div class="d" id="ef-d"></div></div>
               <div class="rng"><input type="range" min="0.1" max="1" step="0.01" data-set="custom_event_duration_factor"><span class="mono" data-out="custom_event_duration_factor"></span></div></div>
           </div>
@@ -626,6 +628,10 @@ select{font:inherit;font-size:12.5px;padding:5px;border-radius:6px;border:1px so
           <div class="set-row" id="row-hoppie-type"><div><div class="h" data-i18n="set.hoppie_type"></div><div class="d" data-i18n="set.hoppie_type.d"></div></div>
             <div class="seg" data-key="hoppie_msgtype">
               <button data-val="telex" data-i18n="set.hoppie_type.telex"></button><button data-val="cpdlc" data-i18n="set.hoppie_type.cpdlc"></button>
+            </div></div>
+          <div class="set-row" id="row-acars-cs"><div><div class="h" data-i18n="set.acars_cs"></div><div class="d" data-i18n="set.acars_cs.d"></div></div>
+            <div class="seg" data-key="acars_callsign">
+              <button data-val="fltnum" data-i18n="set.acars_cs.fltnum"></button><button data-val="callsign" data-i18n="set.acars_cs.callsign"></button>
             </div></div>
           <div class="set-row" id="row-si-key"><div><div class="h" data-i18n="set.si_key"></div><div class="d" data-i18n="set.si_key.d"></div></div>
             <div class="secret"><input type="password" autocomplete="off" spellcheck="false" maxlength="64" data-set="si_key" data-secret="1"><button class="btn xs ghost" data-reveal="1" data-i18n="set.show"></button></div></div>
@@ -1211,6 +1217,7 @@ select{font:inherit;font-size:12.5px;padding:5px;border-radius:6px;border:1px so
       text("dev-cycle", tr(S.dev_cycle_tr, S.dev_cycle_label || ""));
       text("dev-force-load", tr(S.dev_force_load_tr, S.dev_force_load_label || ""));
       enable("dev-force-load", S.can_force_load);
+      enable("dev-test-acars", S.can_test_acars);
       var sel = $("dev-ev"), evtr = S.dev_events_tr || [];
       var evs = (S.dev_events || []).map(function (e, i) {
         var x = evtr[i];
@@ -1520,6 +1527,7 @@ select{font:inherit;font-size:12.5px;padding:5px;border-radius:6px;border:1px so
     show("row-hoppie-logon", C.acars_output === "hoppie");
     show("row-hoppie-type", C.acars_output === "hoppie");
     show("row-si-key", C.acars_output === "si");
+    show("row-acars-cs", C.acars_output !== "none" && C.data_source === "simbrief");
     renderWebStatus();
 
     // Text and number fields (IDs and keys: masked, with a Show/Hide button)

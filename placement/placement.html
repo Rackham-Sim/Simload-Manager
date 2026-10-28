@@ -37,13 +37,18 @@ button,select,input{font-family:inherit;font-size:12px;color:var(--text)}
 button{cursor:pointer}
 button:disabled{opacity:.45;cursor:default}
 .mono{font-family:var(--f-mono);font-variant-numeric:tabular-nums}
+.grip{position:fixed;right:0;bottom:0;width:16px;height:16px;z-index:50;cursor:nwse-resize;color:var(--muted)}
+.grip:hover{color:var(--accent)}
 .app{display:flex;flex-direction:column;height:100%;border:1px solid #2B3644}
 .top{height:32px;flex-shrink:0;display:flex;align-items:center;justify-content:space-between;padding:0 6px 0 12px;background:#0A0D11;border-bottom:1px solid var(--line);cursor:move}
 .top .brand{font-family:var(--f-mono);font-weight:600;color:var(--accent);letter-spacing:.08em;margin-right:10px}
 .top .ttl{color:var(--text2)} .top .ttl b{color:var(--text);font-weight:500}
 .iconbtn{width:28px;height:24px;border:0;border-radius:4px;background:transparent;color:var(--muted);display:flex;align-items:center;justify-content:center}
 .iconbtn:hover{background:#1A222C;color:var(--text)}
-.bar{height:52px;flex-shrink:0;display:flex;align-items:center;gap:10px;white-space:nowrap;padding:0 12px;background:var(--panel);border-bottom:1px solid var(--line)}
+.iconbtn.txt{font-size:11px;font-weight:600;width:auto;padding:0 6px}
+/* Text size (A- / A+): panels only, the map keeps its mouse coordinates unzoomed */
+.bar,.left,.insp,.status,.dlg{zoom:var(--uiz,1)}
+.bar{min-height:52px;flex-shrink:0;display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;padding:6px 12px;white-space:nowrap;background:var(--panel);border-bottom:1px solid var(--line)}
 .lab{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
 .col{display:flex;flex-direction:column;gap:2px}
 .btn{height:30px;padding:0 12px;border-radius:6px;border:1px solid var(--line2);background:var(--bg);display:inline-flex;align-items:center;gap:6px;font-weight:600}
@@ -127,7 +132,7 @@ svg#map *{pointer-events:none} svg#map [data-hdl],svg#map [data-veh],svg#map [da
 .slowbox{display:flex;flex-direction:column;gap:4px;padding:10px 12px;border-radius:6px;background:var(--bg);border:1px solid var(--line)}
 .lab2{font-size:11px;color:var(--text2);font-weight:600}
 .btn.play{border-color:#5C4A1C;background:#2A2310;color:var(--accent)}
-.status{height:26px;flex-shrink:0;display:flex;align-items:center;gap:14px;padding:0 12px;background:#0A0D11;border-top:1px solid var(--line);color:var(--muted);font-size:11px}
+.status{height:26px;flex-shrink:0;display:flex;align-items:center;gap:14px;padding:0 22px 0 12px;background:#0A0D11;border-top:1px solid var(--line);color:var(--muted);font-size:11px}
 .status .sp{flex:1}
 .ovl{position:fixed;inset:0;background:rgba(5,8,11,.6);display:flex;align-items:center;justify-content:center;z-index:10}
 .dlg{width:420px;max-height:80%;overflow-y:auto;background:var(--panel);border:1px solid var(--line2);border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:10px}
@@ -148,12 +153,17 @@ label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tex
 </style>
 </head>
 <body>
+<svg class="grip" id="grip" viewBox="0 0 16 16"><path d="M14 5 L5 14 M14 9 L9 14 M14 13 L13 14" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
 <div class="app">
   <div class="top" id="top">
     <div><span class="brand">SLM</span><span class="ttl" data-i18n="placement.ui.title"></span></div>
+    <div class="flex" style="gap:2px;flex-wrap:nowrap">
+    <button class="iconbtn txt" id="b-font-dn" data-i18n-title="placement.ui.text_smaller">A−</button>
+    <button class="iconbtn txt" id="b-font-up" data-i18n-title="placement.ui.text_larger">A+</button>
     <button class="iconbtn" id="b-close" data-i18n-title="placement.ui.close">
       <svg width="12" height="12" viewBox="0 0 12 12"><path d="M2 2 L10 10 M10 2 L2 10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
     </button>
+    </div>
   </div>
   <div class="bar">
     <div class="col"><span class="lab" data-i18n="placement.ui.loaded_aircraft"></span><b id="acf-name"></b></div>
@@ -427,8 +437,8 @@ label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tex
   // ---- Local UI state --------------------------------------------------------------
   var ui = { tab: "veh", sel: null, leg: "arrival", paths: true, snap: true,
              scale: 0, cx: 0, cz: 15, drag: null, play: null, dialog: null, pplSel: null };
-  try { var saved = JSON.parse(localStorage.getItem("slm.placement") || "{}"); ["paths", "snap", "tab"].forEach(function (k) { if (k in saved) ui[k] = saved[k]; }); } catch (e) { /* defaults */ }
-  function keep() { try { localStorage.setItem("slm.placement", JSON.stringify({ paths: ui.paths, snap: ui.snap, tab: ui.tab })); } catch (e) { /* none */ } }
+  try { var saved = JSON.parse(localStorage.getItem("slm.placement") || "{}"); ["paths", "snap", "tab", "font"].forEach(function (k) { if (k in saved) ui[k] = saved[k]; }); } catch (e) { /* defaults */ }
+  function keep() { try { localStorage.setItem("slm.placement", JSON.stringify({ paths: ui.paths, snap: ui.snap, tab: ui.tab, font: ui.font })); } catch (e) { /* none */ } }
 
   function profile() { return S && S.profile; }
   function vehicles() { var p = profile(); return p && p.configs && p.configs[S.config] ? p.configs[S.config].vehicles || [] : []; }
@@ -1296,6 +1306,13 @@ label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tex
 
   // ---- Buttons ---------------------------------------------------------------------
   $("b-close").addEventListener("click", function () { win("close"); });
+  function setFont(v) {  // text size of the panels, 80..160 %
+    ui.font = Math.max(80, Math.min(160, Number(v) || 100));
+    document.documentElement.style.setProperty("--uiz", String(ui.font / 100));
+  }
+  setFont(ui.font);
+  $("b-font-dn").addEventListener("click", function () { setFont(ui.font - 10); keep(); renderAll(); });
+  $("b-font-up").addEventListener("click", function () { setFont(ui.font + 10); keep(); renderAll(); });
   $("b-check").addEventListener("click", function () { ui.sel = null; renderList(); renderInsp(); });
   $("b-undo").addEventListener("click", function () { action("undo"); });
   $("b-redo").addEventListener("click", function () { action("redo"); });
@@ -1310,9 +1327,11 @@ label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tex
   $("b-recenter").addEventListener("click", function () { recenter(); renderMap(); });
   window.addEventListener("resize", function () { renderMap(); });
 
-  // ---- Window: drag by the top bar, keyboard hand-back (as the main window) --------
+  // ---- Window: drag by the top bar, resize by the corner grip (X-Plane does not resize
+  // a CEF window by its edges), keyboard hand-back (as the main window) --------
   var dragging = false;
   $("top").addEventListener("mousedown", function (e) { if (e.button !== 0 || e.target.closest("button")) return; e.preventDefault(); dragging = true; win("drag"); });
+  $("grip").addEventListener("mousedown", function (e) { if (e.button !== 0) return; e.preventDefault(); dragging = true; win("resize"); });
   function drop() { if (dragging) { dragging = false; win("drop"); } }
   document.addEventListener("mouseup", drop);
   document.addEventListener("mousemove", function (e) { if (dragging && !(e.buttons & 1)) drop(); });

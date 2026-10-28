@@ -1,2 +1,2 @@
-10.27.2026
-Simload Manager V6.0.1
+10.28.2026
+Simload Manager V6.0.2

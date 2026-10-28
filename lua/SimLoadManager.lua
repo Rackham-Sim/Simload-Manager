@@ -566,6 +566,7 @@ local slm_airborne_since = nil
 slm_acars_output    = "none"    -- "none" | "hoppie" | "si"
 slm_hoppie_logon    = ""
 slm_hoppie_msgtype  = "telex"   -- "telex" | "cpdlc"
+slm_acars_callsign  = "fltnum"  -- "fltnum" (aircraft flight ID) | "callsign" (SimBrief ATC callsign) (#SL49)
 slm_si_key          = ""
 local slm_acars_status_msg   = nil
 local slm_acars_status_color = 0xFF00FF00
@@ -982,6 +983,7 @@ function init_sounds()
         slm_sound_place(sounds.cargo_loop.id, "cargo")
         slm_sound_place(sounds.fuel_loop.id, "fuel")
         slm_sound_place(sounds.passengers_loop.id, "cabin")  -- behind the cockpit, at the front door
+        slm_sound_place(sounds.cleaning_loop.id, "cabin")
     end
 end
 
@@ -1241,6 +1243,8 @@ function load_user_settings()
                 slm_hoppie_logon = value
             elseif key == "hoppie_msgtype" then
                 slm_hoppie_msgtype = (value == "cpdlc") and "cpdlc" or "telex"
+            elseif key == "acars_callsign" then
+                slm_acars_callsign = (value == "callsign") and "callsign" or "fltnum"
             elseif key == "slm_si_key" then
                 slm_si_key = value
             elseif key == "acars_output" then
@@ -1316,6 +1320,7 @@ function save_user_settings()
         file:write("acars_output="    .. tostring(slm_acars_output)   .. "\n")
         file:write("hoppie_logon="   .. tostring(slm_hoppie_logon)   .. "\n")
         file:write("hoppie_msgtype=" .. tostring(slm_hoppie_msgtype)  .. "\n")
+        file:write("acars_callsign=" .. tostring(slm_acars_callsign)  .. "\n")
         file:write("slm_si_key="     .. tostring(slm_si_key)          .. "\n")
         file:write("event_chance=" .. tostring(slm_event_chance) .. "\n")
         file:write("pax_variability_enabled=" .. tostring(slm_pax_variability_enabled) .. "\n")
@@ -1456,6 +1461,8 @@ function fetch_simbrief_data(id)
     SLM_Loadsheet_Data = {
         airline = nonempty(airline, "N/A"),
         fltnum  = nonempty(fltnum,  "N/A"),
+        -- Filed ATC callsign (e.g. DLH1HM), can differ from airline..fltnum (#SL49)
+        atc_callsign = nonempty(nv("atc", "callsign"):gsub("%s+", ""):upper(), nil),
         date    = os.date("%d%b%y"):upper(),
 
         aircraft_icao = nonempty(ac_icao, "?"),
@@ -4196,6 +4203,13 @@ end
 
 function manage_crew_briefing()
     if not crew_briefing_started or crew_briefing_done then return end
+    -- Low cost rapid cleaning (with the briefing): after the deboarding bus and the last passengers on foot, like
+    -- the cabin cleaning (2026-10-28)
+    if slm_lc_cleaning_required and slm_vehicles_waiting("cleaning") then
+        crew_briefing_start_time = os.clock()
+        estimated_time_crew = crew_briefing_duration
+        return
+    end
     local elapsed = os.clock() - crew_briefing_start_time
     if elapsed >= crew_briefing_duration then
         crew_briefing_started = false
@@ -5159,6 +5173,14 @@ function current_zulu_hhmm()
 end
 
 local function slm_get_callsign()
+    -- "Callsign" option: SimBrief ATC callsign (e.g. DLH1HM) for crews whose ACARS
+    -- logs on with it rather than the flight number (#SL49)
+    local ld = SLM_Loadsheet_Data
+    if slm_acars_callsign == "callsign" and slm_data_source == "simbrief" and ld and ld.atc_callsign then
+        slm_acars_cs_src = "CALLSIGN"
+        return ld.atc_callsign
+    end
+    slm_acars_cs_src = "FLT NBR"
     -- Zibo: flight number is in FMC line, format "     AFU1352"
     if slm_aircraft_type == "zibo" and slm_zibo_fmc_line_dr then
         local line = (slm_zibo_fmc_line_dr or ""):match("^([^%z]*)") or ""
@@ -5462,7 +5484,13 @@ local function slm_build_acars_packet()
         lines[#lines+1] = by
     end
 
-    return table.concat(lines, "\n")
+    local packet = table.concat(lines, "\n")
+    if slm_acars_test then
+        -- Dev Test ACARS: say which service and which callsign source were used
+        packet = string.format("SLM ACARS TEST VIA %s\nTO %s (%s)\n", slm_acars_test,
+            slm_get_callsign(), slm_acars_cs_src) .. packet
+    end
+    return packet
 end
 
 function slm_send_hoppie_acars()
@@ -5654,6 +5682,7 @@ function slm_update_rules()
     S.can_view_loadsheet   = loadsheet_ready
     S.can_force_event      = embark_started or disembark_started
     S.can_force_load       = (embark_started or disembark_started or slm_dev_preboard_running()) and not slm_dev_forcing
+    S.can_test_acars       = SLM_Loadsheet_Data ~= nil and slm_acars_output ~= "none"
     S.location             = selected_location_group
     S.own_stairs           = aircraft_has_own_stairs
     S.manual_chocks        = slm_manual_chocks  -- chocks button under Fuel Top-Up
@@ -5809,6 +5838,21 @@ function A.open_kofi()         Ko_fi() end
 function A.dev_cycle()         slm_dev_cycle() end
 function A.dev_force_event(idx) slm_dev_force_event(slm_events_db[idx + 1]) end
 function A.dev_force_load()    slm_dev_force_load() end
+-- Sends the loadsheet now through the selected ACARS output, even before loading ends (#SL49)
+function A.dev_test_acars()
+    if not SLM_Loadsheet_Data then return end
+    local ready = loadsheet_ready
+    loadsheet_ready = true
+    if slm_acars_output == "si" then
+        slm_acars_test = "SI"
+        slm_send_si_acars()
+    elseif slm_acars_output == "hoppie" then
+        slm_acars_test = "HOPPIE"
+        slm_send_hoppie_acars()
+    end
+    slm_acars_test = nil
+    loadsheet_ready = ready
+end
 end
 
 --------------------------------------------------------------------------------
@@ -5882,6 +5926,9 @@ do
     slm_setting_def("hoppie_msgtype",
         function() return slm_hoppie_msgtype end,
         function(v) slm_hoppie_msgtype = v; save_user_settings() end, idle)
+    slm_setting_def("acars_callsign",
+        function() return slm_acars_callsign end,
+        function(v) slm_acars_callsign = v; save_user_settings() end, idle)
     slm_setting_def("si_key",
         function() return slm_si_key end,
         function(v) slm_si_key = v; save_user_settings() end, idle)
