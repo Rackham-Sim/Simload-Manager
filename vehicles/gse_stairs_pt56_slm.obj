@@ -9972,13 +9972,15 @@ ATTR_blend
 TRIS 13494 24
 ATTR_no_blend 0.5
 ANIM_begin
+ANIM_hide 0.5 1 SimLoadManager/anim/beacon_off
 ANIM_trans 0.2500 2.4000 -3.0722 0.2500 2.4000 -3.0722 0 0 no_ref
 ANIM_rotate_begin 0 1 0 sim/time/total_running_time_sec
 ANIM_rotate_key 0 0
 ANIM_rotate_key 1 360
 ANIM_keyframe_loop 1
 ANIM_rotate_end
-LIGHT_NAMED HGV_roto_beacon_fwd 0 0 0
+LIGHT_PARAM spot_params_bb_day_pm 0 0 0 0.98 0.32 0 2500cd 0 0 -1 0.6
+LIGHT_PARAM full_custom_halo 0 0 0 0.98 0.32 0 0.8 1500cd 0 0 -1 0.6
 ANIM_end
 LIGHT_NAMED HGV_headlight 0.7300 1.2200 -3.7872
 LIGHT_NAMED HGV_headlight -0.7300 1.2200 -3.7872
@@ -11336,13 +11338,15 @@ ATTR_blend
 TRIS 24966 24
 ATTR_no_blend 0.5
 ANIM_begin
+ANIM_hide 0.5 1 SimLoadManager/anim/beacon_off
 ANIM_trans 0.2500 2.4000 -3.0722 0.2500 2.4000 -3.0722 0 0 no_ref
 ANIM_rotate_begin 0 1 0 sim/time/total_running_time_sec
 ANIM_rotate_key 0 0
 ANIM_rotate_key 1 360
 ANIM_keyframe_loop 1
 ANIM_rotate_end
-LIGHT_NAMED HGV_roto_beacon_fwd 0 0 0
+LIGHT_PARAM spot_params_bb_day_pm 0 0 0 0.98 0.32 0 2500cd 0 0 -1 0.6
+LIGHT_PARAM full_custom_halo 0 0 0 0.98 0.32 0 0.8 1500cd 0 0 -1 0.6
 ANIM_end
 LIGHT_NAMED HGV_headlight 0.7300 1.2200 -3.7872
 LIGHT_NAMED HGV_headlight -0.7300 1.2200 -3.7872

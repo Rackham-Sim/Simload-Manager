@@ -575,12 +575,17 @@ select{font:inherit;font-size:12.5px;padding:5px;border-radius:6px;border:1px so
           <div class="set-head label" data-i18n="set.gpu_head"></div>
           <div class="set-row"><div><div class="h" data-i18n="set.gpu"></div><div class="d" data-i18n="set.gpu.d"></div></div>
             <button class="sw" role="switch" data-key="gpu_enabled"></button></div>
-          <div class="set-row"><div><div class="h" data-i18n="set.gpu_xcrafts"></div><div class="d" data-i18n="set.gpu_xcrafts.d"></div></div>
-            <button class="sw" role="switch" data-key="gpu_xcrafts"></button></div>
+          <div class="set-row sub" id="row-gpu-toliss"><div><div class="h" data-i18n="set.gpu_toliss"></div><div class="d" data-i18n="set.gpu_toliss.d"></div></div>
+            <button class="sw" role="switch" data-key="gpu_toliss_early"></button></div>
           <div class="set-head label" data-i18n="set.people_head"></div>
           <div class="set-row"><div><div class="h" data-i18n="set.people"></div><div class="d" data-i18n="set.people.d"></div></div>
             <div class="seg" data-key="people_detail">
               <button data-val="full" data-i18n="set.people.full"></button><button data-val="reduced" data-i18n="set.people.reduced"></button><button data-val="minimal" data-i18n="set.people.minimal"></button>
+            </div></div>
+          <div class="set-head label" data-i18n="set.beacons_head"></div>
+          <div class="set-row"><div><div class="h" data-i18n="set.beacons"></div><div class="d" data-i18n="set.beacons.d"></div></div>
+            <div class="seg" data-key="vehicle_beacons">
+              <button data-val="on" data-i18n="set.beacons.on"></button><button data-val="moving" data-i18n="set.beacons.moving"></button><button data-val="off" data-i18n="set.beacons.off"></button>
             </div></div>
         </div>
 
@@ -655,6 +660,8 @@ select{font:inherit;font-size:12.5px;padding:5px;border-radius:6px;border:1px so
         <div class="set-pane" id="p-credits" hidden>
           <div class="set-row"><div><div class="h" data-i18n="credits.copyright"></div><div class="d" data-i18n="credits.copyright.d"></div></div></div>
           <div class="set-row"><div><div class="h" data-i18n="credits.isar"></div><div class="d" data-i18n="credits.isar.d"></div></div></div>
+          <div class="set-row"><div><div class="h" data-i18n="credits.tobus"></div></div></div>
+          <div class="set-row"><div><div class="h" data-i18n="credits.oss"></div><div class="d" data-i18n="credits.oss.d"></div><div class="d" data-i18n="credits.mit"></div></div></div>
           <div class="set-row"><div><div class="h" data-i18n="credits.kofi"></div><div class="d" data-i18n="credits.kofi.d"></div><div class="d" id="credits-donors"></div></div></div>
         </div>
       </div>
@@ -1523,6 +1530,7 @@ select{font:inherit;font-size:12.5px;padding:5px;border-radius:6px;border:1px so
     });
     show("src-fsd", !!S.fsd_available || C.data_source === "fsd");
     show("row-bpb", !!S.bpb_option_available);
+    show("row-gpu-toliss", !!S.gpu_toliss_option);
     document.querySelectorAll("#v-settings [data-excluded]").forEach(function (e) { e.hidden = !S.real_fill_excluded; });
     show("row-hoppie-logon", C.acars_output === "hoppie");
     show("row-hoppie-type", C.acars_output === "hoppie");
