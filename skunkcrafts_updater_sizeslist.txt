@@ -1,8 +1,8 @@
 compact/compact.html|16107
-Docs/planner-manual.html|3456843
-lin_x64/SimLoadManager.xpl|4122312
-lua/SimLoadManager.lua|236778
-lua/SLM-Data/aircraft.json|8689
+Docs/planner-manual.html|3457627
+lin_x64/SimLoadManager.xpl|4133352
+lua/SimLoadManager.lua|238214
+lua/SLM-Data/aircraft.json|8846
 lua/SLM-Data/events.json|7087
 lua/SLM-Data/Music/README.txt|343
 lua/SLM-Data/SimLoad-Manager-Sounds/Briefing.wav|1403790
@@ -42,8 +42,9 @@ lua/SLM-Data/SimLoad-Manager-Sounds/start_loading_cargo.wav|270494
 lua/SLM-Data/SimLoad-Manager-Sounds/start_unboarding_passengers.wav|213166
 lua/SLM-Data/SimLoad-Manager-Sounds/start_unloading_all.wav|532654
 lua/SLM-Data/SimLoad-Manager-Sounds/start_unloading_cargo.wav|319650
-mac_x64/SimLoadManager.xpl|4561008
-placement/placement.html|106462
+mac_x64/SimLoadManager.xpl|4561632
+placement/placement.html|107130
+profiles/README.txt|82
 ui/index.html|100103
 ui/lang/de.json|38250
 ui/lang/en.json|35769
@@ -179,4 +180,4 @@ vehicles/pax_m09_anim.json|25559
 vehicles/uld_loader_md_slm.obj|733287
 vehicles/uld_loader_slm.obj|691974
 vehicles/uld_pmc_slm.obj|292942
-win_x64/SimLoadManager.xpl|2247680
+win_x64/SimLoadManager.xpl|2253824

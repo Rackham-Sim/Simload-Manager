@@ -582,9 +582,18 @@ label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tex
     if (isStairs(s)) return s;
     return vehicles().filter(function (v) { return isStairs(v) && v.point === f.door; })[0] || null;
   }
+  // Foot from the plugin (stairs_foot: Isar model, PT-56 2.4 m further back), as the passengers walk (#SL63).
+  // Aircraft's own stairs: pulled towards the door to the stairs' run (~45 deg, kOwnSlope in people.cpp).
   function stairsFoot(v) {
-    var e = eng(v), r = e.h * Math.PI / 180, d = e.L / 2 + 0.8;
-    return { x: e.x - Math.sin(r) * d, z: e.z + Math.cos(r) * d };
+    var e = eng(v), r = e.h * Math.PI / 180, d = (S.stairs_foot || {})[v.uid];
+    if (typeof d !== "number") d = v.type === "own_stairs" ? e.L / 2 : e.L / 2 + 0.8;
+    var p = { x: e.x - Math.sin(r) * d, z: e.z + Math.cos(r) * d }, door = point(v.point);
+    if (v.type === "own_stairs" && door) {
+      var c = catalog(v.type) || {}, run = typeof v.lift_m === "number" ? v.lift_m : c.lift_m || 0;
+      var dx = p.x - door.x, dz = p.z - door.z, l = Math.hypot(dx, dz);
+      if (l > run && run > 0) p = { x: door.x + dx / l * run, z: door.z + dz / l * run };
+    }
+    return p;
   }
   function flowSrc(f) {
     var bus = f.src && f.src.kind === "bus" ? vehicle(f.src.uid) : null;
