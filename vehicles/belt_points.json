@@ -1,0 +1,162 @@
+{
+  "vehicle": "belt",
+  "objs": [
+    "belt.obj"
+  ],
+  "frame": "OBJ: x right, y up, z rear (Blender x, z, -y); metres; vehicle origin",
+  "heading": "deg, vehicle frame: 0 = front (-Z OBJ), 90 = right (+X), clockwise seen from above",
+  "follows": "pos = pos_rest + axis * (dataref - ref), summed over the entries; \"fixed\": does not move",
+  "seated": "pos = hip point (H-point): 0.13 m ahead of the backrest, 0.09 m above the cushion",
+  "cab": {
+    "wheel_center": [
+      -0.62,
+      1.28,
+      -2.35
+    ],
+    "wheel_axis": [
+      0.0,
+      0.643,
+      0.766
+    ],
+    "wheel_r": 0.19,
+    "floor_y": 0.42,
+    "dash": [
+      -0.62,
+      1.06,
+      -2.7
+    ],
+    "grabs": {
+      "mount_r": [
+        -0.97,
+        1.32,
+        -1.64
+      ],
+      "mount_l": [
+        -0.93,
+        1.07,
+        -2.74
+      ]
+    },
+    "note": "OBJ frame; floor_y: feet surface under the driver seat",
+    "pedal": {
+      "heel": [
+        -0.475,
+        0.45,
+        -2.25
+      ],
+      "angle_deg": 20.0,
+      "note": "OBJ frame; accelerator top plane through the right heel contact, rising forward by angle_deg"
+    }
+  },
+  "belt": {
+    "rear_top_y": 0.62,
+    "speed_mps": 0.3,
+    "pitch_m": 0.5,
+    "axis_x": 0.2,
+    "rear_axis_z": 3.3,
+    "length_m": 7.8,
+    "note": "OBJ frame; belt top at the rear end (fixed); lift = belt top at the front end"
+  },
+  "points": [
+    {
+      "name": "DRIVER_SEAT",
+      "role": "driver",
+      "posture": "seated",
+      "pos": [
+        -0.62,
+        0.93,
+        -1.91
+      ],
+      "heading_deg": 0,
+      "part": null,
+      "follows": "fixed"
+    },
+    {
+      "name": "STEP_2",
+      "role": "driver",
+      "posture": "standing",
+      "pos": [
+        -0.78,
+        0.42,
+        -2.47
+      ],
+      "heading_deg": 90,
+      "part": null,
+      "follows": "fixed"
+    },
+    {
+      "name": "DRIVER_EXIT",
+      "role": "driver",
+      "posture": "standing",
+      "pos": [
+        -1.5,
+        0.0,
+        -2.47
+      ],
+      "heading_deg": 270,
+      "part": null,
+      "follows": "fixed"
+    },
+    {
+      "name": "REAR_CORNER",
+      "role": "driver",
+      "posture": "standing",
+      "pos": [
+        -1.5,
+        0.0,
+        3.35
+      ],
+      "heading_deg": 180,
+      "part": null,
+      "follows": "fixed"
+    },
+    {
+      "name": "WORK_BELT",
+      "role": "driver",
+      "posture": "standing",
+      "pos": [
+        -0.48,
+        0.0,
+        3.35
+      ],
+      "heading_deg": 90,
+      "part": null,
+      "follows": "fixed"
+    },
+    {
+      "name": "WORK_BELT_D",
+      "role": "driver",
+      "posture": "standing",
+      "pos": [
+        0.88,
+        0.0,
+        3.35
+      ],
+      "heading_deg": 270,
+      "part": null,
+      "follows": "fixed"
+    }
+  ],
+  "paths": [
+    {
+      "name": "driver_out",
+      "role": "driver",
+      "points": [
+        "DRIVER_SEAT",
+        "STEP_2",
+        "DRIVER_EXIT"
+      ],
+      "note": "reverse: getting in"
+    },
+    {
+      "name": "driver_to_work",
+      "role": "driver",
+      "points": [
+        "DRIVER_EXIT",
+        "REAR_CORNER",
+        "WORK_BELT"
+      ],
+      "note": "on the ground along the left side, 0.5 m off the chassis; reverse: back to the seat"
+    }
+  ]
+}

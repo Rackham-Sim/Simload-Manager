@@ -1,0 +1,1027 @@
+{
+  "frame": "OBJ: x right, y up, z rear (Blender x, z, -y); metres; vehicle origin",
+  "heading": "deg, ULD frame: 0 = front (loading side, -Z OBJ), 90 = right, clockwise",
+  "note": "standing points on the deck under the ULD (z = 0); hands: contact point on the face at 1.0 m (or near the top of a low ULD)",
+  "uld": {
+    "cargo_ake_r": {
+      "base": [
+        1.562,
+        1.534
+      ],
+      "overall_width": 2.006,
+      "height": 1.626,
+      "tare_kg": 78,
+      "mgw_kg": 1588,
+      "objs": [
+        "cargo_ake_r.obj",
+        "cargo_ake_r_neuf.obj",
+        "cargo_ake_r_peint.obj"
+      ],
+      "points": [
+        {
+          "name": "PUSH",
+          "pos": [
+            0,
+            0,
+            1.167
+          ],
+          "heading_deg": 0,
+          "hands": [
+            0,
+            1.0,
+            0.767
+          ]
+        },
+        {
+          "name": "GUIDE_G",
+          "pos": [
+            -1.231,
+            0,
+            0
+          ],
+          "heading_deg": 90,
+          "hands": [
+            -0.781,
+            1.0,
+            0
+          ]
+        },
+        {
+          "name": "GUIDE_D",
+          "pos": [
+            1.231,
+            0,
+            0
+          ],
+          "heading_deg": 270,
+          "hands": [
+            0.781,
+            1.0,
+            0
+          ]
+        }
+      ]
+    },
+    "cargo_ake_p": {
+      "base": [
+        1.562,
+        1.534
+      ],
+      "overall_width": 2.006,
+      "height": 1.626,
+      "tare_kg": 78,
+      "mgw_kg": 1588,
+      "objs": [
+        "cargo_ake_p.obj",
+        "cargo_ake_p_neuf.obj",
+        "cargo_ake_p_peint.obj"
+      ],
+      "points": [
+        {
+          "name": "PUSH",
+          "pos": [
+            0,
+            0,
+            1.167
+          ],
+          "heading_deg": 0,
+          "hands": [
+            0,
+            1.0,
+            0.767
+          ]
+        },
+        {
+          "name": "GUIDE_G",
+          "pos": [
+            -1.231,
+            0,
+            0
+          ],
+          "heading_deg": 90,
+          "hands": [
+            -0.781,
+            1.0,
+            0
+          ]
+        },
+        {
+          "name": "GUIDE_D",
+          "pos": [
+            1.231,
+            0,
+            0
+          ],
+          "heading_deg": 270,
+          "hands": [
+            0.781,
+            1.0,
+            0
+          ]
+        }
+      ]
+    },
+    "cargo_akh_r": {
+      "base": [
+        1.562,
+        1.534
+      ],
+      "overall_width": 2.438,
+      "height": 1.143,
+      "tare_kg": 82,
+      "mgw_kg": 1134,
+      "objs": [
+        "cargo_akh_r.obj",
+        "cargo_akh_r_neuf.obj",
+        "cargo_akh_r_peint.obj"
+      ],
+      "points": [
+        {
+          "name": "PUSH",
+          "pos": [
+            0,
+            0,
+            1.167
+          ],
+          "heading_deg": 0,
+          "hands": [
+            0,
+            1.0,
+            0.767
+          ]
+        },
+        {
+          "name": "GUIDE_G",
+          "pos": [
+            -1.231,
+            0,
+            0
+          ],
+          "heading_deg": 90,
+          "hands": [
+            -0.781,
+            1.0,
+            0
+          ]
+        },
+        {
+          "name": "GUIDE_D",
+          "pos": [
+            1.231,
+            0,
+            0
+          ],
+          "heading_deg": 270,
+          "hands": [
+            0.781,
+            1.0,
+            0
+          ]
+        }
+      ]
+    },
+    "cargo_akh_p": {
+      "base": [
+        1.562,
+        1.534
+      ],
+      "overall_width": 2.438,
+      "height": 1.143,
+      "tare_kg": 82,
+      "mgw_kg": 1134,
+      "objs": [
+        "cargo_akh_p.obj",
+        "cargo_akh_p_neuf.obj",
+        "cargo_akh_p_peint.obj"
+      ],
+      "points": [
+        {
+          "name": "PUSH",
+          "pos": [
+            0,
+            0,
+            1.167
+          ],
+          "heading_deg": 0,
+          "hands": [
+            0,
+            1.0,
+            0.767
+          ]
+        },
+        {
+          "name": "GUIDE_G",
+          "pos": [
+            -1.231,
+            0,
+            0
+          ],
+          "heading_deg": 90,
+          "hands": [
+            -0.781,
+            1.0,
+            0
+          ]
+        },
+        {
+          "name": "GUIDE_D",
+          "pos": [
+            1.231,
+            0,
+            0
+          ],
+          "heading_deg": 270,
+          "hands": [
+            0.781,
+            1.0,
+            0
+          ]
+        }
+      ]
+    },
+    "cargo_pmc_vide": {
+      "base": [
+        3.175,
+        2.438
+      ],
+      "height": 0.035,
+      "tare_kg": 120,
+      "mgw_kg": 6804,
+      "objs": [
+        "cargo_pmc_vide.obj"
+      ],
+      "points": [
+        {
+          "name": "PUSH",
+          "pos": [
+            0,
+            0,
+            1.619
+          ],
+          "heading_deg": 0,
+          "hands": [
+            0,
+            0.0,
+            1.219
+          ]
+        },
+        {
+          "name": "GUIDE_G",
+          "pos": [
+            -2.038,
+            0,
+            0
+          ],
+          "heading_deg": 90,
+          "hands": [
+            -1.587,
+            0.0,
+            0
+          ]
+        },
+        {
+          "name": "GUIDE_D",
+          "pos": [
+            2.038,
+            0,
+            0
+          ],
+          "heading_deg": 270,
+          "hands": [
+            1.587,
+            0.0,
+            0
+          ]
+        }
+      ]
+    },
+    "cargo_pmc_ld1": {
+      "base": [
+        3.175,
+        2.438
+      ],
+      "height": 1.626,
+      "tare_kg": 120,
+      "mgw_kg": 6804,
+      "objs": [
+        "cargo_pmc_ld1.obj"
+      ],
+      "points": [
+        {
+          "name": "PUSH",
+          "pos": [
+            0,
+            0,
+            1.619
+          ],
+          "heading_deg": 0,
+          "hands": [
+            0,
+            1.0,
+            1.219
+          ]
+        },
+        {
+          "name": "GUIDE_G",
+          "pos": [
+            -2.038,
+            0,
+            0
+          ],
+          "heading_deg": 90,
+          "hands": [
+            -1.587,
+            1.0,
+            0
+          ]
+        },
+        {
+          "name": "GUIDE_D",
+          "pos": [
+            2.038,
+            0,
+            0
+          ],
+          "heading_deg": 270,
+          "hands": [
+            1.587,
+            1.0,
+            0
+          ]
+        }
+      ]
+    },
+    "cargo_pmc_ld2": {
+      "base": [
+        3.175,
+        2.438
+      ],
+      "height": 1.626,
+      "tare_kg": 120,
+      "mgw_kg": 6804,
+      "objs": [
+        "cargo_pmc_ld2.obj"
+      ],
+      "points": [
+        {
+          "name": "PUSH",
+          "pos": [
+            0,
+            0,
+            1.619
+          ],
+          "heading_deg": 0,
+          "hands": [
+            0,
+            1.0,
+            1.219
+          ]
+        },
+        {
+          "name": "GUIDE_G",
+          "pos": [
+            -2.038,
+            0,
+            0
+          ],
+          "heading_deg": 90,
+          "hands": [
+            -1.587,
+            1.0,
+            0
+          ]
+        },
+        {
+          "name": "GUIDE_D",
+          "pos": [
+            2.038,
+            0,
+            0
+          ],
+          "heading_deg": 270,
+          "hands": [
+            1.587,
+            1.0,
+            0
+          ]
+        }
+      ]
+    },
+    "cargo_pmc_ld3": {
+      "base": [
+        3.175,
+        2.438
+      ],
+      "height": 1.626,
+      "tare_kg": 120,
+      "mgw_kg": 6804,
+      "objs": [
+        "cargo_pmc_ld3.obj"
+      ],
+      "points": [
+        {
+          "name": "PUSH",
+          "pos": [
+            0,
+            0,
+            1.619
+          ],
+          "heading_deg": 0,
+          "hands": [
+            0,
+            1.0,
+            1.219
+          ]
+        },
+        {
+          "name": "GUIDE_G",
+          "pos": [
+            -2.038,
+            0,
+            0
+          ],
+          "heading_deg": 90,
+          "hands": [
+            -1.587,
+            1.0,
+            0
+          ]
+        },
+        {
+          "name": "GUIDE_D",
+          "pos": [
+            2.038,
+            0,
+            0
+          ],
+          "heading_deg": 270,
+          "hands": [
+            1.587,
+            1.0,
+            0
+          ]
+        }
+      ]
+    },
+    "cargo_pmc_md1": {
+      "base": [
+        3.175,
+        2.438
+      ],
+      "height": 2.997,
+      "tare_kg": 120,
+      "mgw_kg": 6804,
+      "objs": [
+        "cargo_pmc_md1.obj"
+      ],
+      "points": [
+        {
+          "name": "PUSH",
+          "pos": [
+            0,
+            0,
+            1.619
+          ],
+          "heading_deg": 0,
+          "hands": [
+            0,
+            1.0,
+            1.219
+          ]
+        },
+        {
+          "name": "GUIDE_G",
+          "pos": [
+            -2.038,
+            0,
+            0
+          ],
+          "heading_deg": 90,
+          "hands": [
+            -1.587,
+            1.0,
+            0
+          ]
+        },
+        {
+          "name": "GUIDE_D",
+          "pos": [
+            2.038,
+            0,
+            0
+          ],
+          "heading_deg": 270,
+          "hands": [
+            1.587,
+            1.0,
+            0
+          ]
+        }
+      ]
+    },
+    "cargo_pmc_md2": {
+      "base": [
+        3.175,
+        2.438
+      ],
+      "height": 2.997,
+      "tare_kg": 120,
+      "mgw_kg": 6804,
+      "objs": [
+        "cargo_pmc_md2.obj"
+      ],
+      "points": [
+        {
+          "name": "PUSH",
+          "pos": [
+            0,
+            0,
+            1.619
+          ],
+          "heading_deg": 0,
+          "hands": [
+            0,
+            1.0,
+            1.219
+          ]
+        },
+        {
+          "name": "GUIDE_G",
+          "pos": [
+            -2.038,
+            0,
+            0
+          ],
+          "heading_deg": 90,
+          "hands": [
+            -1.587,
+            1.0,
+            0
+          ]
+        },
+        {
+          "name": "GUIDE_D",
+          "pos": [
+            2.038,
+            0,
+            0
+          ],
+          "heading_deg": 270,
+          "hands": [
+            1.587,
+            1.0,
+            0
+          ]
+        }
+      ]
+    },
+    "cargo_pmc_md3": {
+      "base": [
+        3.175,
+        2.438
+      ],
+      "height": 2.997,
+      "tare_kg": 120,
+      "mgw_kg": 6804,
+      "objs": [
+        "cargo_pmc_md3.obj"
+      ],
+      "points": [
+        {
+          "name": "PUSH",
+          "pos": [
+            0,
+            0,
+            1.619
+          ],
+          "heading_deg": 0,
+          "hands": [
+            0,
+            1.0,
+            1.219
+          ]
+        },
+        {
+          "name": "GUIDE_G",
+          "pos": [
+            -2.038,
+            0,
+            0
+          ],
+          "heading_deg": 90,
+          "hands": [
+            -1.587,
+            1.0,
+            0
+          ]
+        },
+        {
+          "name": "GUIDE_D",
+          "pos": [
+            2.038,
+            0,
+            0
+          ],
+          "heading_deg": 270,
+          "hands": [
+            1.587,
+            1.0,
+            0
+          ]
+        }
+      ]
+    },
+    "cargo_pag_vide": {
+      "base": [
+        3.175,
+        2.235
+      ],
+      "height": 0.035,
+      "tare_kg": 110,
+      "mgw_kg": 6033,
+      "objs": [
+        "cargo_pag_vide.obj"
+      ],
+      "points": [
+        {
+          "name": "PUSH",
+          "pos": [
+            0,
+            0,
+            1.518
+          ],
+          "heading_deg": 0,
+          "hands": [
+            0,
+            0.0,
+            1.117
+          ]
+        },
+        {
+          "name": "GUIDE_G",
+          "pos": [
+            -2.038,
+            0,
+            0
+          ],
+          "heading_deg": 90,
+          "hands": [
+            -1.587,
+            0.0,
+            0
+          ]
+        },
+        {
+          "name": "GUIDE_D",
+          "pos": [
+            2.038,
+            0,
+            0
+          ],
+          "heading_deg": 270,
+          "hands": [
+            1.587,
+            0.0,
+            0
+          ]
+        }
+      ]
+    },
+    "cargo_pag_ld1": {
+      "base": [
+        3.175,
+        2.235
+      ],
+      "height": 1.626,
+      "tare_kg": 110,
+      "mgw_kg": 6033,
+      "objs": [
+        "cargo_pag_ld1.obj"
+      ],
+      "points": [
+        {
+          "name": "PUSH",
+          "pos": [
+            0,
+            0,
+            1.518
+          ],
+          "heading_deg": 0,
+          "hands": [
+            0,
+            1.0,
+            1.117
+          ]
+        },
+        {
+          "name": "GUIDE_G",
+          "pos": [
+            -2.038,
+            0,
+            0
+          ],
+          "heading_deg": 90,
+          "hands": [
+            -1.587,
+            1.0,
+            0
+          ]
+        },
+        {
+          "name": "GUIDE_D",
+          "pos": [
+            2.038,
+            0,
+            0
+          ],
+          "heading_deg": 270,
+          "hands": [
+            1.587,
+            1.0,
+            0
+          ]
+        }
+      ]
+    },
+    "cargo_pag_ld2": {
+      "base": [
+        3.175,
+        2.235
+      ],
+      "height": 1.626,
+      "tare_kg": 110,
+      "mgw_kg": 6033,
+      "objs": [
+        "cargo_pag_ld2.obj"
+      ],
+      "points": [
+        {
+          "name": "PUSH",
+          "pos": [
+            0,
+            0,
+            1.518
+          ],
+          "heading_deg": 0,
+          "hands": [
+            0,
+            1.0,
+            1.117
+          ]
+        },
+        {
+          "name": "GUIDE_G",
+          "pos": [
+            -2.038,
+            0,
+            0
+          ],
+          "heading_deg": 90,
+          "hands": [
+            -1.587,
+            1.0,
+            0
+          ]
+        },
+        {
+          "name": "GUIDE_D",
+          "pos": [
+            2.038,
+            0,
+            0
+          ],
+          "heading_deg": 270,
+          "hands": [
+            1.587,
+            1.0,
+            0
+          ]
+        }
+      ]
+    },
+    "cargo_pag_ld3": {
+      "base": [
+        3.175,
+        2.235
+      ],
+      "height": 1.626,
+      "tare_kg": 110,
+      "mgw_kg": 6033,
+      "objs": [
+        "cargo_pag_ld3.obj"
+      ],
+      "points": [
+        {
+          "name": "PUSH",
+          "pos": [
+            0,
+            0,
+            1.518
+          ],
+          "heading_deg": 0,
+          "hands": [
+            0,
+            1.0,
+            1.117
+          ]
+        },
+        {
+          "name": "GUIDE_G",
+          "pos": [
+            -2.038,
+            0,
+            0
+          ],
+          "heading_deg": 90,
+          "hands": [
+            -1.587,
+            1.0,
+            0
+          ]
+        },
+        {
+          "name": "GUIDE_D",
+          "pos": [
+            2.038,
+            0,
+            0
+          ],
+          "heading_deg": 270,
+          "hands": [
+            1.587,
+            1.0,
+            0
+          ]
+        }
+      ]
+    },
+    "cargo_pag_md1": {
+      "base": [
+        3.175,
+        2.235
+      ],
+      "height": 2.997,
+      "tare_kg": 110,
+      "mgw_kg": 6033,
+      "objs": [
+        "cargo_pag_md1.obj"
+      ],
+      "points": [
+        {
+          "name": "PUSH",
+          "pos": [
+            0,
+            0,
+            1.518
+          ],
+          "heading_deg": 0,
+          "hands": [
+            0,
+            1.0,
+            1.117
+          ]
+        },
+        {
+          "name": "GUIDE_G",
+          "pos": [
+            -2.038,
+            0,
+            0
+          ],
+          "heading_deg": 90,
+          "hands": [
+            -1.587,
+            1.0,
+            0
+          ]
+        },
+        {
+          "name": "GUIDE_D",
+          "pos": [
+            2.038,
+            0,
+            0
+          ],
+          "heading_deg": 270,
+          "hands": [
+            1.587,
+            1.0,
+            0
+          ]
+        }
+      ]
+    },
+    "cargo_pag_md2": {
+      "base": [
+        3.175,
+        2.235
+      ],
+      "height": 2.997,
+      "tare_kg": 110,
+      "mgw_kg": 6033,
+      "objs": [
+        "cargo_pag_md2.obj"
+      ],
+      "points": [
+        {
+          "name": "PUSH",
+          "pos": [
+            0,
+            0,
+            1.518
+          ],
+          "heading_deg": 0,
+          "hands": [
+            0,
+            1.0,
+            1.117
+          ]
+        },
+        {
+          "name": "GUIDE_G",
+          "pos": [
+            -2.038,
+            0,
+            0
+          ],
+          "heading_deg": 90,
+          "hands": [
+            -1.587,
+            1.0,
+            0
+          ]
+        },
+        {
+          "name": "GUIDE_D",
+          "pos": [
+            2.038,
+            0,
+            0
+          ],
+          "heading_deg": 270,
+          "hands": [
+            1.587,
+            1.0,
+            0
+          ]
+        }
+      ]
+    },
+    "cargo_pag_md3": {
+      "base": [
+        3.175,
+        2.235
+      ],
+      "height": 2.997,
+      "tare_kg": 110,
+      "mgw_kg": 6033,
+      "objs": [
+        "cargo_pag_md3.obj"
+      ],
+      "points": [
+        {
+          "name": "PUSH",
+          "pos": [
+            0,
+            0,
+            1.518
+          ],
+          "heading_deg": 0,
+          "hands": [
+            0,
+            1.0,
+            1.117
+          ]
+        },
+        {
+          "name": "GUIDE_G",
+          "pos": [
+            -2.038,
+            0,
+            0
+          ],
+          "heading_deg": 90,
+          "hands": [
+            -1.587,
+            1.0,
+            0
+          ]
+        },
+        {
+          "name": "GUIDE_D",
+          "pos": [
+            2.038,
+            0,
+            0
+          ],
+          "heading_deg": 270,
+          "hands": [
+            1.587,
+            1.0,
+            0
+          ]
+        }
+      ]
+    }
+  }
+}

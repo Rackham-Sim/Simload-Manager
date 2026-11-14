@@ -1,0 +1,57 @@
+I
+800
+OBJ
+
+TEXTURE	panel_esc_volee.png
+POINT_COUNTS	8	0	0	12
+
+VT	-0.66299999	0.88663417	-2.5949168	-1	0	0	0	0
+VT	-0.66299999	1.8138181	-2.2203102	-1	0	0	0	1
+VT	-0.66299999	1.064605	-0.36594269	-1	0	0	1	1
+VT	-0.66299999	0.13742109	-0.74054927	-1	0	-0	1	0
+VT	0.66299999	1.8138181	-2.2203102	1	0	-0	1	1
+VT	0.66299999	0.88663417	-2.5949168	1	0	-0	1	0
+VT	0.66299999	0.13742109	-0.74054927	1	0	-0	0	0
+VT	0.66299999	1.064605	-0.36594269	1	0	0	0	1
+
+IDX10	0	1	2	3	0	2	4	5	6	7
+IDX	4
+IDX	6
+
+	ANIM_begin
+	# ANIM_KEYS: ['SimLoadManager/anim/lift']
+	ANIM_trans	0	0.25	2.8499999	0	0.25	2.8499999
+	ANIM_rotate_begin	1	0	-0	SimLoadManager/anim/lift
+	ANIM_rotate_key	1.7	0
+	ANIM_rotate_key	1.9299999	1.6002712
+	ANIM_rotate_key	2.1600001	3.1999692
+	ANIM_rotate_key	2.3900001	4.8002403
+	ANIM_rotate_key	2.6199999	6.3999385
+	ANIM_rotate_key	2.8499999	8.00021
+	ANIM_rotate_key	3.0799999	9.5999077
+	ANIM_rotate_key	3.3099999	11.200179
+	ANIM_rotate_key	3.54	12.799877
+	ANIM_rotate_key	3.77	14.400148
+	ANIM_rotate_key	4	15.999846
+	ANIM_rotate_end
+		ANIM_begin
+		# ANIM_KEYS: ['SimLoadManager/anim/lift']
+		ANIM_trans_begin	SimLoadManager/anim/lift
+		ANIM_trans_key	1.7	0	0.22271	0.036049999
+		ANIM_trans_key	1.9299999	0	0.36003	-0.30382001
+		ANIM_trans_key	2.1600001	0	0.48199999	-0.60571003
+		ANIM_trans_key	2.3900001	0	0.59153998	-0.87682003
+		ANIM_trans_key	2.6199999	0	0.69090998	-1.12277
+		ANIM_trans_key	2.8499999	0	0.78189999	-1.34799
+		ANIM_trans_key	3.0799999	0	0.86594999	-1.55601
+		ANIM_trans_key	3.3099999	0	0.94419998	-1.7496901
+		ANIM_trans_key	3.54	0	1.01761	-1.9313999
+		ANIM_trans_key	3.77	0	1.08697	-2.10307
+		ANIM_trans_key	4	0	1.15294	-2.26634
+		ANIM_trans_end
+			ATTR_shiny_rat	0.5
+			TRIS	0 12
+		ANIM_end
+	ANIM_end
+
+# Build with Blender 5.2.3 LTS (build b'e13b728c6880'). Exported with XPlane2Blender 4.4.0-rc.1+121.20250701124556

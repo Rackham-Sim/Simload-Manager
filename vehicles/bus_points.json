@@ -1,0 +1,106 @@
+{
+  "vehicle": "bus",
+  "objs": [
+    "bus.obj"
+  ],
+  "frame": "OBJ: x right, y up, z rear (Blender x, z, -y); metres; vehicle origin",
+  "heading": "deg, vehicle frame: 0 = front (-Z OBJ), 90 = right (+X), clockwise seen from above",
+  "follows": "pos = pos_rest + axis * (dataref - ref), summed over the entries; \"fixed\": does not move",
+  "seated": "pos = hip point (H-point): 0.13 m ahead of the backrest, 0.09 m above the cushion",
+  "path": "SPAWN -> AISLE -> DOOR -> EXIT (boarding: reverse)",
+  "doors": [
+    {
+      "id": 1,
+      "side": "left",
+      "dataref": "SimLoadManager/anim/door",
+      "heading_deg": 270,
+      "step_m": 0.3,
+      "width_m": 1.25,
+      "spawn": [
+        0.0,
+        0.3,
+        0.86
+      ],
+      "aisle": [
+        0.0,
+        0.3,
+        -2.14
+      ],
+      "door": [
+        -1.5,
+        0.3,
+        -2.14
+      ],
+      "exit": [
+        -2.0,
+        0.0,
+        -2.14
+      ]
+    },
+    {
+      "id": 2,
+      "side": "left",
+      "dataref": "SimLoadManager/anim/door2",
+      "heading_deg": 270,
+      "step_m": 0.3,
+      "width_m": 1.25,
+      "spawn": [
+        0.0,
+        0.3,
+        1.96
+      ],
+      "aisle": [
+        0.0,
+        0.3,
+        4.96
+      ],
+      "door": [
+        -1.5,
+        0.3,
+        4.96
+      ],
+      "exit": [
+        -2.0,
+        0.0,
+        4.96
+      ]
+    }
+  ],
+  "cab": {
+    "wheel_center": [
+      -0.8,
+      1.47,
+      -5.755
+    ],
+    "wheel_axis": [
+      0.0,
+      0.866,
+      0.5
+    ],
+    "wheel_r": 0.23,
+    "floor_y": 0.6,
+    "dash": [
+      -0.3,
+      1.18,
+      -6.36
+    ],
+    "grabs": {},
+    "note": "OBJ frame; floor_y: feet surface under the driver seat"
+  },
+  "points": [
+    {
+      "name": "DRIVER_SEAT",
+      "role": "driver",
+      "posture": "seated",
+      "pos": [
+        -0.8,
+        1.19,
+        -5.335
+      ],
+      "heading_deg": 0,
+      "part": null,
+      "follows": "fixed"
+    }
+  ],
+  "paths": []
+}

@@ -1,0 +1,24 @@
+I
+800
+OBJ
+
+TEXTURE	display_bus.png
+TEXTURE_LIT	display_bus.png
+POINT_COUNTS	4	0	0	6
+
+VT	0.95999998	2.54	-6.8429999	0	0	-1	0	1
+VT	-0.95999998	2.54	-6.8429999	0	0	-1	1	1
+VT	-0.95999998	2.22	-6.8429999	0	0	-1	1	0
+VT	0.95999998	2.22	-6.8429999	0	-0	-1	0	0
+
+IDX	0
+IDX	1
+IDX	2
+IDX	3
+IDX	0
+IDX	2
+
+		ATTR_shiny_rat	0.5
+		TRIS	0 6
+
+# Build with Blender 5.2.3 LTS (build b'e13b728c6880'). Exported with XPlane2Blender 4.4.0-rc.1+121.20250701124556

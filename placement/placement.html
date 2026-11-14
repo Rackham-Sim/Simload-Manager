@@ -173,6 +173,7 @@ label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tex
     <button class="btn small" id="b-check"></button>
     <button class="btn small" id="b-undo" data-i18n="placement.ui.undo"></button>
     <button class="btn small" id="b-redo" data-i18n="placement.ui.redo"></button>
+    <label class="chk" title="" data-i18n-title="placement.ui.show_points_hint"><input type="checkbox" id="show-pts"><span data-i18n="placement.ui.show_points"></span></label>
     <div class="flex" style="flex-wrap:nowrap"><select class="sel" id="prev-phase"></select><button class="btn small" id="b-prev-stop" data-i18n="placement.ui.preview_stop"></button></div>
     <button class="btn" id="b-rename" data-i18n="placement.ui.rename"></button>
     <button class="btn" id="b-new" data-i18n="placement.ui.new_profile"></button>
@@ -477,7 +478,7 @@ label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tex
   function renderBar() {
     var a = S.aircraft;
     $("acf-name").innerHTML = a.ok ? esc(a.name || a.acf_file) + ' <span class="mono" style="color:var(--muted)">' + esc(a.icao) + "</span>" : esc(t("placement.ui.no_acf"));
-    var sel = $("prof"), opts = S.profiles.map(function (p) { return '<option value="' + esc(p.file) + '">' + esc((p.file === S.file && profile() && profile().meta && profile().meta.name) || p.name || p.file) + "</option>"; });
+    var sel = $("prof"), opts = S.profiles.map(function (p) { return '<option value="' + esc(p.file) + '">' + esc(((p.file === S.file && profile() && profile().meta && profile().meta.name) || p.name || p.file) + (/^aircraft\//.test(p.file) ? " (" + t("placement.from_aircraft") + ")" : "")) + "</option>"; });
     if (profile() && !S.file) opts.unshift('<option value="">' + esc(profile().meta && profile().meta.name || "") + " (" + esc(t("placement.ui.unsaved")) + ")</option>");
     if (!profile()) opts.unshift('<option value="">' + esc(t("placement.ui.no_profile_short")) + "</option>");
     sel.innerHTML = opts.join("");
@@ -492,6 +493,7 @@ label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tex
     $("b-undo").disabled = !S.can_undo;
     $("b-redo").disabled = !S.can_redo;
     $("b-save").disabled = !profile();
+    $("show-pts").checked = S.show_points !== false;
     var pv = S.preview, ph = $("prev-phase");
     ph.innerHTML = '<option value="">' + esc(t("placement.ui.sim_preview")) + "</option>" + S.phases.map(function (p) {
       return '<option value="' + p + '">' + esc(t("placement.phase." + p)) + (pv.phase === p ? (pv.departing ? " — " + t("placement.ui.leaving") : " — " + t("placement.ui.arriving")) : "") + "</option>";
@@ -582,7 +584,7 @@ label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tex
     if (isStairs(s)) return s;
     return vehicles().filter(function (v) { return isStairs(v) && v.point === f.door; })[0] || null;
   }
-  // Foot from the plugin (stairs_foot: Isar model, PT-56 2.4 m further back), as the passengers walk (#SL63).
+  // Foot from the plugin (stairs_foot: SLM stairs model at its sill height), as the passengers walk (#SL63).
   // Aircraft's own stairs: pulled towards the door to the stairs' run (~45 deg, kOwnSlope in people.cpp).
   function stairsFoot(v) {
     var e = eng(v), r = e.h * Math.PI / 180, d = (S.stairs_foot || {})[v.uid];
@@ -732,7 +734,8 @@ label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tex
     h += '<div class="grid2"><span>' + esc(t("placement.ui.label")) + '</span><input class="inp wide" data-pf="label" value="' + esc(p.label) + '">' +
       "<span>" + esc(t("placement.ui.tag")) + '</span><input class="inp" maxlength="4" data-pf="tag" value="' + esc(p.tag) + '">';
     if (p.src === "profile") h += "<span>" + esc(t("placement.ui.kind")) + '</span><select class="sel" data-pf="kind">' + ["door", "cargo", "svc"].map(function (k) { return '<option value="' + k + '"' + (p.kind === k ? " selected" : "") + ">" + esc(t("placement.kind." + k)) + "</option>"; }).join("") + "</select>";
-    h += "<span>X / Z</span><span class=\"flex\"><input class=\"inp\" data-pf=\"x\" value=\"" + f1(p.x) + '"><input class="inp" data-pf="z" value="' + f1(p.z) + '"></span></div>';
+    h += "<span>X / Z</span><span class=\"flex\"><input class=\"inp\" data-pf=\"x\" value=\"" + f1(p.x) + '"><input class="inp" data-pf="z" value="' + f1(p.z) + '"></span>' +
+      "<span>" + esc(t("placement.ui.height")) + '</span><input class="inp" data-pf="height_m" placeholder="' + esc(t("placement.ui.height_none")) + '" value="' + (p.height == null ? "" : String(Math.round(p.height * 100) / 100)) + '"></div>';
     if (p.src === "acf") {
       h += '<div class="msg info">' + esc(t("placement.ui.acf_point", { key: p.acf ? p.acf.key : "?" })) + (p.acf ? " " + f1(p.acf.x) + " / " + f1(p.acf.z) : "") + "</div>";
       if (p.override) h += '<button class="btn small" data-act="pt-revert">' + esc(t("placement.ui.revert")) + "</button>";
@@ -1140,6 +1143,7 @@ label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tex
   }
   document.addEventListener("change", function (ev) {
     var el = ev.target;
+    if (el.id === "show-pts") { action("show_points", { on: el.checked }); return; }
     if (el.id === "prof") { if (el.value) action("open_profile", { file: el.value }); return; }
     if (el.id === "reuse") { if (el.value) action("reuse_config", { from: el.value }); el.value = ""; return; }
     if (el.id === "prev-phase") { if (el.value) action("preview_phase", { phase: el.value }); return; }
@@ -1170,6 +1174,7 @@ label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tex
     if (pf && ui.sel && ui.sel.kind === "pt") {
       var p = point(ui.sel.id), arg = { id: p.id };
       if (pf === "x" || pf === "z") { if (isNaN(num)) return renderInsp(); arg.x = pf === "x" ? num : p.x; arg.z = pf === "z" ? num : p.z; return action(p.src === "acf" ? "point_override" : "point_update", arg); }
+      if (pf === "height_m") { arg.height_m = isNaN(num) ? null : num; return action(p.src === "acf" ? "point_override" : "point_update", arg); }
       arg[pf] = el.value;
       return action("point_update", arg);
     }
@@ -1226,7 +1231,7 @@ label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tex
     var all = S.all_profiles || [];
     from = from && all.length;
     var opts = all.map(function (p) {
-      return '<option value="' + esc(p.file) + '"' + (p.file === S.file ? " selected" : "") + ">" + esc((p.name || p.file) + " · " + p.icao + (p.same_aircraft ? " · " + t("placement.ui.this_aircraft") : "")) + "</option>";
+      return '<option value="' + esc(p.file) + '"' + (p.file === S.file ? " selected" : "") + ">" + esc((p.name || p.file) + " · " + p.icao + (p.same_aircraft ? " · " + t("placement.ui.this_aircraft") : "") + (/^aircraft\//.test(p.file) ? " · " + t("placement.from_aircraft") : "")) + "</option>";
     }).join("");
     openDialog("new", "<h2>" + esc(t("placement.ui.new_profile")) + "</h2>" +
       '<label class="chk"><input type="radio" name="d-start" id="d-blank"' + (from ? "" : " checked") + "> " + esc(t("placement.ui.new_blank")) + "</label>" +

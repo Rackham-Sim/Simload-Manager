@@ -222,6 +222,10 @@ select{font:inherit;font-size:12.5px;padding:5px;border-radius:6px;border:1px so
 .set-nav button:hover{color:var(--text)}
 .set-nav button[aria-selected="true"]{background:var(--panel2);color:var(--text);box-shadow:inset 3px 0 0 var(--accent)}
 .set-pane{padding:4px 22px 10px;display:flex;flex-direction:column}
+.pnl-mode{display:flex;align-items:center;gap:8px;padding:4px 0}
+.pnl-mode .h{flex:1}
+.pnl-mode button.arrow{min-width:30px}
+.pnl-bad{font-size:12.5px;color:var(--muted);padding:2px 0}
 /* Panes stacked in one cell: the tallest sets the height, which stays the same from one section to another. */
 .set-panes{display:grid}
 .set-panes > .set-pane{grid-area:1/1}
@@ -519,6 +523,7 @@ select{font:inherit;font-size:12.5px;padding:5px;border-radius:6px;border:1px so
         <button role="tab" data-pane="p-time" aria-selected="false" data-i18n="set.cat.timings"></button>
         <button role="tab" data-pane="p-snd" aria-selected="false" data-i18n="set.cat.sound"></button>
         <button role="tab" data-pane="p-acars" aria-selected="false" data-i18n="set.cat.acars"></button>
+        <button role="tab" data-pane="p-panels" aria-selected="false" data-i18n="set.cat.panels"></button>
         <button role="tab" data-pane="p-web" aria-selected="false" data-i18n="set.cat.web"></button>
         <button role="tab" data-pane="p-dev" aria-selected="false" data-i18n="set.cat.dev"></button>
         <button role="tab" data-pane="p-credits" aria-selected="false" data-i18n="set.cat.credits"></button>
@@ -642,6 +647,18 @@ select{font:inherit;font-size:12.5px;padding:5px;border-radius:6px;border:1px so
             <div class="secret"><input type="password" autocomplete="off" spellcheck="false" maxlength="64" data-set="si_key" data-secret="1"><button class="btn xs ghost" data-reveal="1" data-i18n="set.show"></button></div></div>
         </div>
 
+        <div class="set-pane" id="p-panels" hidden>
+          <div class="set-row"><div><div class="d" data-i18n="panels.intro"></div></div></div>
+          <div id="panels-list"></div>
+          <div class="set-head label" data-i18n="display.head"></div>
+          <div class="set-row"><div><div class="h" data-i18n="display.mode"></div><div class="d" data-i18n="display.mode.d"></div></div>
+            <div class="seg" data-key="bus_display">
+              <button data-val="auto" data-i18n="display.auto"></button><button data-val="custom" data-i18n="display.custom"></button><button data-val="off" data-i18n="display.off"></button>
+            </div></div>
+          <div class="set-row"><div><div class="h" data-i18n="display.text"></div><div class="d" data-i18n="display.text.d"></div></div>
+            <input type="text" maxlength="40" data-set="bus_display_text" style="width:160px;text-transform:uppercase"></div>
+        </div>
+
         <div class="set-pane" id="p-web" hidden>
           <div class="set-row"><div><div class="h" data-i18n="set.web"></div><div class="d" data-i18n="set.web.d"></div></div>
             <button class="sw" role="switch" data-key="web_enabled"></button></div>
@@ -659,7 +676,6 @@ select{font:inherit;font-size:12.5px;padding:5px;border-radius:6px;border:1px so
 
         <div class="set-pane" id="p-credits" hidden>
           <div class="set-row"><div><div class="h" data-i18n="credits.copyright"></div><div class="d" data-i18n="credits.copyright.d"></div></div></div>
-          <div class="set-row"><div><div class="h" data-i18n="credits.isar"></div><div class="d" data-i18n="credits.isar.d"></div></div></div>
           <div class="set-row"><div><div class="h" data-i18n="credits.tobus"></div></div></div>
           <div class="set-row"><div><div class="h" data-i18n="credits.oss"></div><div class="d" data-i18n="credits.oss.d"></div><div class="d" data-i18n="credits.mit"></div></div></div>
           <div class="set-row"><div><div class="h" data-i18n="credits.kofi"></div><div class="d" data-i18n="credits.kofi.d"></div><div class="d" id="credits-donors"></div></div></div>
@@ -747,6 +763,10 @@ select{font:inherit;font-size:12.5px;padding:5px;border-radius:6px;border:1px so
   function tr(x, fallback) {
     return x && x.key && Object.prototype.hasOwnProperty.call(L, x.key) ? t(x.key, x.vars) : fallback;
   }
+  // Profile supplied in the aircraft folder (#SL73): key "aircraft/<file>", marked as such.
+  function vehProfileName(name, file) {
+    return /^aircraft\//.test(file || "") ? name + " (" + t("placement.from_aircraft") + ")" : name;
+  }
   // Ground vehicles card: SLM_State.vehicles, filled by the plugin's vehicle module.
   function renderVehicles(V) {
     show("veh", !!V);
@@ -755,14 +775,14 @@ select{font:inherit;font-size:12.5px;padding:5px;border-radius:6px;border:1px so
     var sel = $("veh-profile");
     show("veh-profile", many);
     if (many) {
-      var opts = list.map(function (p) { return "<option value=\"" + esc(p.file) + "\">" + esc(p.name) + "</option>"; }).join("");
+      var opts = list.map(function (p) { return "<option value=\"" + esc(p.file) + "\">" + esc(vehProfileName(p.name, p.file)) + "</option>"; }).join("");
       if (sel.dataset.opts !== opts) { sel.innerHTML = opts; sel.dataset.opts = opts; }
       if (document.activeElement !== sel) sel.value = V.file || "";
       sel.disabled = !!V.locked;
     }
     show("veh-locked", many && !!V.locked);
     show("veh-name", !many);
-    if (!many) text("veh-name", has ? V.name : t("placement.no_profile"));
+    if (!many) text("veh-name", has ? vehProfileName(V.name, V.file) : t("placement.no_profile"));
     show("veh-hint", !has);
     var cfg = t("placement.config." + V.config);
     text("veh-config", cfg);
@@ -1537,6 +1557,7 @@ select{font:inherit;font-size:12.5px;padding:5px;border-radius:6px;border:1px so
     show("row-si-key", C.acars_output === "si");
     show("row-acars-cs", C.acars_output !== "none" && C.data_source === "simbrief");
     renderWebStatus();
+    renderPanels();
 
     // Text and number fields (IDs and keys: masked, with a Show/Hide button)
     document.querySelectorAll("#v-settings input[data-set]").forEach(function (inp) {
@@ -1643,6 +1664,66 @@ select{font:inherit;font-size:12.5px;padding:5px;border-radius:6px;border:1px so
         if (qr.bits.charAt(y * n + x) === "1") d += "M" + (x + q) + " " + (y + q) + "h1v1h-1z";
     html($("web-qr"), "<svg viewBox=\"0 0 " + (n + 2 * q) + " " + (n + 2 * q) + "\" shape-rendering=\"crispEdges\" role=\"img\" aria-label=\"" +
          esc(qr.url) + "\"><rect width=\"100%\" height=\"100%\" fill=\"#fff\"/><path fill=\"#000\" d=\"" + d + "\"/></svg>");
+  }
+
+  // Options > Panels (#SL38) : un bloc par type de support, depuis SLM_State.panels ; redessine seulement quand il change.
+  var panelsKey = null;
+  function panelOrder(p) {
+    return (p.order || []).map(function (m) { return (m.on ? "" : "-") + m.mode; }).join(",");
+  }
+  function renderPanels() {
+    var P = S.panels || [], key = JSON.stringify(P) + "|" + document.documentElement.lang;
+    if (key === panelsKey) return;
+    panelsKey = key;
+    var h = "";
+    P.forEach(function (p) {
+      var ty = esc(p.type);
+      h += "<div class=\"set-head label\">" + esc(t("panels.type." + p.type)) + " (" + p.w + " &times; " + p.h + ")</div>";
+      h += "<div class=\"set-row\"><div><div class=\"d\">" + esc(t("panels.order.d")) + "</div>";
+      (p.order || []).forEach(function (m, i) {
+        h += "<div class=\"pnl-mode\"><button class=\"sw\" role=\"switch\" aria-checked=\"" + (m.on ? "true" : "false") +
+             "\" data-pnl=\"toggle\" data-pnl-type=\"" + ty + "\" data-pnl-i=\"" + i + "\"></button>" +
+             "<div class=\"h\">" + (i + 1) + ". " + esc(t("panels.mode." + m.mode)) + "</div>" +
+             "<button class=\"arrow\" data-pnl=\"up\" data-pnl-type=\"" + ty + "\" data-pnl-i=\"" + i + "\"" + (i ? "" : " disabled") +
+             " aria-label=\"" + esc(t("panels.up")) + "\">&#9650;</button>" +
+             "<button class=\"arrow\" data-pnl=\"down\" data-pnl-type=\"" + ty + "\" data-pnl-i=\"" + i + "\"" +
+             (i < p.order.length - 1 ? "" : " disabled") + " aria-label=\"" + esc(t("panels.down")) + "\">&#9660;</button></div>";
+        if (m.mode === "fixed") {
+          h += "<div class=\"pnl-mode\"><div class=\"h\">" + esc(t("panels.fixed_pick")) + "</div><select data-pnl-fixed=\"" + ty + "\">";
+          h += "<option value=\"\">" + esc(t("panels.fixed_none")) + "</option>";
+          (p.visuals || []).forEach(function (v) {
+            h += "<option value=\"" + esc(v) + "\"" + (v === p.fixed ? " selected" : "") + ">" + esc(v) + "</option>";
+          });
+          h += "</select></div>";
+        }
+      });
+      h += "</div></div>";
+      h += "<div class=\"set-row\"><div><div class=\"h\">" + esc(t("panels.vary")) + "</div><div class=\"d\">" + esc(t("panels.vary.d")) +
+           "</div></div><button class=\"sw\" role=\"switch\" aria-checked=\"" + (p.vary ? "true" : "false") +
+           "\" data-pnl=\"vary\" data-pnl-type=\"" + ty + "\"></button></div>";
+      var used = p.used_mode ? t("panels.used", { mode: t("panels.mode." + p.used_mode), code: p.used_code || "" })
+                             : t("panels.used_default");
+      h += "<div class=\"set-row\"><div><div class=\"h\">" + esc(t("panels.now")) + "</div><div class=\"d\">" + esc(used) +
+           " &middot; " + esc(t("panels.count", { n: (p.visuals || []).length })) + "</div>";
+      (p.rejected || []).forEach(function (r) {
+        h += "<div class=\"pnl-bad\">" + esc(t("panels.rejected", { file: r.file, why: t("panels.reason." + r.reason, { w: r.w, h: r.h, ew: p.w, eh: p.h }) })) + "</div>";
+      });
+      h += "</div><div><button data-pnl=\"reload\" data-pnl-type=\"" + ty + "\">" + esc(t("panels.reload")) + "</button> " +
+           "<button data-pnl=\"open\" data-pnl-type=\"" + ty + "\">" + esc(t("panels.open")) + "</button></div></div>";
+    });
+    html($("panels-list"), h);
+  }
+  function panelsClick(b) {
+    var ty = b.dataset.pnlType, p = (S.panels || []).filter(function (x) { return x.type === ty; })[0];
+    if (!p) return;
+    var op = b.dataset.pnl, i = Number(b.dataset.pnlI), o = (p.order || []).slice();
+    if (op === "reload") { action("panels_reload"); return; }
+    if (op === "open") { action("panels_open", ty); return; }
+    if (op === "vary") { action("panels_set", { type: ty, key: "vary", value: !p.vary }); return; }
+    if (op === "toggle") o[i] = { mode: o[i].mode, on: !o[i].on };
+    if (op === "up" && i > 0) o.splice(i - 1, 0, o.splice(i, 1)[0]);
+    if (op === "down" && i < o.length - 1) o.splice(i + 1, 0, o.splice(i, 1)[0]);
+    action("panels_set", { type: ty, key: "order", value: panelOrder({ order: o }) });
   }
 
   function selectPane(id) {
@@ -1758,6 +1839,7 @@ select{font:inherit;font-size:12.5px;padding:5px;border-radius:6px;border:1px so
       return;
     }
     if (b.dataset.pane) { selectPane(b.dataset.pane); return; }
+    if (b.dataset.pnl) { panelsClick(b); return; }
     if (b.dataset.reveal) {
       var inp = b.parentNode.querySelector("input");
       var shown = inp.type === "password";
@@ -1788,6 +1870,7 @@ select{font:inherit;font-size:12.5px;padding:5px;border-radius:6px;border:1px so
   // Inputs: sent when committed (Enter or leaving the field), not on every key.
   document.addEventListener("change", function (e) {
     var inp = e.target;
+    if (inp.dataset && inp.dataset.pnlFixed) { action("panels_set", { type: inp.dataset.pnlFixed, key: "fixed", value: inp.value }); return; }
     if (inp.dataset && inp.dataset.set) {
       var numeric = inp.type === "number" || inp.type === "range";
       var v = numeric ? Number(inp.value) : inp.value;

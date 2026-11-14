@@ -1,0 +1,85 @@
+{
+  "vehicle": "uld_md",
+  "objs": [
+    "uld_md.obj"
+  ],
+  "frame": "OBJ: x right, y up, z rear (Blender x, z, -y); metres; vehicle origin",
+  "heading": "deg, vehicle frame: 0 = front (-Z OBJ), 90 = right (+X), clockwise seen from above",
+  "follows": "pos = pos_rest + axis * (dataref - ref), summed over the entries; \"fixed\": does not move",
+  "seated": "pos = hip point (H-point): 0.13 m ahead of the backrest, 0.09 m above the cushion",
+  "cargo": {
+    "rotate_center": [
+      0,
+      0.49,
+      1.615
+    ],
+    "rotate_follows": [
+      {
+        "dataref": "SimLoadManager/anim/lift2",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "ref": 0.49
+      }
+    ],
+    "heading_lengthwise": 90,
+    "heading_crosswise": 0,
+    "rotate_radius_pmc": 2.002,
+    "rear_deck": {
+      "front": -2.07,
+      "rear": 5.3,
+      "half_width": 1.625,
+      "top_follows": "lift2",
+      "side_stops_gap": 2.89,
+      "end_stops_gap": 6.93
+    },
+    "bridge_deck": {
+      "front": -5.52,
+      "rear": -2.1,
+      "half_width": 1.625,
+      "top_follows": "lift"
+    },
+    "note": "OBJ frame (z rear); ULD origin = base underside centre; stops = 0 while a pallet is crosswise"
+  },
+  "points": [
+    {
+      "name": "DRIVER_STAND",
+      "role": "driver",
+      "posture": "standing",
+      "pos": [
+        -2.235,
+        1.91,
+        -2.85
+      ],
+      "heading_deg": 0,
+      "part": "ULD_PONT_ANIM_MD",
+      "follows": [
+        {
+          "dataref": "SimLoadManager/anim/lift",
+          "axis": [
+            0,
+            1,
+            0
+          ],
+          "ref": 1.93
+        }
+      ]
+    },
+    {
+      "name": "WORK_TRAIN",
+      "role": "train",
+      "posture": "standing",
+      "pos": [
+        -2.225,
+        0.0,
+        4.9
+      ],
+      "heading_deg": 90,
+      "part": null,
+      "follows": "fixed"
+    }
+  ],
+  "paths": []
+}
