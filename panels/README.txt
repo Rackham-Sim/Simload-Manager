@@ -21,9 +21,9 @@ In each of them:
 Any other picture of the type can be chosen in the "Fixed" mode.
 
 Format: PNG only, exact size of the type, 8 bits per channel, RGB or RGBA (sRGB). Pictures are never resized.
-A refused picture is listed in Options > Panels with the reason, and in X-Plane's Log.txt.
+A refused picture is listed in Settings > Panels with the reason, and in X-Plane's Log.txt.
 
-Options > Panels: for each vehicle type, tick the modes you want and put them in your order with the arrows.
+Settings > Panels: for each vehicle type, tick the modes you want and put them in your order with the arrows.
 Default order: Airport, Airline, Country, Random. The first mode that finds a picture is used; none: the default panel. Several pictures for a mode: one is drawn
 for the turnaround. "Vary pictures": a different picture on each vehicle while there are enough.
 After adding or changing pictures, press "Reload".
@@ -48,9 +48,9 @@ Dans chacun :
 Toute autre image du type peut être choisie en mode « Fixe ».
 
 Format : PNG uniquement, taille exacte du type, 8 bits par canal, RGB ou RGBA (sRGB). Les images ne sont jamais
-redimensionnées. Une image refusée est listée dans Options > Panels avec la raison, et dans le Log.txt d'X-Plane.
+redimensionnées. Une image refusée est listée dans Réglages > Panneaux avec la raison, et dans le Log.txt d'X-Plane.
 
-Options > Panels : pour chaque type de véhicule, cochez les modes voulus et classez-les avec les flèches.
+Réglages > Panneaux : pour chaque type de véhicule, cochez les modes voulus et classez-les avec les flèches.
 Ordre par défaut : Aéroport, Compagnie, Pays, Hasard. Le premier mode qui trouve une image est utilisé ; aucun : le panneau par défaut. Plusieurs images pour un mode :
 une est tirée pour l'escale. « Varier les images » : une image différente sur chaque véhicule tant qu'il y en a assez.
 Après avoir ajouté ou changé des images, appuyez sur « Recharger ».
