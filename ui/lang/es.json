@@ -728,5 +728,20 @@
   "placement.ui.delay": "Demora",
   "placement.ui.own_stairs_hint": "Altura del umbral de la puerta. No se muestra nada: el avión despliega su propia escalera, los pasajeros suben desde la parte trasera de este elemento hasta la puerta.",
   "placement.ui.auto_placed": "Colocado automáticamente junto a {vehicle} (Work link). Solo se eligen la entrada y la salida.",
-  "placement.type.own_stairs": "Escalera propia del avión"
+  "placement.type.own_stairs": "Escalera propia del avión",
+  "packs.absent": "⚠ Vehículos SLM no instalados — SimLoad Manager usa los vehículos predeterminados de X-Plane.",
+  "packs.download_btn": "Descargar vehículos ({mb} MB)",
+  "packs.update": "⚠ Nuevos vehículos SLM disponibles ({n} paquetes modificados).",
+  "packs.update_one": "⚠ Nuevos vehículos SLM disponibles (1 paquete modificado).",
+  "packs.update_btn": "Actualizar ({mb} MB)",
+  "packs.later": "Más tarde",
+  "packs.downloading": "⬇ Descargando vehículos SLM — {done} / {total} MB",
+  "packs.keep_flying": "Puede seguir volando.",
+  "packs.cancel": "Cancelar",
+  "packs.installing": "⬇ Instalando vehículos SLM…",
+  "packs.done": "✓ Vehículos SLM instalados. Aparecerán en el próximo servicio.",
+  "packs.ok": "OK",
+  "packs.error": "✕ Error de descarga: {reason}.",
+  "packs.retry": "Reintentar",
+  "packs.remind": "Vehículos SLM: descarga pendiente"
 }

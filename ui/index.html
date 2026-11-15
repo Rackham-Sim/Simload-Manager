@@ -87,6 +87,14 @@ main{padding:16px}
 .banner.warn{border-color:color-mix(in srgb,var(--warn) 55%,transparent);background:color-mix(in srgb,var(--warn) 10%,transparent)}
 .banner.info{border-color:var(--line2);background:var(--panel);color:var(--muted)}
 main > .banner{margin-bottom:12px}
+/* Vehicle packs banner: full width under the header, on every tab */
+#packs{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;border-radius:0;border-width:0 0 1px;padding:10px 16px}
+#packs[hidden]{display:none}
+#packs.ok{border-color:color-mix(in srgb,var(--ok) 55%,transparent);background:color-mix(in srgb,var(--ok) 12%,transparent)}
+#packs .msg{font-weight:600;color:var(--text)}
+#packs .bar{flex:1 1 160px;min-width:120px;max-width:340px}
+#packs .bar.ind i{width:30%;animation:packs-slide 1.2s ease-in-out infinite alternate}
+@keyframes packs-slide{from{margin-left:0}to{margin-left:70%}}
 
 /* buttons */
 .btn{font-family:var(--f-disp);font-weight:600;font-size:15px;letter-spacing:.04em;padding:8px 14px;border-radius:6px;border:1px solid var(--line2);background:var(--panel2);color:var(--text);cursor:pointer;white-space:nowrap}
@@ -364,6 +372,17 @@ select{font:inherit;font-size:12.5px;padding:5px;border-radius:6px;border:1px so
   </span>
 </header>
 
+<div class="banner warn" id="packs" hidden role="status">
+  <span class="msg" id="packs-msg"></span>
+  <div class="bar" id="packs-bar" hidden><i id="packs-fill"></i></div>
+  <span class="hint" id="packs-note" hidden data-i18n="packs.keep_flying"></span>
+  <button class="btn primary small" id="packs-go" data-act="packs_download" hidden></button>
+  <button class="btn small" id="packs-later" data-act="packs_later" hidden data-i18n="packs.later"></button>
+  <button class="btn small" id="packs-cancel" data-act="packs_cancel" hidden data-i18n="packs.cancel"></button>
+  <button class="btn primary small" id="packs-retry" data-act="packs_download" hidden data-i18n="packs.retry"></button>
+  <button class="btn small" id="packs-ok" data-act="packs_ok" hidden data-i18n="packs.ok"></button>
+</div>
+
 <main>
   <div class="banner info" id="waiting" data-i18n="app.waiting"></div>
   <div class="banner crit" id="stopped" hidden data-i18n="app.script_stopped"></div>
@@ -504,6 +523,7 @@ select{font:inherit;font-size:12.5px;padding:5px;border-radius:6px;border:1px so
 
     <div class="foot">
       <span class="status" id="update"></span>
+      <button class="btn xs" id="packs-remind" data-act="packs_reopen" hidden data-i18n="packs.remind"></button>
       <span class="sp"></span>
       <span class="status t-muted" id="version"></span>
       <button class="link" data-act="open_simchecklist" data-i18n="tools.simchecklist"></button>
@@ -915,6 +935,7 @@ select{font:inherit;font-size:12.5px;padding:5px;border-radius:6px;border:1px so
     if (!S) return;
     applyScale();
     applyDocLang();
+    renderPacks();
     renderPill();
     followTabRequest();
     renderLsAttention();
@@ -1260,7 +1281,43 @@ select{font:inherit;font-size:12.5px;padding:5px;border-radius:6px;border:1px so
     var up = S.update_status;
     $("update").className = "status" + (up && up.tone ? " t-" + up.tone : "");
     text("update", up ? tr(up.tr, up.text) : "");
+    // "Later" was pressed on the vehicle packs banner: small button to bring it back (a code update message comes first).
+    var PK = S.packs;
+    show("packs-remind", !!PK && PK.later && (PK.state === "absent" || PK.state === "update") && !(up && up.tone === "info"));
     text("version", S.version ? "v" + S.version : "");
+  }
+
+  // Vehicle packs banner (SLM_State.packs, X-Plane window only): always labelled buttons.
+  var packsDoneTimer = null;
+  function mb(x) { return Math.max(1, Math.round(x || 0)); }
+  function renderPacks() {
+    var P = S && S.packs, st = P ? P.state : "idle";
+    var offer = st === "absent" || st === "update";
+    var banner = !!P && st !== "idle" && !(offer && P.later);
+    var cls = "banner warn", msg = "";
+    if (st === "absent") msg = t("packs.absent");
+    else if (st === "update") msg = t(P.changed === 1 ? "packs.update_one" : "packs.update", { n: P.changed });
+    else if (st === "downloading") msg = t("packs.downloading", { done: Math.round(P.done_mb), total: mb(P.total_mb) });
+    else if (st === "installing") msg = t("packs.installing");
+    else if (st === "done") { msg = t("packs.done"); cls = "banner ok"; }
+    else if (st === "error") { msg = t("packs.error", { reason: P.error }); cls = "banner crit"; }
+    $("packs").className = cls;
+    show("packs", banner);
+    text("packs-msg", msg);
+    var run = st === "downloading" || st === "installing";
+    show("packs-bar", run);
+    $("packs-bar").classList.toggle("ind", st === "installing");
+    if (run) $("packs-fill").style.width = st === "installing" ? "" : Math.min(100, P.total_mb > 0 ? 100 * P.done_mb / P.total_mb : 0) + "%";
+    show("packs-note", st === "downloading");
+    show("packs-go", offer);
+    if (offer) text("packs-go", t(st === "absent" ? "packs.download_btn" : "packs.update_btn", { mb: mb(P.todo_mb) }));
+    show("packs-later", offer);
+    show("packs-cancel", st === "downloading");
+    show("packs-retry", st === "error");
+    show("packs-ok", st === "done");
+    // Done: hide after 10 s (the plugin goes back to idle).
+    if (st === "done" && !packsDoneTimer) packsDoneTimer = setTimeout(function () { action("packs_ok"); }, 10000);
+    if (st !== "done" && packsDoneTimer) { clearTimeout(packsDoneTimer); packsDoneTimer = null; }
   }
 
   function renderOps() {

@@ -728,5 +728,20 @@
   "placement.ui.delay": "Delay",
   "placement.ui.own_stairs_hint": "Door sill height. Nothing is shown: the aircraft deploys its own stairs, passengers climb from the rear of this element up to the door.",
   "placement.ui.auto_placed": "Placed automatically next to {vehicle} (work link). Only the entry and the exit are chosen.",
-  "placement.type.own_stairs": "Aircraft's own stairs"
+  "placement.type.own_stairs": "Aircraft's own stairs",
+  "packs.absent": "⚠ SLM vehicles not installed — SimLoad Manager is using X-Plane's default vehicles.",
+  "packs.download_btn": "Download vehicles ({mb} MB)",
+  "packs.update": "⚠ New SLM vehicles available ({n} packs changed).",
+  "packs.update_one": "⚠ New SLM vehicles available (1 pack changed).",
+  "packs.update_btn": "Update ({mb} MB)",
+  "packs.later": "Later",
+  "packs.downloading": "⬇ Downloading SLM vehicles — {done} / {total} MB",
+  "packs.keep_flying": "You can keep flying.",
+  "packs.cancel": "Cancel",
+  "packs.installing": "⬇ Installing SLM vehicles…",
+  "packs.done": "✓ SLM vehicles installed. They will appear at the next service.",
+  "packs.ok": "OK",
+  "packs.error": "✕ Download failed: {reason}.",
+  "packs.retry": "Retry",
+  "packs.remind": "SLM vehicles: download pending"
 }

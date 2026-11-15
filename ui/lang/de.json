@@ -728,5 +728,20 @@
   "placement.ui.delay": "Wartezeit",
   "placement.ui.own_stairs_hint": "Höhe der Türschwelle. Es wird nichts angezeigt: Das Flugzeug fährt seine eigene Treppe aus, die Passagiere steigen vom hinteren Ende dieses Elements bis zur Tür.",
   "placement.ui.auto_placed": "Automatisch neben {vehicle} platziert (Work link). Nur Einfahrt und Ausfahrt werden gewählt.",
-  "placement.type.own_stairs": "Bordeigene Treppe"
+  "placement.type.own_stairs": "Bordeigene Treppe",
+  "packs.absent": "⚠ SLM-Fahrzeuge nicht installiert — SimLoad Manager verwendet die Standardfahrzeuge von X-Plane.",
+  "packs.download_btn": "Fahrzeuge herunterladen ({mb} MB)",
+  "packs.update": "⚠ Neue SLM-Fahrzeuge verfügbar ({n} Pakete geändert).",
+  "packs.update_one": "⚠ Neue SLM-Fahrzeuge verfügbar (1 Paket geändert).",
+  "packs.update_btn": "Aktualisieren ({mb} MB)",
+  "packs.later": "Später",
+  "packs.downloading": "⬇ Download der SLM-Fahrzeuge — {done} / {total} MB",
+  "packs.keep_flying": "Sie können weiterfliegen.",
+  "packs.cancel": "Abbrechen",
+  "packs.installing": "⬇ Installation der SLM-Fahrzeuge…",
+  "packs.done": "✓ SLM-Fahrzeuge installiert. Sie erscheinen beim nächsten Service.",
+  "packs.ok": "OK",
+  "packs.error": "✕ Download fehlgeschlagen: {reason}.",
+  "packs.retry": "Erneut versuchen",
+  "packs.remind": "SLM-Fahrzeuge: Download ausstehend"
 }
