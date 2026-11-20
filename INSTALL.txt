@@ -1,4 +1,4 @@
-SimLoad Manager 6.1.1 - installation
+SimLoad Manager 6.2.0 - installation
 
 Copy the SimLoadManager folder over the old one in Resources\plugins\.
 Do NOT delete the old folder first: your music, panels and profiles are inside it.

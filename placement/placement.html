@@ -261,6 +261,7 @@ label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tex
   }
   function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); }
   function f1(n) { return (Math.round(n * 10) / 10).toFixed(1); }
+  function m2(n) { return String(Math.round(n * 100) / 100); }
   var CAT_COLOR = { pax: "var(--pax)", cab: "var(--cab)", cgo: "var(--cgo)", svc: "var(--svc)" };
   var CAT_HEX = { pax: "#6CB6FF", cab: "#C39BFF", cgo: "#FF9B54", svc: "#43D19E" };
   var CATS = ["pax", "cab", "cgo", "svc"];
@@ -282,6 +283,7 @@ label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tex
     Promise.resolve(xplane.slmPlacementState({ v: version })).then(function (r) {
       polling = false;
       if (typeof r === "string") r = JSON.parse(r);
+      if (r && r.door) { doorLive = r.door; updDoorLive(); }  // live door states (#SL59)
       if (!r || r.v === undefined || r.v === version || !r.aircraft) { if (r && r.v !== undefined) version = r.v; return; }
       version = r.v;
       slm.onState(r);
@@ -295,6 +297,15 @@ label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tex
   function wrap180(d) { d = ((d + 180) % 360 + 360) % 360; return d - 180; }
   function cat(type) { var c = catalog(type); return c ? c.category : "svc"; }
   function catalog(type) { return S && S.catalog ? S.catalog.filter(function (c) { return c.type === type; })[0] : null; }
+  // Train geometry (first cart, pitch): a ULD train behind a main-deck loader has pallet dollies (c.train_md, fleet.cpp).
+  function trainOf(v, c) {
+    if (!c || !c.train) return null;
+    if (!c.train_md) return c.train;
+    var l = v.type === "uld" ? people().links.filter(function (k) { return k.from === v.uid; })[0] : null;
+    var b = l ? vehicle(l.to) : null, bc = b ? catalog(b.type) : null;
+    var lift = b ? (typeof b.lift_m === "number" ? b.lift_m : bc && bc.lift_m || 0) : 0;
+    return b && lift > c.train_md.lift_min ? c.train_md : c.train;
+  }
   // Profile vehicle (JSON) -> engine vehicle.
   function eng(v) {
     var c = catalog(v.type) || { L: 6, W: 2.4, R: 6, no_rev: false };
@@ -306,9 +317,9 @@ label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tex
     }
     var slow = v.slow || {};
     // Train: from the tractor front to the last cart rear (max_carts), drawn behind the tractor (off: rect centre).
-    var L = c.L, off = 0;
-    if (c.train) {
-      var fr = c.train.first - c.train.pitch / 2, rr = c.train.first + ((typeof v.max_carts === "number" ? v.max_carts : 3) - 0.5) * c.train.pitch;
+    var L = c.L, off = 0, tr = trainOf(v, c);
+    if (tr) {
+      var fr = tr.first - tr.pitch / 2, rr = tr.first + ((typeof v.max_carts === "number" ? v.max_carts : 3) - 0.5) * tr.pitch;
       L = fr + rr; off = (fr - rr) / 2;
     }
     // nose: engine heading; an inverted vehicle (manual belt) stands reversed: its front is its towbar.
@@ -458,6 +469,9 @@ label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tex
       (d[leg] || []).forEach(function (is, i) { if (is) out.push({ lvl: "warn", text: t("placement.ui." + leg) + " " + (i + 1) + " : " + tm(is) }); });
     });
     if (d.point_missing) out.push({ lvl: "warn", text: t("placement.diag.point_missing", { point: v.point }) });
+    var rg = (S.lift_range || {})[v.uid], c = catalog(v.type) || {}, lift = typeof v.lift_m === "number" ? v.lift_m : c.lift_m;
+    if (rg && typeof lift === "number" && (lift < rg[0] - 1e-6 || lift > rg[1] + 1e-6))  // the vehicle stops at its bound (#SL81)
+      out.push({ lvl: "warn", text: t("placement.diag.lift_range", { lift: m2(lift), min: m2(rg[0]), max: m2(rg[1]), stop: m2(lift < rg[0] ? rg[0] : rg[1]) }) });
     if (v.flag) out.push({ lvl: "warn", text: t("placement.flag." + v.flag) });
     return out;
   }
@@ -493,7 +507,7 @@ label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tex
     $("b-undo").disabled = !S.can_undo;
     $("b-redo").disabled = !S.can_redo;
     $("b-save").disabled = !profile();
-    $("show-pts").checked = S.show_points !== false;
+    $("show-pts").checked = S.show_points === true;
     var pv = S.preview, ph = $("prev-phase");
     ph.innerHTML = '<option value="">' + esc(t("placement.ui.sim_preview")) + "</option>" + S.phases.map(function (p) {
       return '<option value="' + p + '">' + esc(t("placement.phase." + p)) + (pv.phase === p ? (pv.departing ? " — " + t("placement.ui.leaving") : " — " + t("placement.ui.arriving")) : "") + "</option>";
@@ -573,7 +587,7 @@ label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tex
     function at(fo, ao) { return { x: e.x + f[0] * fo + a[0] * ao, z: e.z + f[1] * fo + a[1] * ao }; }
     if (which === "foot") return [at(-e.L / 2 - 0.3, 0)];
     // Trains: handlers work at the first cart / dolly, behind the tractor (train_geometry in fleet.cpp).
-    var back = v.type === "bagcart" ? 2.88 : v.type === "uld" ? 3.35 : 0;
+    var back = v.type === "bagcart" ? 2.88 : v.type === "uld" ? (trainOf(v, e.c) || { first: 3.35 }).first : 0;
     return [at(-back, -(e.W / 2 + 0.6)), at(-back, e.W / 2 + 0.6)];
   }
   // Passenger flows end at the foot of their stairs / ambulift (Etienne, 2026-10-22): f.stairs = vehicle uid,
@@ -634,6 +648,7 @@ label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tex
     else if (sel && (sel.kind === "flow" || sel.kind === "staff")) h = inspPeople(sel);
     else h = inspConfig();
     el.innerHTML = h;
+    updDoorLive();
   }
   function inspConfig() {
     var i = (S.incomplete || {})[S.config] || {}, h = "<h3>" + esc(t("placement.config." + S.config)) + "</h3>";
@@ -711,7 +726,10 @@ label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tex
     if (typeof c.lift_m === "number" && c.lift_m > 0) {
       var lift = typeof v.lift_m === "number" ? v.lift_m : c.lift_m;
       h += '<div class="sec"><span class="lab">' + esc(t("placement.ui.work_height")) + '</span><div class="flex"><input class="inp" data-f="lift" value="' + f1(lift) + '"> m <span class="hint">' +
-        esc(t(v.type === "stairs" ? "placement.ui.stairs_height_hint" : v.type === "own_stairs" ? "placement.ui.own_stairs_hint" : "placement.ui.work_height_hint")) + "</span></div></div>";
+        esc(t(v.type === "stairs" ? "placement.ui.stairs_height_hint" : v.type === "own_stairs" ? "placement.ui.own_stairs_hint" : "placement.ui.work_height_hint")) + "</span></div>";
+      var rg = (S.lift_range || {})[v.uid];  // range of the SLM model this vehicle gets (#SL81)
+      if (rg) h += '<span class="hint" data-lift-range>' + esc(t("placement.ui.lift_range", { min: m2(rg[0]), max: m2(rg[1]) })) + "</span>";
+      h += "</div>";
     }
     if (v.type === "bagcart" || v.type === "uld") {  // max_carts: 1-6 (kMaxCarts in vehicles.h), 3 by default
       var mc = typeof v.max_carts === "number" ? v.max_carts : 3;
@@ -744,7 +762,67 @@ label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tex
     if (twin) h += '<div class="msg info">' + esc(t("placement.ui.mirror_linked", { id: twin })) + "</div>";
     else if (p.kind === "door" && p.exists) h += '<button class="btn small" data-act="pt-mirror">' + esc(t("placement.ui.mirror_door")) + "</button>";
     h += '<span class="hint">' + esc(t("placement.ui.point_hint")) + "</span>";
-    return h;
+    return h + inspDoor(p);
+  }
+  // Aircraft door driven by SLM (#SL59): "door" block of the point, saved like height_m.
+  var doorMode = {}, doorLive = {};  // mode chosen before any command is typed; live state values (poll)
+  function doorModeOf(p) {
+    var d = p.door || {};
+    if (doorMode[p.id]) return doorMode[p.id];
+    return d.set_dref ? "dref" : d.open_cmd || d.close_cmd ? "pair" : d.toggle_cmd ? "toggle" : "none";
+  }
+  function inspDoor(p) {
+    var d = p.door || {}, mode = doorModeOf(p);
+    function field(key, lab, ph) { return "<span>" + esc(t(lab)) + '</span><input class="inp wide" data-door="' + key + '" placeholder="' + esc(ph || "") + '" value="' + esc(d[key] == null ? "" : String(d[key])) + '">'; }
+    var h = '<div class="sec"><span class="lab">' + esc(t("placement.ui.door_title")) + '</span><div class="grid2">' +
+      "<span>" + esc(t("placement.ui.door_mode")) + '</span><select class="sel" data-door="mode">' + ["none", "pair", "toggle", "dref"].map(function (m) {
+        return '<option value="' + m + '"' + (m === mode ? " selected" : "") + ">" + esc({ none: t("placement.ui.door_mode_none"), pair: t("placement.ui.door_mode_pair"), toggle: t("placement.ui.door_mode_toggle"), dref: t("placement.ui.door_mode_dref") }[m]) + "</option>"; }).join("") + "</select>";
+    if (mode === "pair") h += field("open_cmd", "placement.ui.door_open_cmd") + field("close_cmd", "placement.ui.door_close_cmd");
+    if (mode === "toggle") h += field("toggle_cmd", "placement.ui.door_toggle_cmd");
+    if (mode === "dref") h += field("set_dref", "placement.ui.door_set_dref") + field("set_index", "placement.ui.door_index", "—") +
+      field("open_value", "placement.ui.door_open_value", "1") + field("close_value", "placement.ui.door_close_value", "0") +
+      field("auto_value", "placement.ui.door_auto_value", "—");
+    if (mode === "pair" || mode === "toggle") h += field("state_dref", "placement.ui.door_state", t("placement.ui.door_state_none")) +
+      field("state_index", "placement.ui.door_index", "—") + field("state_open_min", "placement.ui.door_open_min", "0.5");
+    h += "</div>";
+    if (mode !== "none" && [d.open_cmd, d.close_cmd, d.toggle_cmd, d.set_dref].some(function (c) { return c && /^sim\/operation\//i.test(c); }))
+      h += '<div class="msg warn">' + esc(t("placement.ui.door_refused")) + "</div>";
+    else if (mode === "dref" && d.set_dref && (p.door_set === 0 || p.door_set === -1))
+      h += '<div class="msg warn">' + esc(t(p.door_set === 0 ? "placement.ui.door_set_readonly" : "placement.ui.door_set_missing")) + "</div>";
+    if (mode !== "none" && (mode === "dref" ? d.set_dref : d.state_dref)) h += '<span class="hint" data-door-live></span>';
+    if (mode !== "none") h += '<div class="flex"><button class="btn small" data-act="door-open">' + esc(t("placement.ui.door_open_now")) + '</button><button class="btn small" data-act="door-close">' + esc(t("placement.ui.door_close_now")) + "</button></div>";
+    return h + '<span class="hint">' + esc(t("placement.ui.door_hint")) + "</span></div>";
+  }
+  function updDoorLive() {
+    var el = document.querySelector("[data-door-live]"), p = ui.sel && ui.sel.kind === "pt" ? point(ui.sel.id) : null;
+    if (!el || !p || !p.door) return;
+    var v = doorLive[p.id], min = typeof p.door.state_open_min === "number" ? p.door.state_open_min : 0.5, d = p.door, st;
+    // set_dref mode: the written value is the state (open_value / close_value; anything else: unknown)
+    if (d.set_dref) { var ov = typeof d.open_value === "number" ? d.open_value : 1, cv = typeof d.close_value === "number" ? d.close_value : 0;
+      st = Math.abs(v - ov) < 0.001 ? "placement.ui.door_is_open" : Math.abs(v - cv) < 0.001 ? "placement.ui.door_is_closed" : "placement.ui.door_is_unknown"; }
+    else st = v >= min ? "placement.ui.door_is_open" : "placement.ui.door_is_closed";
+    el.textContent = typeof v === "number" ? t("placement.ui.door_live", { value: String(v), state: t(st) })
+      : t("placement.ui.door_live_none");
+  }
+  function doorChange(p, key, value) {
+    var d = clone(p.door || {});
+    if (key === "mode") {
+      doorMode[p.id] = value;
+      renderInsp();  // fields of the mode at once
+      if (value === "none") return action("point_update", { id: p.id, door: null });
+      ["open_cmd", "close_cmd", "toggle_cmd", "set_dref", "set_index", "open_value", "close_value"].forEach(function (k) {
+        var keep = value === "pair" ? k === "open_cmd" || k === "close_cmd" : value === "toggle" ? k === "toggle_cmd" : /^set_|_value$/.test(k);
+        if (!keep) delete d[k];
+      });
+    } else if (key === "state_index" || key === "state_open_min" || key === "set_index" || key === "open_value" || key === "close_value" || key === "auto_value") {
+      var n = parseFloat(String(value).replace(",", "."));
+      var idx = key === "state_index" || key === "set_index";
+      if (isNaN(n) || (idx && n < 0)) delete d[key]; else d[key] = idx ? Math.round(n) : n;
+    } else {
+      value = String(value).trim();
+      if (value) d[key] = value; else delete d[key];
+    }
+    return action("point_update", { id: p.id, door: d });
   }
   function inspPeople(sel) {
     var P = people(), h = "";
@@ -1109,6 +1187,7 @@ label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tex
       case "pt-revert": action("point_revert", { id: ui.sel.id }); break;
       case "pt-mirror": action("point_mirror", { id: ui.sel.id }); break;
       case "pt-delete": action("point_delete", { id: ui.sel.id }); ui.sel = null; break;
+      case "door-open": case "door-close": action("door_test", { id: ui.sel.id, open: act === "door-open" }); break;
       case "add-flow": addFlow(); break;
       case "fnode-del": case "fnode-ins":
         var P3 = clone(people()), f3 = P3.flows.filter(function (x) { return x.id === ui.sel.id; })[0];
@@ -1171,6 +1250,8 @@ label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tex
       if (!isNaN(num)) n[nf] = num;
       return updRoute(v, r);
     }
+    var df = el.getAttribute("data-door");
+    if (df && ui.sel && ui.sel.kind === "pt" && point(ui.sel.id)) return doorChange(point(ui.sel.id), df, el.value);
     if (pf && ui.sel && ui.sel.kind === "pt") {
       var p = point(ui.sel.id), arg = { id: p.id };
       if (pf === "x" || pf === "z") { if (isNaN(num)) return renderInsp(); arg.x = pf === "x" ? num : p.x; arg.z = pf === "z" ? num : p.z; return action(p.src === "acf" ? "point_override" : "point_update", arg); }
