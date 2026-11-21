@@ -1296,10 +1296,12 @@ select{font:inherit;font-size:12.5px;padding:5px;border-radius:6px;border:1px so
     var banner = !!P && st !== "idle" && !(offer && P.later);
     var cls = "banner warn", msg = "";
     if (st === "absent") msg = t("packs.absent");
+    else if (st === "update" && P.missing) msg = t("packs.missing", { n: P.missing });
     else if (st === "update") msg = t(P.changed === 1 ? "packs.update_one" : "packs.update", { n: P.changed });
     else if (st === "downloading") msg = t("packs.downloading", { done: Math.round(P.done_mb), total: mb(P.total_mb) });
     else if (st === "installing") msg = t("packs.installing");
     else if (st === "done") { msg = t("packs.done"); cls = "banner ok"; }
+    else if (st === "incomplete") { msg = t("packs.incomplete", { n: P.missing }); cls = "banner crit"; }
     else if (st === "error") { msg = t("packs.error", { reason: P.error }); cls = "banner crit"; }
     $("packs").className = cls;
     show("packs", banner);
@@ -1311,7 +1313,7 @@ select{font:inherit;font-size:12.5px;padding:5px;border-radius:6px;border:1px so
     show("packs-note", st === "downloading");
     show("packs-go", offer);
     if (offer) text("packs-go", t(st === "absent" ? "packs.download_btn" : "packs.update_btn", { mb: mb(P.todo_mb) }));
-    show("packs-later", offer);
+    show("packs-later", offer && !P.missing);
     show("packs-cancel", st === "downloading");
     show("packs-retry", st === "error");
     show("packs-ok", st === "done");
@@ -1758,6 +1760,10 @@ select{font:inherit;font-size:12.5px;padding:5px;border-radius:6px;border:1px so
       h += "<div class=\"set-row\"><div><div class=\"h\">" + esc(t("panels.vary")) + "</div><div class=\"d\">" + esc(t("panels.vary.d")) +
            "</div></div><button class=\"sw\" role=\"switch\" aria-checked=\"" + (p.vary ? "true" : "false") +
            "\" data-pnl=\"vary\" data-pnl-type=\"" + ty + "\"></button></div>";
+      // Sub-option of "vary": indented, greyed and disabled while vary is off.
+      h += "<div class=\"set-row\" style=\"padding-left:28px" + (p.vary ? "" : ";opacity:.5") + "\"><div><div class=\"h\">" + esc(t("panels.spill")) +
+           "</div><div class=\"d\">" + esc(t("panels.spill.d")) + "</div></div><button class=\"sw\" role=\"switch\" aria-checked=\"" +
+           (p.spill ? "true" : "false") + "\"" + (p.vary ? "" : " disabled") + " data-pnl=\"spill\" data-pnl-type=\"" + ty + "\"></button></div>";
       var used = p.used_mode ? t("panels.used", { mode: t("panels.mode." + p.used_mode), code: p.used_code || "" })
                              : t("panels.used_default");
       h += "<div class=\"set-row\"><div><div class=\"h\">" + esc(t("panels.now")) + "</div><div class=\"d\">" + esc(used) +
@@ -1776,6 +1782,7 @@ select{font:inherit;font-size:12.5px;padding:5px;border-radius:6px;border:1px so
     var op = b.dataset.pnl, i = Number(b.dataset.pnlI), o = (p.order || []).slice();
     if (op === "reload") { action("panels_reload"); return; }
     if (op === "open") { action("panels_open", ty); return; }
+    if (op === "spill") { action("panels_set", { type: ty, key: "spill", value: !p.spill }); return; }
     if (op === "vary") { action("panels_set", { type: ty, key: "vary", value: !p.vary }); return; }
     if (op === "toggle") o[i] = { mode: o[i].mode, on: !o[i].on };
     if (op === "up" && i > 0) o.splice(i - 1, 0, o.splice(i, 1)[0]);

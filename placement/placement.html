@@ -174,6 +174,8 @@ label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tex
     <button class="btn small" id="b-undo" data-i18n="placement.ui.undo"></button>
     <button class="btn small" id="b-redo" data-i18n="placement.ui.redo"></button>
     <label class="chk" title="" data-i18n-title="placement.ui.show_points_hint"><input type="checkbox" id="show-pts"><span data-i18n="placement.ui.show_points"></span></label>
+    <label class="chk" title="" data-i18n-title="placement.ui.shot_bg_hint"><input type="checkbox" id="shot-bg"><span data-i18n="placement.ui.shot_bg"></span></label>
+    <button class="btn small" id="b-shot"></button>
     <div class="flex" style="flex-wrap:nowrap"><select class="sel" id="prev-phase"></select><button class="btn small" id="b-prev-stop" data-i18n="placement.ui.preview_stop"></button></div>
     <button class="btn" id="b-rename" data-i18n="placement.ui.rename"></button>
     <button class="btn" id="b-new" data-i18n="placement.ui.new_profile"></button>
@@ -449,8 +451,8 @@ label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tex
   // ---- Local UI state --------------------------------------------------------------
   var ui = { tab: "veh", sel: null, leg: "arrival", paths: true, snap: true,
              scale: 0, cx: 0, cz: 15, drag: null, play: null, dialog: null, pplSel: null };
-  try { var saved = JSON.parse(localStorage.getItem("slm.placement") || "{}"); ["paths", "snap", "tab", "font"].forEach(function (k) { if (k in saved) ui[k] = saved[k]; }); } catch (e) { /* defaults */ }
-  function keep() { try { localStorage.setItem("slm.placement", JSON.stringify({ paths: ui.paths, snap: ui.snap, tab: ui.tab, font: ui.font })); } catch (e) { /* none */ } }
+  try { var saved = JSON.parse(localStorage.getItem("slm.placement") || "{}"); ["paths", "snap", "tab", "font", "shotBg"].forEach(function (k) { if (k in saved) ui[k] = saved[k]; }); } catch (e) { /* defaults */ }
+  function keep() { try { localStorage.setItem("slm.placement", JSON.stringify({ paths: ui.paths, snap: ui.snap, tab: ui.tab, font: ui.font, shotBg: ui.shotBg })); } catch (e) { /* none */ } }
 
   function profile() { return S && S.profile; }
   function vehicles() { var p = profile(); return p && p.configs && p.configs[S.config] ? p.configs[S.config].vehicles || [] : []; }
@@ -490,7 +492,7 @@ label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tex
     document.querySelectorAll("[data-i18n-title]").forEach(function (el) { el.title = t(el.getAttribute("data-i18n-title")); });
   }
   function renderBar() {
-    var a = S.aircraft;
+    var a = S.aircraft, pv = S.preview;
     $("acf-name").innerHTML = a.ok ? esc(a.name || a.acf_file) + ' <span class="mono" style="color:var(--muted)">' + esc(a.icao) + "</span>" : esc(t("placement.ui.no_acf"));
     var sel = $("prof"), opts = S.profiles.map(function (p) { return '<option value="' + esc(p.file) + '">' + esc(((p.file === S.file && profile() && profile().meta && profile().meta.name) || p.name || p.file) + (/^aircraft\//.test(p.file) ? " (" + t("placement.from_aircraft") + ")" : "")) + "</option>"; });
     if (profile() && !S.file) opts.unshift('<option value="">' + esc(profile().meta && profile().meta.name || "") + " (" + esc(t("placement.ui.unsaved")) + ")</option>");
@@ -508,7 +510,13 @@ label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tex
     $("b-redo").disabled = !S.can_redo;
     $("b-save").disabled = !profile();
     $("show-pts").checked = S.show_points === true;
-    var pv = S.preview, ph = $("prev-phase");
+    // Aircraft screenshot as plan background (#SL38): option off by default, one capture per aircraft.
+    $("shot-bg").checked = !!(ui.shotBg && S.shot);
+    $("shot-bg").disabled = !S.shot;
+    $("b-shot").textContent = t(S.shot_busy ? "placement.ui.shot_busy" : S.shot ? "placement.ui.shot_retake" : "placement.ui.shot_take");
+    $("b-shot").disabled = !!S.shot_busy || !a.ok || !pv.on_ground;
+    $("b-shot").title = S.shot ? t("placement.ui.shot_date", { date: shotDate() }) : t("placement.ui.shot_hint");
+    var ph = $("prev-phase");
     ph.innerHTML = '<option value="">' + esc(t("placement.ui.sim_preview")) + "</option>" + S.phases.map(function (p) {
       return '<option value="' + p + '">' + esc(t("placement.phase." + p)) + (pv.phase === p ? (pv.departing ? " — " + t("placement.ui.leaving") : " — " + t("placement.ui.arriving")) : "") + "</option>";
     }).join("");
@@ -908,11 +916,15 @@ label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tex
   }
   // Zone de clic invisible de 12 px autour d'une poignee (Etienne, 2026-10-27 : poignees de 4-5 px trop dures a attraper).
   function grab(attrs, x, y) { return "<circle " + attrs + ' cx="' + x + '" cy="' + y + '" r="12" fill="transparent"/>'; }
+  // Screenshot file -> file:/// URL (key made of letters, digits, '-' and '_'; folder may have spaces or '#').
+  function shotUrl(sh) { return "file:///" + encodeURI(sh.path.replace(/\\/g, "/").replace(/^\/+/, "")).replace(/#/g, "%23").replace(/\?/g, "%3F") + "?d=" + encodeURIComponent(sh.date); }
+  function shotDate() { return S.shot ? String(S.shot.date).replace("T", " ").replace(/:\d\dZ$/, " UTC") : ""; }
   function renderMap() {
     if (!S) return;
     if (!ui.scale) recenter();
-    var s = vb(), h = "", a = S.aircraft;
+    var s = vb(), h = "", a = S.aircraft, bg = ui.shotBg && S.shot;
     svg.setAttribute("viewBox", "0 0 " + s.w + " " + s.h);
+    if (bg) h += '<image id="shot-img" href="' + esc(shotUrl(S.shot)) + '" x="' + X(S.shot.x) + '" y="' + Y(S.shot.z) + '" width="' + S.shot.w * ui.scale + '" height="' + S.shot.h * ui.scale + '" preserveAspectRatio="none" pointer-events="none"/>';
     // grid every 5 m
     var step = 5 * ui.scale, ox = X(0) % step, oy = Y(0) % step;
     h += '<defs><pattern id="g" width="' + step + '" height="' + step + '" patternUnits="userSpaceOnUse" x="' + ox + '" y="' + oy + '"><path d="M ' + step + " 0 L 0 0 0 " + step + '" fill="none" stroke="rgba(255,255,255,0.045)"/></pattern></defs>';
@@ -922,8 +934,8 @@ label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tex
     for (var m = Math.ceil((ui.cx - s.w / 2 / ui.scale) / 10) * 10; X(m) < s.w; m += 10) h += '<text x="' + (X(m) + 2) + '" y="11" fill="#5D6B7A" font-size="9" font-family="Consolas">' + m + "</text>";
     for (m = Math.ceil((ui.cz - s.h / 2 / ui.scale) / 10) * 10; Y(m) < s.h; m += 10) h += '<text x="3" y="' + (Y(m) - 2) + '" fill="#5D6B7A" font-size="9" font-family="Consolas">' + m + "</text>";
     if (a.ok) {
-      (a.wings || []).forEach(function (w) { h += poly(w, 'fill="#222B36" stroke="#45525F" stroke-width="1"'); });
-      if (a.fuselage && a.fuselage.length) h += poly(a.fuselage, 'fill="#1C242E" stroke="#5A6878" stroke-width="1.2"');
+      (a.wings || []).forEach(function (w) { h += poly(w, bg ? 'fill="none" stroke="rgba(255,255,255,0.35)" stroke-width="1"' : 'fill="#222B36" stroke="#45525F" stroke-width="1"'); });
+      if (a.fuselage && a.fuselage.length) h += poly(a.fuselage, bg ? 'fill="none" stroke="rgba(255,255,255,0.5)" stroke-width="1.2"' : 'fill="#1C242E" stroke="#5A6878" stroke-width="1.2"');
       (a.engines || []).forEach(function (e) { h += '<circle cx="' + X(e.x) + '" cy="' + Y(e.z) + '" r="' + Math.max(2, 0.9 * ui.scale) + '" fill="#2E3A48" stroke="#6B7A8A"/>'; });
       if (S.config === "jetway") h += jetwayShape();
     }
@@ -1006,7 +1018,9 @@ label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tex
       var on = selV && selV.uid === v.uid, crit = vehIssues(v).some(function (i) { return i.lvl === "crit"; });
       var op = ppl ? 0.16 : dim && v.uid !== dim ? 0.25 : 1;
       h += '<g' + (ppl ? "" : ' data-veh="' + esc(v.uid) + '" style="cursor:move"') + ' opacity="' + op + '">' +  // People: clicks go through
-        poly(g.body, 'fill="' + c + '" fill-opacity="0.18" stroke="' + (crit ? "#FF5C5C" : c) + '" stroke-width="' + (on ? 2.4 : 1.4) + '"') + poly(g.cab, 'fill="' + c + '" fill-opacity="0.65" stroke="none"') + "</g>";
+        // On the screenshot: dark halo under the outline and denser fill, so the shapes stand out from the apron
+        (bg ? poly(g.body, 'fill="none" stroke="#0B0F14" stroke-opacity="0.85" stroke-width="' + (on ? 5.4 : 4.4) + '"') : "") +
+        poly(g.body, 'fill="' + c + '" fill-opacity="' + (bg ? 0.5 : 0.18) + '" stroke="' + (crit ? "#FF5C5C" : c) + '" stroke-width="' + ((on ? 2.4 : 1.4) + (bg ? 0.6 : 0)) + '"') + poly(g.cab, 'fill="' + c + '" fill-opacity="' + (bg ? 0.9 : 0.65) + '" stroke="none"') + "</g>";
       if (on && !ppl && !autoLink(v)) {
         h += '<line x1="' + X(g.front[0]) + '" y1="' + Y(g.front[1]) + '" x2="' + X(g.handle[0]) + '" y2="' + Y(g.handle[1]) + '" stroke="#FFD166"/>';
         h += '<circle class="hdl" data-hdl="rot" cx="' + X(g.handle[0]) + '" cy="' + Y(g.handle[1]) + '" r="5" fill="#FFD166"/>' + grab('data-hdl="rot"', X(g.handle[0]), Y(g.handle[1]));
@@ -1045,7 +1059,7 @@ label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tex
       h += poly(vehRect(ev).body, 'fill="#FFD166" fill-opacity="0.35" stroke="#FFD166" stroke-width="2"');
     }
     svg.innerHTML = h;
-    $("zoom").textContent = Math.round(ui.scale / fitScale() * 100) + " % · " + t("placement.ui.pan_hint");
+    $("zoom").textContent = Math.round(ui.scale / fitScale() * 100) + " % · " + t("placement.ui.pan_hint") + (bg ? " · " + t("placement.ui.shot_date", { date: shotDate() }) : "");
   }
 
   // ---- Map interaction --------------------------------------------------------------
@@ -1223,6 +1237,7 @@ label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tex
   document.addEventListener("change", function (ev) {
     var el = ev.target;
     if (el.id === "show-pts") { action("show_points", { on: el.checked }); return; }
+    if (el.id === "shot-bg") { ui.shotBg = el.checked; keep(); renderMap(); return; }
     if (el.id === "prof") { if (el.value) action("open_profile", { file: el.value }); return; }
     if (el.id === "reuse") { if (el.value) action("reuse_config", { from: el.value }); el.value = ""; return; }
     if (el.id === "prev-phase") { if (el.value) action("preview_phase", { phase: el.value }); return; }
@@ -1361,7 +1376,7 @@ label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tex
     var pts = (S.points || []).filter(function (p) { return p.exists; });
     openDialog("add", "<h2>" + esc(t("placement.ui.add_vehicle")) + " · " + esc(t("placement.cat." + c)) + '</h2><div class="col"><span class="lab">' + esc(t("placement.ui.type")) + "</span>" +
       typeTiles(types, c) + '</div><label class="col"><span class="lab">' + esc(t("placement.ui.served_point")) + '</span><select class="sel" id="d-point">' +
-      pts.map(function (p) { return '<option value="' + esc(p.id) + '">' + esc(p.tag + " · " + p.label) + "</option>"; }).join("") + '</select></label><span class="hint">' + esc(t("placement.ui.add_hint")) + "</span>");
+      '</select></label><span class="hint">' + esc(t("placement.ui.add_hint")) + "</span>");
     // Points of the type only (Etienne, 2026-10-27): holds for cargo, service points for fuel and GPU, doors
     // otherwise (water and lavatory: service points or doors, the .acf has no panel for them). Point proposed for
     // the type (the fuel truck went to L1 by default, seen in sim on 2026-10-22).
@@ -1371,13 +1386,17 @@ label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tex
       var fuel = ty === "fuel" || ty === "fuel_small";
       // fuel: FUEL / FUEL2 ; GPU: the other aircraft service points (GPU, NLG) ; water, lavatory: service points
       // added to the profile (their panels).
+      // Automatic points = the filter above, user-created points apart; "User points" = every profile point, any kind / tag.
       var ok = pts.filter(function (q) {
-        if (kinds.indexOf(q.kind) < 0) return false;
+        if (q.src === "profile" || kinds.indexOf(q.kind) < 0) return false;
         if (q.kind !== "svc") return true;
-        return want ? /^FUEL/.test(q.id) === fuel : q.src === "profile";
+        return want ? /^FUEL/.test(q.id) === fuel : false;
       });
-      $("d-point").innerHTML = ok.map(function (p) { return '<option value="' + esc(p.id) + '">' + esc(p.tag + " · " + p.label) + "</option>"; }).join("");
-      var p = ok.filter(function (q) { return q.id === want; })[0] || ok.filter(function (q) { return q.kind === kinds[kinds.length - 1]; })[0] || ok[0];
+      var usr = pts.filter(function (q) { return q.src === "profile"; });
+      var opt = function (p) { return '<option value="' + esc(p.id) + '">' + esc(p.tag + " · " + p.label) + "</option>"; };
+      $("d-point").innerHTML = (ok.length ? '<optgroup label="' + esc(t("placement.ui.points_auto")) + '">' + ok.map(opt).join("") + "</optgroup>" : "") +
+        (usr.length ? '<optgroup label="' + esc(t("placement.ui.points_user")) + '">' + usr.map(opt).join("") + "</optgroup>" : "");
+      var p = ok.filter(function (q) { return q.id === want; })[0] || ok.filter(function (q) { return q.kind === kinds[kinds.length - 1]; })[0] || ok[0] || usr[0];
       if (p) $("d-point").value = p.id;
     };
     pickTile($("d-type").value);
@@ -1410,6 +1429,7 @@ label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tex
   $("b-font-up").addEventListener("click", function () { setFont(ui.font + 10); keep(); renderAll(); });
   $("b-check").addEventListener("click", function () { ui.sel = null; renderList(); renderInsp(); });
   $("b-undo").addEventListener("click", function () { action("undo"); });
+  $("b-shot").addEventListener("click", function () { action("shot_take"); });
   $("b-redo").addEventListener("click", function () { action("redo"); });
   $("b-save").addEventListener("click", function () { action("save"); });
   $("b-new").addEventListener("click", function () { openNew(); });
@@ -1434,9 +1454,47 @@ label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tex
   function typingField(el) { return el && el.matches && el.matches("input:not([type=checkbox]), textarea"); }
   document.addEventListener("focusin", function (e) { if (typingField(e.target)) win("typing", 1); });
   document.addEventListener("focusout", function (e) { if (typingField(e.target)) win("typing", 0); });
-  document.addEventListener("mouseup", function (e) { if (e.button === 0 && !typingField(e.target) && !e.target.closest("select")) win("release"); });
+  // While something is selected the arrow keys nudge it (#SL38), so the keyboard stays with the page
+  // (no "release"); it is handed back once nothing is selected (click on empty plan, Escape).
+  document.addEventListener("mouseup", function (e) {
+    if (e.button === 0 && !typingField(e.target) && !e.target.closest("select")) setTimeout(function () { if (!ui.sel) win("release"); }, 0);  // after the click handlers set the selection
+  });
+  // Arrow keys: 0.1 m (Shift 1 m) on the selected vehicle or point; local echo at once, ONE action
+  // sent after 300 ms without a key press, so a held key is a single undo step.
+  var nudge = null;
+  function r1(n) { return Math.round(n * 10) / 10; }
+  function nudgeCommit() {
+    var n = nudge; nudge = null;
+    if (!n) return;
+    if (n.veh) action("vehicle_update", { uid: n.veh.uid, pos: n.veh.pos });
+    else action(n.p.src === "acf" ? "point_override" : "point_update", { id: n.p.id, x: n.p.x, z: n.p.z });
+    renderAll();
+  }
+  function nudgeKey(e) {
+    var dx = e.key === "ArrowLeft" ? -1 : e.key === "ArrowRight" ? 1 : 0, dz = e.key === "ArrowUp" ? -1 : e.key === "ArrowDown" ? 1 : 0;  // plan: up = smaller z
+    if (!(dx || dz) || !ui.sel || ui.drag || ui.play || e.ctrlKey || e.altKey || e.metaKey || e.target.closest("select, button")) return false;
+    var st = e.shiftKey ? 1 : 0.1;
+    if (nudge && (nudge.id !== ui.sel.id)) nudgeCommit();
+    if (ui.sel.kind === "veh") {
+      var v = nudge ? nudge.veh : clone(vehicle(ui.sel.id));
+      if (!v) return false;
+      v.pos.x = r1(v.pos.x + dx * st); v.pos.z = r1(v.pos.z + dz * st);
+      setVehicleLocal(v); nudge = { id: ui.sel.id, veh: v, timer: nudge && nudge.timer };
+    } else if (ui.sel.kind === "pt") {
+      var p = point(ui.sel.id);
+      if (!p) return false;
+      p.x = r1(p.x + dx * st); p.z = r1(p.z + dz * st);
+      var tw = point(p.mirror_of || p.mirrored_by); if (tw) { tw.x = -p.x; tw.z = p.z; }
+      nudge = { id: p.id, p: p, timer: nudge && nudge.timer };
+    } else return false;
+    clearTimeout(nudge.timer); nudge.timer = setTimeout(nudgeCommit, 300);
+    renderMap();
+    return true;
+  }
   document.addEventListener("keydown", function (e) {
     if (typingField(e.target)) { if (e.key === "Enter") e.target.blur(); return; }
+    if (nudgeKey(e)) { e.preventDefault(); return; }
+    if (e.key === "Escape" && ui.sel) { ui.sel = null; renderList(); renderInsp(); renderMap(); win("release"); return; }
     if (e.ctrlKey && e.key === "z") action("undo");
     if (e.ctrlKey && (e.key === "y" || (e.shiftKey && e.key === "Z"))) action("redo");
   });
@@ -1452,7 +1510,7 @@ label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tex
   slm.onLangs = function () {};
   slm.onState = function (st) {
     var firstAircraft = !S || S.aircraft.acf_file !== st.aircraft.acf_file;
-    if (ui.drag) { version = -1; return; }  // never replace the state under a gesture; asked again next poll
+    if (ui.drag || nudge) { version = -1; return; }  // never replace the state under a gesture; asked again next poll
     S = st;
     var m = S.message;
     if (m && m.key === "placement.msg.added" && m.vars && m.vars.uid && ui.placed !== m.vars.uid) {
