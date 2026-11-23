@@ -120,14 +120,16 @@ svg#map *{pointer-events:none} svg#map [data-hdl],svg#map [data-veh],svg#map [da
 .pill select{border:0;background:transparent;color:inherit;font-size:10px;font-weight:600;padding:0;outline:none;cursor:pointer}
 .pill option{background:var(--bg);color:var(--text)}
 .rrow .x{width:20px;height:20px;border:0;background:transparent;color:var(--muted);font-size:13px;padding:0}
-.rseg{display:flex;align-items:center;gap:6px;height:36px}
+.rseg{display:flex;align-items:stretch;gap:6px;min-height:36px}
 .rline{width:2px;align-self:stretch;margin:0 9px;flex-shrink:0}
 .fr{display:flex;height:26px;border:1px solid var(--line2);border-radius:5px;overflow:hidden}
 .fr button{padding:0 8px;border:0;background:var(--bg);color:var(--muted);font-size:11px;font-weight:600}
 .fr button+button{border-left:1px solid var(--line2)}
 .fr button.on{background:var(--accent);color:#1A1400} .fr button.on.rev{background:#F08CFF;color:#24072A}
 .fr button:disabled{color:#3E4A58}
-.sq{width:24px;height:24px;border-radius:4px;border:1px solid var(--line2);background:var(--bg);color:var(--text2);padding:0}
+.rsegc{flex:1;min-width:0;display:flex;flex-direction:column;align-items:flex-start;gap:4px;padding:5px 0}
+.rsegl{display:flex;align-items:center;gap:6px;width:100%}
+.rseg .fr,.rseg .chip{flex-shrink:0;white-space:nowrap}
 .rissue{margin:0 0 6px 26px;padding:6px 8px;border-radius:5px;background:#2A1416;border:1px solid #5C2328;color:#FFB3B3;font-size:11px;line-height:1.4}
 .slowbox{display:flex;flex-direction:column;gap:4px;padding:10px 12px;border-radius:6px;background:var(--bg);border:1px solid var(--line)}
 .lab2{font-size:11px;color:var(--text2);font-weight:600}
@@ -713,10 +715,10 @@ label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tex
     };
     var segRow = function (si) {
       var rev = r.rev[si], is = issues[si], sp = segs[si], col = is ? "#FF9B54" : rev ? "#F08CFF" : "#FFD166";
-      return '<div class="rseg"><span class="rline" style="background:' + col + '"></span><span class="fr" title="' + esc(t("placement.ui.seg_toggle")) + '">' +
+      return '<div class="rseg"><span class="rline" style="background:' + col + '"></span><div class="rsegc"><div class="rsegl"><span class="fr" title="' + esc(t("placement.ui.seg_toggle")) + '">' +
         '<button class="' + (rev ? "" : "on") + '" data-act="seg-dir" data-seg="' + si + '" data-rev="0">' + esc(t("placement.ui.forward")) + "</button>" +
         '<button class="' + (rev ? "on rev" : "") + '" data-act="seg-dir" data-seg="' + si + '" data-rev="1"' + (e.noRev && !rev ? " disabled" : "") + ">" + esc(t("placement.ui.reverse")) + "</button></span>" +
-        '<span class="rxz">' + (sp ? f1(sp.len) + " m" : "") + '</span><button class="sq" data-act="seg-insert" data-seg="' + si + '" title="' + esc(t("placement.ui.insert_point")) + '">+</button></div>' +
+        '<span class="rxz">' + (sp ? f1(sp.len) + " m" : "") + '</span></div><button class="chip" data-act="seg-insert" data-seg="' + si + '" title="' + esc(t("placement.ui.insert_point")) + '">' + esc(t("placement.ui.add_waypoint")) + "</button></div></div>" +
         (is ? '<div class="rissue">' + esc(tm(is)) + "</div>" : "");
     };
     // Manual belt loader: placed reversed, its tractor backs it in (Etienne, 2026-10-27).
@@ -855,7 +857,7 @@ label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tex
         else if (k === 0 || k === fp.length - 1) h += '<div class="node"><span class="k">' + esc(nm) + '</span><span class="hint">' + f1(q.x) + " / " + f1(q.z) + "</span><span></span></div>";
         else h += '<div class="node"><span class="k">' + esc(nm) + '</span><span class="flex"><input class="inp" style="width:52px" data-fn="' + (k - 1) + '" data-fnf="x" value="' + f1(q.x) + '"><input class="inp" style="width:52px" data-fn="' + (k - 1) + '" data-fnf="z" value="' + f1(q.z) + '"></span>' +
           '<span class="flex"><button class="plus" data-act="fnode-del" data-fnode="' + (k - 1) + '" title="' + esc(t("placement.ui.delete_point")) + '">×</button></span></div>';
-        if (k < fp.length - 1) h += '<div class="segrow">↓ <button class="chip" data-act="fnode-ins" data-fseg="' + k + '" title="' + esc(t("placement.ui.insert_point")) + '">' + esc(t("placement.ui.plus_point")) + "</button></div>";
+        if (k < fp.length - 1) h += '<div class="segrow">↓ <button class="chip" data-act="fnode-ins" data-fseg="' + k + '" title="' + esc(t("placement.ui.insert_point")) + '">' + esc(t("placement.ui.add_waypoint")) + "</button></div>";
       });
       h += "</div></div>";
       if (!nn) h += '<span class="hint">' + esc(t("placement.ui.flow_no_points")) + "</span>";
@@ -934,9 +936,12 @@ label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tex
     for (var m = Math.ceil((ui.cx - s.w / 2 / ui.scale) / 10) * 10; X(m) < s.w; m += 10) h += '<text x="' + (X(m) + 2) + '" y="11" fill="#5D6B7A" font-size="9" font-family="Consolas">' + m + "</text>";
     for (m = Math.ceil((ui.cz - s.h / 2 / ui.scale) / 10) * 10; Y(m) < s.h; m += 10) h += '<text x="3" y="' + (Y(m) - 2) + '" fill="#5D6B7A" font-size="9" font-family="Consolas">' + m + "</text>";
     if (a.ok) {
-      (a.wings || []).forEach(function (w) { h += poly(w, bg ? 'fill="none" stroke="rgba(255,255,255,0.35)" stroke-width="1"' : 'fill="#222B36" stroke="#45525F" stroke-width="1"'); });
-      if (a.fuselage && a.fuselage.length) h += poly(a.fuselage, bg ? 'fill="none" stroke="rgba(255,255,255,0.5)" stroke-width="1.2"' : 'fill="#1C242E" stroke="#5A6878" stroke-width="1.2"');
-      (a.engines || []).forEach(function (e) { h += '<circle cx="' + X(e.x) + '" cy="' + Y(e.z) + '" r="' + Math.max(2, 0.9 * ui.scale) + '" fill="#2E3A48" stroke="#6B7A8A"/>'; });
+      // With the capture the photo is the reference (#SL88): no .acf outline over it (wrong on badly built .acf files).
+      if (!bg) {
+        (a.wings || []).forEach(function (w) { h += poly(w, 'fill="#222B36" stroke="#45525F" stroke-width="1"'); });
+        if (a.fuselage && a.fuselage.length) h += poly(a.fuselage, 'fill="#1C242E" stroke="#5A6878" stroke-width="1.2"');
+        (a.engines || []).forEach(function (e) { h += '<circle cx="' + X(e.x) + '" cy="' + Y(e.z) + '" r="' + Math.max(2, 0.9 * ui.scale) + '" fill="#2E3A48" stroke="#6B7A8A"/>'; });
+      }
       if (S.config === "jetway") h += jetwayShape();
     }
     var ppl = ui.tab === "ppl";
