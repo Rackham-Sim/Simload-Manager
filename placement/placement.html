@@ -795,9 +795,7 @@ label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tex
     if (mode === "pair" || mode === "toggle") h += field("state_dref", "placement.ui.door_state", t("placement.ui.door_state_none")) +
       field("state_index", "placement.ui.door_index", "—") + field("state_open_min", "placement.ui.door_open_min", "0.5");
     h += "</div>";
-    if (mode !== "none" && [d.open_cmd, d.close_cmd, d.toggle_cmd, d.set_dref].some(function (c) { return c && /^sim\/operation\//i.test(c); }))
-      h += '<div class="msg warn">' + esc(t("placement.ui.door_refused")) + "</div>";
-    else if (mode === "dref" && d.set_dref && (p.door_set === 0 || p.door_set === -1))
+    if (mode === "dref" && d.set_dref && (p.door_set === 0 || p.door_set === -1))
       h += '<div class="msg warn">' + esc(t(p.door_set === 0 ? "placement.ui.door_set_readonly" : "placement.ui.door_set_missing")) + "</div>";
     if (mode !== "none" && (mode === "dref" ? d.set_dref : d.state_dref)) h += '<span class="hint" data-door-live></span>';
     if (mode !== "none") h += '<div class="flex"><button class="btn small" data-act="door-open">' + esc(t("placement.ui.door_open_now")) + '</button><button class="btn small" data-act="door-close">' + esc(t("placement.ui.door_close_now")) + "</button></div>";
@@ -848,6 +846,9 @@ label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tex
       h += "<span>" + esc(t("placement.ui.direction")) + '</span><select class="sel" data-ff="dir">' + ["boarding", "deboarding", "both"].map(function (d) { return '<option value="' + d + '"' + (f.dir === d ? " selected" : "") + ">" + esc(t("placement.dir." + d)) + "</option>"; }).join("") + "</select>";
       h += "<span>" + esc(t("placement.ui.lanes")) + '</span><select class="sel" data-ff="lanes"><option value="1"' + (f.lanes === 1 ? " selected" : "") + '>1</option><option value="2"' + (f.lanes === 2 ? " selected" : "") + ">2</option></select></div>";
       if (!st) h += '<div class="msg warn">' + esc(t(S.config === "jetway" ? "placement.ui.flows_jetway" : "placement.ui.no_stairs_flow")) + "</div>";
+      var bs = (S.bus_side || {})[f.id];  // computed by the plugin (flow_bus_side), never stored
+      if (bs) h += '<div class="msg ' + (bs.ambiguous ? "warn" : "info") + '">' + esc(t(bs.side === "L" ? "placement.ui.bus_side_left" : "placement.ui.bus_side_right")) +
+        (bs.ambiguous ? " " + esc(t("placement.ui.bus_side_ambiguous")) : "") + "</div>";
       // Path: start, editable waypoints, stairs foot
       var fp = flowPts(f), nn = (f.nodes || []).length;
       h += '<div class="sec"><span class="lab">' + esc(t("placement.ui.flow_path")) + '</span><div class="nodes"><div class="node hdr"><span></span><span>' + esc(t("placement.ui.col_xz")) + "</span><span></span></div>";
@@ -1011,6 +1012,13 @@ label.chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--tex
       var on = ui.sel && ui.sel.kind === "flow" && ui.sel.id === f.id;
       h += '<path d="' + pathD(pts) + '" fill="none" stroke="' + (st ? "#5FE0D2" : "#FF9B54") + '" stroke-width="' + (on ? 2.4 : ppl ? 1.6 : 1) + '" opacity="' + (ppl ? 1 : 0.5) + '" stroke-dasharray="' + (f.lanes === 2 ? "2 3" : "") + '"/>';
       if (door) h += '<line x1="' + X(end.x) + '" y1="' + Y(end.z) + '" x2="' + X(door.x) + '" y2="' + Y(door.z) + '" stroke="#5FE0D2" stroke-width="1" stroke-dasharray="1 3" opacity="' + (ppl ? 0.8 : 0.4) + '"/>';
+      var bs = (S.bus_side || {})[f.id], bv = bs && f.src && f.src.kind === "bus" ? vehicle(f.src.uid) : null;
+      if (bv) {  // served side of the bus: a bar along that flank (orange: path nearly in line with the bus)
+        var be = eng(bv), br = be.h * Math.PI / 180, ba = (bs.side === "L" ? -1 : 1) * (be.W / 2 + 0.5);
+        var bp = function (fo) { return { x: be.x + Math.sin(br) * fo + Math.cos(br) * ba, z: be.z - Math.cos(br) * fo + Math.sin(br) * ba }; };
+        var b1 = bp(be.L * 0.38), b2 = bp(-be.L * 0.38);
+        h += '<line x1="' + X(b1.x) + '" y1="' + Y(b1.z) + '" x2="' + X(b2.x) + '" y2="' + Y(b2.z) + '" stroke="' + (bs.ambiguous ? "#FF9B54" : "#5FE0D2") + '" stroke-width="3" stroke-linecap="round" opacity="' + (ppl ? 1 : 0.5) + '"/>';
+      }
       if (ppl && f.src && f.src.kind === "ground") hh += '<circle class="hdl" data-hdl="flow-src" data-id="' + esc(f.id) + '" cx="' + X(src.x) + '" cy="' + Y(src.z) + '" r="5" fill="#0E1217" stroke="#5FE0D2" stroke-width="1.6"/>' +
         grab('data-hdl="flow-src" data-id="' + esc(f.id) + '"', X(src.x), Y(src.z));
       if (ppl) (f.nodes || []).forEach(function (n, k) { hh += '<circle class="hdl" data-hdl="flow-node" data-id="' + esc(f.id) + '" data-node="' + k + '" cx="' + X(n.x) + '" cy="' + Y(n.z) + '" r="4" fill="#0E1217" stroke="#5FE0D2"/>' +
